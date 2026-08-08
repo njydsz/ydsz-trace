@@ -168,9 +168,9 @@ func Query(c *gin.Context) {
 			defer wg.Done()
 			defer func() { <-sem }() // 释放信号量
 
-			item, err := models.ReadItem(logsReq.Item)
-			if err != nil {
-				log.Printf("读取项目[%d]失败: %v", logsReq.Item, err)
+			item := models.ReadItem(logsReq.Item)
+			if item.Id == 0 {
+				log.Printf("读取项目[%d]失败: 项目不存在", logsReq.Item)
 				mu.Lock()
 				failCount++
 				mu.Unlock()
@@ -180,7 +180,7 @@ func Query(c *gin.Context) {
 			serverAddr := cl.Ip + ":" + cl.Port
 
 			log.Printf("%s 调用客户端 %d 开始: %s\n", time.Now().Format("2006-01-02 15:04:05"), idx, cl.Ip)
-			err = postToLogc(serverAddr, path, logsReq.Key, logsReq.Line, filepath.Join(workDir, cl.Ip+".zip"))
+			err := postToLogc(serverAddr, path, logsReq.Key, logsReq.Line, filepath.Join(workDir, cl.Ip+".zip"))
 			mu.Lock()
 			if err != nil {
 				failCount++
