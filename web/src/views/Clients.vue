@@ -81,6 +81,7 @@
   </div>
 </template>
 
+/** 客户端管理页：列表展示、增删改查、启用/禁用切换。删除前弹确认框。 */
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { Plus, Edit, Delete, Switch } from '@element-plus/icons-vue'

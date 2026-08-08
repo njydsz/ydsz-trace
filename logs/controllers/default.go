@@ -1,4 +1,5 @@
-// Package controllers 包含 logs 服务端的公共控制器（根路径等）。package controllers
+// Package controllers 包含 logs 服务端的公共控制器（根路径等）。
+package controllers
 
 import (
 	"net/http"

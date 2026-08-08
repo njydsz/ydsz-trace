@@ -75,6 +75,7 @@
   </div>
 </template>
 
+/** 日志项管理页：按客户端分组管理日志项，增删改查、启用/禁用切换。绑定所属客户端必填。 */
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { Plus, Edit, Delete, Switch } from '@element-plus/icons-vue'

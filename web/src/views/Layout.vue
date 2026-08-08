@@ -43,6 +43,9 @@
 </template>
 
 <script setup>
+/**
+ * 控制台框架布局：左侧 Aside 导航 + 顶部 Header（用户信息/退出）+ 右侧 Main。
+ */
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Monitor, DataLine, Cpu, Document, Search, SwitchButton } from '@element-plus/icons-vue'

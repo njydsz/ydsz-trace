@@ -1,9 +1,12 @@
-# Ydsz Trace
-
 <p align="center">
-	<strong>轻量级高性能分布式日志追踪与检索系统</strong>
+  <h1 align="center">Ydsz Trace</h1>
+  <p align="center">
+    轻量级高性能分布式日志追踪与检索系统
+  </p>
+    <p align="center">
+    比 grep 快、比 ELK 轻、比 Loki 更适合内网
+  </p>
 </p>
-
 
 ## 📖 简介
 

@@ -50,6 +50,7 @@
   </div>
 </template>
 
+/** 日志检索页：选择客户端 + 日志项，按日期和关键词跨节点检索日志。结果以 zip 下载，错误以 JSON 返回还原。 */
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { Search } from '@element-plus/icons-vue'

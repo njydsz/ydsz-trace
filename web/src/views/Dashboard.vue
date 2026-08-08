@@ -42,6 +42,7 @@
   </div>
 </template>
 
+/** 控制台首页：展示系统概览统计（客户端总数/在线数/日志项总数），并提供功能入口卡片。 */
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'

@@ -1,3 +1,9 @@
+-- ============================================================
+-- ydsz-trace SQL Server 数据库初始化脚本
+-- 适用于 SQL Server 2016+
+-- 自增列使用 IDENTITY(1000,1)
+-- ============================================================
+
 DROP TABLE t_client;
 CREATE TABLE t_client(
     id BIGINT NOT NULL AUTO_INCREMENT DEFAULT 1000 COMMENT '主键' ,

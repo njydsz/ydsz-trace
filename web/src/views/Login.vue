@@ -29,6 +29,11 @@
 </template>
 
 <script setup>
+/**
+ * 登录页：管理员账号密码登录。
+ *
+ * 登录成功后写 session + localStorage，并按 router query 中 redirect 回跳。
+ */
 import { ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { User, Lock } from '@element-plus/icons-vue'

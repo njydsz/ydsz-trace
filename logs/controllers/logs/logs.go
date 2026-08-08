@@ -1,4 +1,5 @@
-// Package logs 包含日志查询控制器：并发拉取多节点日志并打包返回。package logs
+// Package logs 包含日志查询控制器：并发拉取多节点日志并打包返回。
+package logs
 
 import (
 	"bytes"
