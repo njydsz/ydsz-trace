@@ -1,6 +1,8 @@
 package client
 
 import (
+	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -11,21 +13,36 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// PageResp 分页响应
+type PageResp struct {
+	Code string      `json:"code"`
+	Msg  string      `json:"msg"`
+	Data models.Page `json:"data"`
+}
+
+// ClientResp 客户端响应
+type ClientResp struct {
+	Code string         `json:"code"`
+	Msg  string         `json:"msg"`
+	Data models.TClient `json:"data"`
+}
+
 // Register 客户端注册请求
 type Register struct {
 	VKey string `json:"key"`
 }
 
-// queryInt64 从 query 参数解析 int64
-func queryInt64(c *gin.Context, key string) (int64, error) {
-	return strconv.ParseInt(c.Query(key), 10, 64)
-}
-
 // Add 新增客户端
 func Add(c *gin.Context) {
 	var client models.TClient
-	if err := c.ShouldBindJSON(&client); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": "400", "msg": "请求参数错误", "data": nil})
+	req, err := c.GetRawData()
+	if err != nil {
+		c.JSON(http.StatusOK, ClientResp{"400", "请求参数错误", models.TClient{}})
+		return
+	}
+	err = json.Unmarshal(req, &client)
+	if err != nil {
+		c.JSON(http.StatusOK, ClientResp{"400", "请求参数错误", models.TClient{}})
 		return
 	}
 	client.Online = "0"
@@ -33,55 +50,40 @@ func Add(c *gin.Context) {
 	client.CreatedTime = time.Now()
 	client.UpdatedBy = "admin"
 	client.UpdatedTime = time.Now()
-	if _, err := models.AddClient(&client); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": "500", "msg": "客户端新增失败", "data": nil})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"code": "200", "msg": "客户端新增成功", "data": nil})
+	id, err := models.AddClient(&client)
+	log.Printf("ID: %d, ERR: %v\n", id, err)
+	c.JSON(http.StatusOK, ClientResp{"200", "客户端新增成功", models.TClient{}})
 }
 
 // Delete 删除客户端
 func Delete(c *gin.Context) {
-	clientId, err := queryInt64(c, "id")
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": "400", "msg": "参数错误", "data": nil})
-		return
-	}
-	if _, err := models.DeleteClient(clientId); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": "500", "msg": "删除客户端失败", "data": nil})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"code": "200", "msg": "删除客户端成功", "data": nil})
+	id, _ := strconv.ParseInt(c.Query("id"), 10, 64)
+	models.DeleteClient(id)
+	c.JSON(http.StatusOK, ClientResp{"200", "删除客户端成功", models.TClient{}})
 }
 
 // Query 根据Id查询客户端
 func Query(c *gin.Context) {
-	clientId, err := queryInt64(c, "id")
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": "400", "msg": "参数错误", "data": nil})
-		return
-	}
-	client, err := models.ReadClient(clientId)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": "404", "msg": "客户端不存在", "data": nil})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"code": "200", "msg": "查询客户端成功", "data": client})
+	id, _ := strconv.ParseInt(c.Query("id"), 10, 64)
+	client := models.ReadClient(id)
+	c.JSON(http.StatusOK, ClientResp{"200", "查询客户端成功", client})
 }
 
 // Update 更新客户端
 func Update(c *gin.Context) {
 	var client models.TClient
-	if err := c.ShouldBindJSON(&client); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": "400", "msg": "请求参数错误", "data": nil})
+	req, err := c.GetRawData()
+	if err != nil {
+		c.JSON(http.StatusOK, ClientResp{"400", "请求参数错误", models.TClient{}})
 		return
 	}
-	client.UpdatedTime = time.Now()
-	if _, err := models.UpdateClient(&client); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": "500", "msg": "更新客户端失败", "data": nil})
+	err = json.Unmarshal(req, &client)
+	if err != nil {
+		c.JSON(http.StatusOK, ClientResp{"400", "请求参数错误", models.TClient{}})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": "200", "msg": "更新客户端成功", "data": nil})
+	models.UpdateClient(&client)
+	c.JSON(http.StatusOK, ClientResp{"200", "更新客户端成功", models.TClient{}})
 }
 
 // Register 客户端上线注册（供 logc 代理调用）
@@ -93,55 +95,40 @@ func Register(c *gin.Context) {
 	port := "2020"
 
 	var register Register
-	if err := c.ShouldBindJSON(&register); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": "400", "msg": "请求参数错误", "data": nil})
-		return
+	reqBody, err := c.GetRawData()
+	if err == nil {
+		err = json.Unmarshal(reqBody, &register)
+		if err == nil {
+			// 根据ip、port、vkey查询客户端的有效性
+			client := models.CheckClient(ip, port, register.VKey)
+			if client.Id != 0 {
+				cl := models.TClient{}
+				cl.Id = client.Id
+				cl.Online = "1"
+				models.ChangeClientOnline(&cl)
+			}
+		}
 	}
-
-	// 根据ip、port、vkey查询客户端的有效性
-	client, err := models.CheckClient(ip, port, register.VKey)
-	if err != nil || client.Id == 0 {
-		c.JSON(http.StatusUnauthorized, gin.H{"code": "401", "msg": "客户端校验失败", "data": nil})
-		return
-	}
-
-	cc := models.TClient{Id: client.Id, Online: "1"}
-	_, _ = models.ChangeClientOnline(&cc)
-	c.JSON(http.StatusOK, gin.H{"code": "200", "msg": "客户端上线成功", "data": nil})
+	c.JSON(http.StatusOK, ClientResp{"200", "客户端上线成功", models.TClient{}})
 }
 
 // ChangeClientStatus 切换客户端状态
 func ChangeClientStatus(c *gin.Context) {
-	clientId, err := queryInt64(c, "id")
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": "400", "msg": "参数错误", "data": nil})
-		return
-	}
-	if _, err := models.ChangeClientStatus(clientId); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": "500", "msg": "更新客户端失败", "data": nil})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"code": "200", "msg": "更新客户端成功", "data": nil})
+	id, _ := strconv.ParseInt(c.Query("id"), 10, 64)
+	models.ChangeClientStatus(id)
+	c.JSON(http.StatusOK, ClientResp{"200", "更新客户端成功", models.TClient{}})
 }
 
 // QueryAll 查询所有客户端
 func QueryAll(c *gin.Context) {
-	clients, err := models.QueryAllClient()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": "500", "msg": "查询客户端失败", "data": nil})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"code": "200", "msg": "查询客户端成功", "data": clients})
+	clients, _ := models.QueryAllClient()
+	c.JSON(http.StatusOK, clients)
 }
 
 // QueryPage 分页查询客户端
 func QueryPage(c *gin.Context) {
-	pageNum, _ := strconv.Atoi(c.Query("page"))
-	pageSize, _ := strconv.Atoi(c.Query("limit"))
-	page, err := models.QueryPageClient(pageNum, pageSize)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": "500", "msg": "分页查询客户端失败", "data": nil})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"code": "200", "msg": "分页查询客户端成功", "data": page})
+	pageNum, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	page := models.QueryPageClient(pageNum, pageSize)
+	c.JSON(http.StatusOK, PageResp{"200", "分页查询客户端成功", page})
 }

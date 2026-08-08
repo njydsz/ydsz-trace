@@ -1,140 +1,118 @@
 package models
 
 import (
+	"log"
 	"time"
 )
 
 // AddItem 新增项目日志
 func AddItem(item *TItem) (int64, error) {
-	result, err := DB.Exec(`INSERT INTO t_item
-		(client_id, item_name, item_desc, log_path, log_prefix, log_suffix, status,
-		created_by, created_time, updated_by, updated_time)
+	res, err := DB.Exec(`INSERT INTO t_item
+		(client_id, item_name, item_desc, log_path, log_prefix, log_suffix, status, created_by, created_time, updated_by, updated_time)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		item.ClientId, item.ItemName, item.ItemDesc, item.LogPath,
-		item.LogPrefix, item.LogSuffix, item.Status,
-		item.CreatedBy, item.CreatedTime, item.UpdatedBy, item.UpdatedTime)
+		item.ClientId, item.ItemName, item.ItemDesc, item.LogPath, item.LogPrefix, item.LogSuffix,
+		item.Status, item.CreatedBy, item.CreatedTime, item.UpdatedBy, item.UpdatedTime)
 	if err != nil {
+		log.Printf("insert item err : %v", err)
 		return 0, err
 	}
-	return result.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		log.Printf("get last insert id err : %v", err)
+		return 0, err
+	}
+	log.Printf("id : %d", id)
+	return id, nil
 }
 
 // DeleteItem 根据Id删除项目日志
-func DeleteItem(id int64) (int64, error) {
-	result, err := DB.Exec("DELETE FROM t_item WHERE id = ?", id)
+func DeleteItem(id int64) int64 {
+	res, err := DB.Exec(`DELETE FROM t_item WHERE id = ?`, id)
 	if err != nil {
-		return 0, err
+		log.Printf("delete item err : %v", err)
+		return 0
 	}
-	return result.RowsAffected()
+	num, _ := res.RowsAffected()
+	return num
 }
 
 // UpdateItem 更新项目日志，先查后改
 func UpdateItem(item *TItem) (int64, error) {
-	result, err := DB.Exec(`UPDATE t_item SET
-		client_id = ?, item_name = ?, item_desc = ?, log_path = ?, log_prefix = ?, log_suffix = ?,
-		status = ?, updated_by = ?, updated_time = ? WHERE id = ?`,
-		item.ClientId, item.ItemName, item.ItemDesc, item.LogPath,
-		item.LogPrefix, item.LogSuffix, item.Status,
-		item.UpdatedBy, item.UpdatedTime, item.Id)
+	res, err := DB.Exec(`UPDATE t_item SET
+		client_id = ?, item_name = ?, item_desc = ?, log_path = ?, log_prefix = ?, log_suffix = ?, status = ?, updated_time = ?
+		WHERE id = ?`,
+		item.ClientId, item.ItemName, item.ItemDesc, item.LogPath, item.LogPrefix, item.LogSuffix,
+		item.Status, time.Now(), item.Id)
 	if err != nil {
+		log.Printf("update item err : %v", err)
 		return 0, err
 	}
-	return result.RowsAffected()
+	num, _ := res.RowsAffected()
+	log.Printf("update return num : %d", num)
+	return num, nil
 }
 
 // ChangeItemStatus 切换项目状态（启用/禁用）
 func ChangeItemStatus(id int64) (int64, error) {
-	result, err := DB.Exec("UPDATE t_item SET status = IF(status='1','0','1'), updated_time = ? WHERE id = ?",
-		time.Now(), id)
+	item := ReadItem(id)
+	status := "1"
+	if item.Status == "1" {
+		status = "0"
+	}
+	res, err := DB.Exec(`UPDATE t_item SET status = ?, updated_time = ? WHERE id = ?`,
+		status, time.Now(), id)
 	if err != nil {
+		log.Printf("update item status err : %v", err)
 		return 0, err
 	}
-	return result.RowsAffected()
+	num, _ := res.RowsAffected()
+	return num, nil
 }
 
 // ReadItem 根据Id查询项目日志
-func ReadItem(id int64) (TItem, error) {
-	var c TItem
-	err := DB.QueryRow(`SELECT id, client_id, item_name, item_desc, log_path, log_prefix, log_suffix,
-		status, created_by, created_time, updated_by, updated_time FROM t_item WHERE id = ?`, id).
-		Scan(&c.Id, &c.ClientId, &c.ItemName, &c.ItemDesc, &c.LogPath,
-			&c.LogPrefix, &c.LogSuffix, &c.Status,
-			&c.CreatedBy, &c.CreatedTime, &c.UpdatedBy, &c.UpdatedTime)
-	return c, err
+func ReadItem(id int64) (item TItem) {
+	err := DB.Get(&item, `SELECT * FROM t_item WHERE id = ?`, id)
+	if err != nil {
+		log.Printf("read item err: %v", err)
+	}
+	return item
 }
 
 // QueryItemsByClientId 根据客户端ID查询所有项目
 func QueryItemsByClientId(id int64) ([]TItem, error) {
-	rows, err := DB.Query(`SELECT id, client_id, item_name, item_desc, log_path, log_prefix, log_suffix,
-		status, created_by, created_time, updated_by, updated_time FROM t_item WHERE client_id = ?`, id)
+	items := []TItem{}
+	err := DB.Select(&items, `SELECT * FROM t_item WHERE client_id = ? ORDER BY id DESC`, id)
 	if err != nil {
+		log.Printf("query items by client id err: %v", err)
 		return nil, err
 	}
-	defer rows.Close()
-
-	var items []TItem
-	for rows.Next() {
-		var c TItem
-		if err := rows.Scan(&c.Id, &c.ClientId, &c.ItemName, &c.ItemDesc, &c.LogPath,
-			&c.LogPrefix, &c.LogSuffix, &c.Status,
-			&c.CreatedBy, &c.CreatedTime, &c.UpdatedBy, &c.UpdatedTime); err != nil {
-			return nil, err
-		}
-		items = append(items, c)
-	}
-	return items, rows.Err()
+	return items, nil
 }
 
 // QueryAllItem 查询所有项目日志
 func QueryAllItem() ([]TItem, error) {
-	rows, err := DB.Query(`SELECT id, client_id, item_name, item_desc, log_path, log_prefix, log_suffix,
-		status, created_by, created_time, updated_by, updated_time FROM t_item`)
+	items := []TItem{}
+	err := DB.Select(&items, `SELECT * FROM t_item ORDER BY id DESC`)
 	if err != nil {
+		log.Printf("query all item err: %v", err)
 		return nil, err
 	}
-	defer rows.Close()
-
-	var items []TItem
-	for rows.Next() {
-		var c TItem
-		if err := rows.Scan(&c.Id, &c.ClientId, &c.ItemName, &c.ItemDesc, &c.LogPath,
-			&c.LogPrefix, &c.LogSuffix, &c.Status,
-			&c.CreatedBy, &c.CreatedTime, &c.UpdatedBy, &c.UpdatedTime); err != nil {
-			return nil, err
-		}
-		items = append(items, c)
-	}
-	return items, rows.Err()
+	return items, nil
 }
 
 // QueryPageItem 分页查询所有项目日志
-func QueryPageItem(pageNum int, pageSize int) (Page, error) {
-	offset := (pageNum - 1) * pageSize
-	rows, err := DB.Query(`SELECT id, client_id, item_name, item_desc, log_path, log_prefix, log_suffix,
-		status, created_by, created_time, updated_by, updated_time FROM t_item LIMIT ? OFFSET ?`,
-		pageSize, offset)
+func QueryPageItem(pageNum int, pageSize int) (page Page) {
+	items := []TItem{}
+	err := DB.Select(&items, `SELECT * FROM t_item ORDER BY id DESC LIMIT ? OFFSET ?`, pageSize, (pageNum-1)*pageSize)
 	if err != nil {
-		return Page{}, err
+		log.Printf("query page item err: %v", err)
+		return Page{}
 	}
-	defer rows.Close()
-
-	var items []TItem
-	for rows.Next() {
-		var c TItem
-		if err := rows.Scan(&c.Id, &c.ClientId, &c.ItemName, &c.ItemDesc, &c.LogPath,
-			&c.LogPrefix, &c.LogSuffix, &c.Status,
-			&c.CreatedBy, &c.CreatedTime, &c.UpdatedBy, &c.UpdatedTime); err != nil {
-			return Page{}, err
-		}
-		items = append(items, c)
+	var totalCount int
+	if err := DB.Get(&totalCount, `SELECT COUNT(*) FROM t_item`); err != nil {
+		log.Printf("count item err: %v", err)
+		return Page{}
 	}
-	if err := rows.Err(); err != nil {
-		return Page{}, err
-	}
-
-	var total int
-	if err := DB.QueryRow("SELECT COUNT(*) FROM t_item").Scan(&total); err != nil {
-		return Page{}, err
-	}
-	return PageUtil(total, pageNum, pageSize, items), nil
+	page = PageUtil(totalCount, pageNum, pageSize, items)
+	return page
 }

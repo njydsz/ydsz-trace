@@ -1,6 +1,10 @@
 package routers
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"log"
+	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -17,11 +21,68 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// SessionSecret session 加密密钥（生产环境应通过环境变量 YDSZ_SESSION_SECRET 覆盖）
-var sessionSecret = "ydsz-trace-session-secret"
+// defaultSessionSecret 默认 Session 密钥（仅开发环境可用）
+const defaultSessionSecret = "ydsz-trace-session-secret"
+
+// generateTraceID 生成追踪 ID（标准库实现，无需外部依赖）
+func generateTraceID() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		// 降级使用时间戳+随机数
+		return hex.EncodeToString([]byte(time.Now().Format("20060102150405"))) + "-fallback"
+	}
+	return hex.EncodeToString(buf)
+}
+
+// checkDangerousDefaults 检测到危险默认值时返回问题列表
+func checkDangerousDefaults(cfg *config.Config) []string {
+	var problems []string
+
+	// 检查是否为生产模式
+	runmode := cfg.StringOr("runmode", "dev")
+	isProd := runmode != "dev"
+
+	// 1. Session Secret：生产环境必须通过环境变量覆盖
+	if os.Getenv("YDSZ_SESSION_SECRET") == "" {
+		if isProd {
+			problems = append(problems, "生产环境必须设置 YDSZ_SESSION_SECRET 环境变量")
+		} else {
+			log.Printf("[WARN] 使用默认 Session 密钥仅允许开发环境，生产环境请设置 YDSZ_SESSION_SECRET")
+		}
+	}
+
+	// 2. 管理员密码：生产环境必须覆盖默认值
+	adminPass := config.EnvOrConfig("YDSZ_ADMIN_PASSWORD", cfg.String("password"), "")
+	if adminPass == "" || adminPass == "change_me_production" {
+		if isProd {
+			problems = append(problems, "生产环境必须设置 YDSZ_ADMIN_PASSWORD 环境变量（禁止使用默认值）")
+		} else {
+			log.Printf("[WARN] 使用空/默认管理员密码仅允许开发环境")
+		}
+	}
+
+	// 3. 数据库密码检查
+	dbPwd := config.EnvOrConfig("YDSZ_DB_PASSWORD", cfg.String("sqlpwd"), "")
+	if dbPwd == "" || dbPwd == "change_me_production" {
+		if isProd {
+			problems = append(problems, "生产环境必须设置 YDSZ_DB_PASSWORD 环境变量")
+		}
+	}
+
+	return problems
+}
 
 // SetupRouter 构建 Gin 路由
 func SetupRouter(cfg *config.Config) *gin.Engine {
+	// 危险默认值检查
+	if problems := checkDangerousDefaults(cfg); len(problems) > 0 {
+		log.Printf("启动安全校验失败，存在 %d 个风险项:", len(problems))
+		for _, p := range problems {
+			log.Printf("  - %s", p)
+		}
+		log.Fatal("请修复以上安全配置后再启动服务")
+	}
+
 	// 根据运行模式设置 gin 模式
 	runmode := cfg.StringOr("runmode", "dev")
 	if runmode != "dev" {
@@ -31,6 +92,9 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
 
+	// TraceId 注入中间件
+	r.Use(traceIDMiddleware())
+
 	// 注入配置到 context
 	r.Use(func(c *gin.Context) {
 		c.Set("cfg", cfg)
@@ -38,19 +102,26 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	})
 
 	// Session 中间件（cookie 存储）
+	sessionSecret := defaultSessionSecret
 	if secret := os.Getenv("YDSZ_SESSION_SECRET"); secret != "" {
 		sessionSecret = secret
 	}
 	store := cookie.NewStore([]byte(sessionSecret))
-	store.Options(sessions.Options{Path: "/", MaxAge: 86400 * 7, HttpOnly: true})
+	store.Options(sessions.Options{
+		Path:     "/",
+		MaxAge:   86400 * 7,
+		HttpOnly: true,
+		Secure:   runmode != "dev",
+		SameSite: http.SameSiteStrictMode,
+	})
 	r.Use(sessions.Sessions("ydsz_trace_session", store))
 
 	// CORS 白名单：从环境变量 YDSZ_CORS_ORIGINS 读取，逗号分隔
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     getCORSOrigins(),
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Authorization", "Content-Type", "X-Token", "X-Requested-With"},
-		ExposeHeaders:    []string{"Content-Length", "Content-Type"},
+		AllowHeaders:     []string{"Origin", "Authorization", "Content-Type", "X-Token", "X-Requested-With", "X-Trace-ID"},
+		ExposeHeaders:    []string{"Content-Length", "Content-Type", "X-Trace-ID"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	}))
@@ -91,6 +162,19 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	}
 
 	return r
+}
+
+// traceIDMiddleware 注入请求追踪 ID
+func traceIDMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		traceID := c.GetHeader("X-Trace-ID")
+		if traceID == "" {
+			traceID = generateTraceID()
+		}
+		c.Set("traceId", traceID)
+		c.Header("X-Trace-ID", traceID)
+		c.Next()
+	}
 }
 
 // getCORSOrigins 从环境变量读取 CORS 白名单，逗号分隔
