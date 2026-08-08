@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestZipUnZip_RoundTrip 验证基本压缩/解压往返正确性
+// TestZipUnZip_RoundTrip 验证压缩 → 解压后文件内容一致。
 func TestZipUnZip_RoundTrip(t *testing.T) {
 	src := t.TempDir()
 	dst := t.TempDir()
@@ -49,7 +49,7 @@ func TestZipUnZip_RoundTrip(t *testing.T) {
 	}
 }
 
-// TestUnZip_ZipSlip 验证 zip slip 路径穿越被拦截
+// TestUnZip_ZipSlip 验证包含 ../ 的恶意 zip 条目被拦截，不外泄到 dst 之外。
 func TestUnZip_ZipSlip(t *testing.T) {
 	dst := t.TempDir()
 	zipFile := filepath.Join(t.TempDir(), "evil.zip")
@@ -75,7 +75,7 @@ func TestUnZip_ZipSlip(t *testing.T) {
 	}
 }
 
-// createEvilZip 在内存中构造包含 zip slip 条目的 zip 字节
+// createEvilZip 构造含 ../escaped.txt 条名的恶意 zip 字节。
 func createEvilZip() ([]byte, error) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)

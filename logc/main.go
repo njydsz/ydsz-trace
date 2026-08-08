@@ -1,3 +1,11 @@
+// Package main 是 logc 客户端代理服务的入口。
+//
+// 职责：
+//   - 部署在每台需要被集中收集日志的机器上
+//   - 接收 logs 服务端的查询请求，读取本机日志文件并返回压缩结果
+//   - 自动向 logs 注册并保持心跳，上报存活状态
+//
+// 启动流程：解析参数 → 加载配置 → 注册到 logs → 启动心跳 → 启动 HTTP 服务
 package main
 
 import (
@@ -15,24 +23,31 @@ import (
 	"ydsz-trace/pkg/config"
 )
 
+// main 入口函数。
+//
+// 命令行参数：
+//   - -s: 日志服务地址（ip:port）
+//   - -v: 认证密钥
+//   - -c: 配置文件路径（默认 conf/app.conf）
 func main() {
-	// 定义变量，用于接收命令行的参数值
+	// 定义变量，用于接收命令行的参数值。
+	// 优先级：命令行参数 > 环境变量 > 配置文件 > 内置默认
 	var server string
 	var vkey string
 	var confPath string
-	flag.StringVar(&server, "s", "", "ip+port")
-	flag.StringVar(&vkey, "v", "", "密钥")
-	flag.StringVar(&confPath, "c", "conf/app.conf", "配置文件路径")
+	flag.StringVar(&server, "s", "", "日志服务地址（ip:port）")
+	flag.StringVar(&vkey, "v", "", "客户端认证密钥")
+	flag.StringVar(&confPath, "c", "conf/app.conf", "INI 配置文件路径")
 	flag.Parse()
 
-	// 加载配置
+	// 加载配置文件；失败时使用空配置（后续通过 EnvOrConfig 降级）。
 	cfg, err := config.Load(confPath)
 	if err != nil {
 		log.Printf("加载配置失败: %v，使用内置默认值", err)
 		cfg = config.NewDefault()
 	}
 
-	// 密钥优先使用命令行参数，其次环境变量，最后配置文件
+	// 密钥/服务地址优先级：命令行 > 环境变量 > 配置文件 > 内置默认。
 	if vkey == "" {
 		vkey = config.EnvOrConfig("YDSZ_CLIENT_KEY", cfg.String("key"), "123456")
 	}
@@ -43,10 +58,10 @@ func main() {
 	log.Printf("logc register -server=%v -vkey=%v\n", server, vkey)
 	register.RegisterLocalIp(server, vkey)
 
-	// 启动定期心跳续约（每 60 秒重注册一次）
+	// 启动心跳续约（启动时注册一次，之后每 60 秒重注册，带指数退避）。
 	register.StartGlobalHeartbeat(server, vkey)
 
-	// 构建 Gin 路由
+	// 构建 Gin 路由并启动 HTTP 服务。
 	port := cfg.StringOr("httpport", "2020")
 	handler := routers.SetupRouter(cfg)
 
@@ -55,7 +70,7 @@ func main() {
 		Handler: handler,
 	}
 
-	// 优雅关闭：监听系统信号
+	// 启动后台 goroutine 监听退出信号，触发优雅关闭。
 	go gracefulShutdown(srv)
 
 	log.Printf("logc 启动成功，监听端口 %s\n", port)
@@ -64,7 +79,9 @@ func main() {
 	}
 }
 
-// gracefulShutdown 监听 SIGTERM/SIGINT，优雅关闭 HTTP 服务
+// gracefulShutdown 监听 SIGTERM/SIGINT，停止心跳并优雅关闭 HTTP 服务。
+//
+// 关闭超时 10 秒；超时后强制退出。
 func gracefulShutdown(srv *http.Server) {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

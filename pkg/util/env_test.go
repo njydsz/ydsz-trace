@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// TestGetEnv 验证 GetEnv 在设置与未设置环境变量时的行为。
 func TestGetEnv(t *testing.T) {
 	key := "YDSZ_TEST_GETENV"
 	os.Unsetenv(key)

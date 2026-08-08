@@ -8,11 +8,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// init 启用 gin 测试模式，减少日志输出。
 func init() {
 	gin.SetMode(gin.TestMode)
 }
 
-// newCtx 构造一个经过会话中间件的 gin 测试 context
+// newCtx 构造一个已经过会话中间件初始化的测试 context。
 func newCtx(t *testing.T) (*gin.Context, *Manager) {
 	t.Helper()
 	w := httptest.NewRecorder()
@@ -23,6 +24,7 @@ func newCtx(t *testing.T) (*gin.Context, *Manager) {
 	return c, m
 }
 
+// TestMiddleware_CreatesSession 验证中间件为新请求创建会话及 Cookie。
 func TestMiddleware_CreatesSession(t *testing.T) {
 	c, _ := newCtx(t)
 	s := Get(c)
@@ -34,6 +36,7 @@ func TestMiddleware_CreatesSession(t *testing.T) {
 	}
 }
 
+// TestSetGetDelete 验证 Session 的 Set/Get/Delete 基础操作。
 func TestSetGetDelete(t *testing.T) {
 	c, _ := newCtx(t)
 	Set(c, "user", "alice")
@@ -46,6 +49,7 @@ func TestSetGetDelete(t *testing.T) {
 	}
 }
 
+// TestSession_PersistsAcrossRequests 验证会话跨请求保持（通过 Cookie 恢复）。
 func TestSession_PersistsAcrossRequests(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
@@ -68,6 +72,7 @@ func TestSession_PersistsAcrossRequests(t *testing.T) {
 	}
 }
 
+// TestDestroy 验证销毁会话后旧 token 不再携带原数据。
 func TestDestroy(t *testing.T) {
 	c, m := newCtx(t)
 	Set(c, "user", "bob")

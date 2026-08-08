@@ -9,7 +9,12 @@ import (
 	"strings"
 )
 
-// Zip 压缩文件或目录到 zip 文件
+// Zip 将 src（文件或目录）压缩为 dst 指向的 zip 文件。
+//
+// 注意：
+//   - 压缩成功后会自动删除原文件/目录
+//   - 使用 defer 确保 zip.Writer.Close 仅调用一次，避免中央目录损坏
+//   - 仅写入相对路径，避免绝对路径写入 zip 条目
 func Zip(dst, src string) error {
 	fw, err := os.Create(dst)
 	if err != nil {
@@ -77,7 +82,11 @@ func Zip(dst, src string) error {
 	return nil
 }
 
-// UnZip 解压缩 zip 文件到目标目录
+// UnZip 将 src zip 文件解压到 dst 目录。
+//
+// 安全：
+//   - 校验条目路径始终位于 dst 内，防止 zip 路径穿越（zip slip）
+//   - 目录条目会递归创建，普通文件按 entry 权限还原
 func UnZip(dst, src string) error {
 	zr, err := zip.OpenReader(src)
 	if err != nil {
@@ -134,7 +143,9 @@ func UnZip(dst, src string) error {
 	return nil
 }
 
-// PathExists 检查路径是否存在
+// PathExists 检查路径是否存在。
+//
+// 返回：(存在?, 错误)。错误仅反映权限/IO 问题，不存在视为 (false, nil)。
 func PathExists(path string) (bool, error) {
 	_, err := os.Stat(path)
 	if err == nil {
@@ -146,7 +157,7 @@ func PathExists(path string) (bool, error) {
 	return false, err
 }
 
-// CreateDir 创建文件夹（递归）
+// CreateDir 递归创建目录（若已存在则不操作）。
 func CreateDir(folderPath string) error {
 	if _, err := os.Stat(folderPath); os.IsNotExist(err) {
 		return os.MkdirAll(folderPath, 0755)
