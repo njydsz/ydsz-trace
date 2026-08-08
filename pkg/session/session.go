@@ -29,6 +29,7 @@ type Manager struct {
 
 // Session 单个会话
 type Session struct {
+	mu        sync.RWMutex
 	values    map[string]interface{}
 	expiresAt time.Time
 }

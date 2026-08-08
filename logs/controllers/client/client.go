@@ -27,8 +27,8 @@ type ClientResp struct {
 	Data models.TClient `json:"data"`
 }
 
-// Register 客户端注册请求
-type Register struct {
+// RegisterReq 客户端注册请求
+type RegisterReq struct {
 	VKey string `json:"key"`
 }
 
@@ -94,7 +94,7 @@ func Register(c *gin.Context) {
 	ip := s[0]
 	port := "2020"
 
-	var register Register
+	var register RegisterReq
 	reqBody, err := c.GetRawData()
 	if err == nil {
 		err = json.Unmarshal(reqBody, &register)
