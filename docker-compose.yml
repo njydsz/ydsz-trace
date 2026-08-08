@@ -40,6 +40,7 @@ services:
       YDSZ_ADMIN_USER: ${YDSZ_ADMIN_USER:-admin}
       YDSZ_ADMIN_PASSWORD: ${YDSZ_ADMIN_PASSWORD:-ydsz_trace_admin}
       YDSZ_CORS_ORIGINS: ${YDSZ_CORS_ORIGINS:-http://localhost:*}
+      YDSZ_WEB_ROOT: ${YDSZ_WEB_ROOT:-/app/web/dist}
       TZ: Asia/Shanghai
     ports:
       - "2021:2021"

@@ -48,7 +48,7 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	}))
 
 	// 健康检查与登录（无需鉴权）
-	r.GET("/", admin.Login)
+	r.GET("/", admin.Index)
 	r.GET("/health", admin.Health)
 	r.GET("/ready", admin.Ready)
 	r.GET("/admin/login", admin.Login)
@@ -56,7 +56,7 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	r.GET("/admin/exit", admin.Exit)
 	r.POST("/admin/exit", admin.Exit)
 
-	// 控制台（SPA 入口，无需鉴权即可返回提示）
+	// 控制台（SPA 入口，由 Vite 构建的 web/dist 提供）
 	r.GET("/admin/console", admin.Console)
 
 	// logc 代理注册接口（代理调用，无 session，需放行）
@@ -86,6 +86,9 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 		auth.GET("/logs/queryClients", logs.QueryClient)
 		auth.GET("/logs/queryItems", logs.QueryItem)
 	}
+
+	// SPA 静态资源与 history 路由回退（未匹配到 API 时）
+	r.NoRoute(admin.ServeStatic)
 
 	return r
 }

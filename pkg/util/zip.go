@@ -35,8 +35,12 @@ func Zip(dst, src string) error {
 				return hdrErr
 			}
 
-			fh.Name = strings.TrimPrefix(path, string(filepath.Separator))
-
+			// 仅写入相对路径，避免把绝对路径（含盘符）写进 zip 条目
+			rel, relErr := filepath.Rel(src, path)
+			if relErr != nil {
+				return relErr
+			}
+			fh.Name = filepath.ToSlash(rel)
 			if fi.IsDir() {
 				fh.Name += "/"
 			}
