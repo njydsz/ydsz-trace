@@ -14,6 +14,7 @@ import (
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/config"
 	"ydsz-trace/pkg/session"
+	"ydsz-trace/pkg/util"
 
 	"github.com/gin-gonic/gin"
 )
@@ -62,6 +63,13 @@ func main() {
 	cronTask := task.InitTask(cfg)
 	cronTask.Start()
 	defer cronTask.Stop()
+
+	// 启动时清理残留临时文件（TTL 2 小时）
+	temppath := cfg.StringOr("temppath", "./temp/logs/")
+	cleanedFiles, cleanedDirs, _ := util.CleanupOldFiles(temppath, util.DefaultCleanupOptions)
+	if cleanedFiles > 0 || cleanedDirs > 0 {
+		log.Printf("启动清理：删除 %d 个过期文件，%d 个过期目录", cleanedFiles, cleanedDirs)
+	}
 
 	// 构建 Gin 路由
 	port := cfg.StringOr("httpport", "2021")
