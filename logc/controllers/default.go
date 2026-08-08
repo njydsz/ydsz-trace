@@ -1,13 +1,11 @@
 package controllers
 
 import (
-	"github.com/astaxie/beego"
-)
+	"net/http"
+	"time"
 
-// MainController 根路径控制器
-type MainController struct {
-	beego.Controller
-}
+	"github.com/gin-gonic/gin"
+)
 
 // HealthResp 健康检查响应
 type HealthResp struct {
@@ -16,29 +14,25 @@ type HealthResp struct {
 	Time   string `json:"time"`
 }
 
-// Get 根路径返回服务信息
-func (c *MainController) Get() {
-	c.Ctx.WriteString("Ydsz Trace logc agent is running.")
+// Main 根路径返回服务信息
+func Main(c *gin.Context) {
+	c.String(http.StatusOK, "Ydsz Trace logc agent is running.")
 }
 
 // Health 健康检查端点（K8s liveness probe）
-func (c *MainController) Health() {
-	data := HealthResp{
+func Health(c *gin.Context) {
+	c.JSON(http.StatusOK, HealthResp{
 		Status: "ok",
 		App:    "ydsz-trace-logc",
-		Time:   beego.Date(0, "2006-01-02 15:04:05"),
-	}
-	c.Data["json"] = &data
-	c.ServeJSON()
+		Time:   time.Now().Format("2006-01-02 15:04:05"),
+	})
 }
 
 // Ready 就绪检查端点（K8s readiness probe）
-func (c *MainController) Ready() {
-	data := HealthResp{
+func Ready(c *gin.Context) {
+	c.JSON(http.StatusOK, HealthResp{
 		Status: "ready",
 		App:    "ydsz-trace-logc",
-		Time:   beego.Date(0, "2006-01-02 15:04:05"),
-	}
-	c.Data["json"] = &data
-	c.ServeJSON()
+		Time:   time.Now().Format("2006-01-02 15:04:05"),
+	})
 }

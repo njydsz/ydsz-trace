@@ -26,6 +26,12 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 	// 日志中间件 + 恢复中间件
 	r.Use(gin.Logger(), gin.Recovery())
 
+	// 注入配置到 context
+	r.Use(func(c *gin.Context) {
+		c.Set("cfg", cfg)
+		c.Next()
+	})
+
 	// CORS 白名单：从环境变量 YDSZ_CORS_ORIGINS 读取，逗号分隔
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     getCORSOrigins(),

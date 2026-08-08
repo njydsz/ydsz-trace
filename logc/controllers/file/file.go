@@ -13,13 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/astaxie/beego"
-)
+	"ydsz-trace/pkg/config"
 
-// FileController 文件查询控制器
-type FileController struct {
-	beego.Controller
-}
+	"github.com/gin-gonic/gin"
+)
 
 // FileReq 文件查询请求
 type FileReq struct {
@@ -44,40 +41,53 @@ func sanitizeKey(key string) (string, bool) {
 }
 
 // Query 查询日志文件并返回压缩包下载
-func (this *FileController) Query() {
-	var file FileReq
-	data := this.Ctx.Input.RequestBody
-	err := json.Unmarshal(data, &file)
+func Query(c *gin.Context) {
+	cfg := c.MustGet("cfg").(*config.Config)
+
+	var fileReq FileReq
+	data, err := c.GetRawData()
+	if err != nil {
+		log.Printf("读取请求体失败: %v", err)
+		c.Status(400)
+		return
+	}
+	err = json.Unmarshal(data, &fileReq)
 	if err != nil {
 		log.Printf("JSON解析失败: %v", err)
-		this.Ctx.ResponseWriter.WriteHeader(400)
+		c.Status(400)
 		return
 	}
 
 	// 安全校验：清理 key 参数，防止路径遍历
-	safeKey, ok := sanitizeKey(file.Key)
+	safeKey, ok := sanitizeKey(fileReq.Key)
 	if !ok {
-		log.Printf("非法key参数: %s", file.Key)
-		this.Ctx.ResponseWriter.WriteHeader(400)
+		log.Printf("非法key参数: %s", fileReq.Key)
+		c.Status(400)
 		return
 	}
 
 	// 安全校验：path 不允许包含路径遍历字符
-	if strings.Contains(file.Path, "..") {
-		log.Printf("非法path参数(包含..): %s", file.Path)
-		this.Ctx.ResponseWriter.WriteHeader(400)
+	if strings.Contains(fileReq.Path, "..") {
+		log.Printf("非法path参数(包含..): %s", fileReq.Path)
+		c.Status(400)
 		return
 	}
 
-	result := ReadString(file.Path, safeKey, file.Line)
+	result := ReadString(fileReq.Path, safeKey, fileReq.Line, cfg.StringOr("temppath", "./temp/logc/"))
 	defer func() {
 		os.Remove(result)
 	}()
-	this.Ctx.Output.Download(result)
+
+	if result == "" {
+		c.Status(404)
+		return
+	}
+	c.Header("Content-Disposition", `attachment; filename="`+filepath.Base(result)+`"`)
+	c.File(result)
 }
 
 // ReadString 按关键字搜索日志文件，返回匹配上下文行并压缩
-func ReadString(filename string, key string, line int64) (file string) {
+func ReadString(filename string, key string, line int64, temppath string) (file string) {
 	startTime := time.Now()
 	defer func(startTime time.Time) {
 		log.Printf("共耗时：%s\n", time.Since(startTime))
@@ -94,9 +104,6 @@ func ReadString(filename string, key string, line int64) (file string) {
 	var lineBegin int64 = 0
 	var lineFirst int64 = 0
 	var lineOver int64 = 0
-
-	// 获取临时目录
-	temppath := beego.AppConfig.String("temppath")
 
 	// 确保临时目录存在
 	if err := os.MkdirAll(temppath, 0755); err != nil {
