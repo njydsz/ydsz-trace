@@ -1,37 +1,45 @@
 package test
 
 import (
-	_ "ydsz-trace/logs/routers"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
-	"runtime"
 	"testing"
 
-	"github.com/astaxie/beego"
-	. "github.com/smartystreets/goconvey/convey"
+	"ydsz-trace/logs/routers"
+	"ydsz-trace/pkg/config"
+
+	"github.com/gin-gonic/gin"
 )
 
-func init() {
-	_, file, _, _ := runtime.Caller(0)
-	apppath, _ := filepath.Abs(filepath.Dir(filepath.Join(file, ".."+string(filepath.Separator))))
-	beego.TestBeegoInit(apppath)
+// newTestRouter 构建测试用路由（使用默认配置，不连接数据库）
+func newTestRouter() *gin.Engine {
+	gin.SetMode(gin.TestMode)
+	cfg := config.NewDefault()
+	return routers.SetupRouter(cfg)
 }
 
-// TestBeego is a sample to run an endpoint test
-func TestBeego(t *testing.T) {
-	r, _ := http.NewRequest("GET", "/", nil)
+// TestHealth 健康检查端点测试
+func TestHealth(t *testing.T) {
+	router := newTestRouter()
+
 	w := httptest.NewRecorder()
-	beego.BeeApp.Handlers.ServeHTTP(w, r)
+	req, _ := http.NewRequest("GET", "/health", nil)
+	router.ServeHTTP(w, req)
 
-	beego.Trace("testing", "TestBeego", "Code[%d]\n%s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Errorf("Health endpoint returned %d, want 200", w.Code)
+	}
+}
 
-	Convey("Subject: Test Station Endpoint\n", t, func() {
-		Convey("Status Code Should Be 200", func() {
-			So(w.Code, ShouldEqual, 200)
-		})
-		Convey("The Result Should Not Be Empty", func() {
-			So(w.Body.Len(), ShouldBeGreaterThan, 0)
-		})
-	})
+// TestLoginInvalid 未登录访问受保护接口应返回401
+func TestLoginRequired(t *testing.T) {
+	router := newTestRouter()
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/client/queryAll", nil)
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("Protected endpoint returned %d, want 401", w.Code)
+	}
 }
