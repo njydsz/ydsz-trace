@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"io"
 	"log"
-	"net/http"
 	"time"
 
 	"ydsz-trace/logs/models"
 	"ydsz-trace/pkg/config"
+	"ydsz-trace/pkg/util"
 
 	"github.com/robfig/cron/v3"
 )
@@ -18,9 +18,6 @@ type Resp struct {
 	Code string `json:"code"`
 	Msg  string `json:"msg"`
 }
-
-// httpClient 带超时的 HTTP 客户端
-var httpClient = &http.Client{Timeout: 10 * time.Second}
 
 // checkOnlineTask 定时检测所有客户端在线状态
 func checkOnlineTask() {
@@ -32,6 +29,7 @@ func checkOnlineTask() {
 		return
 	}
 
+	httpClient := util.NewClientWithTimeout(10 * time.Second)
 	for _, client := range clients {
 		logcServer := client.Ip + ":" + client.Port
 		resp, err := httpClient.Get("http://" + logcServer + "/checkOn")

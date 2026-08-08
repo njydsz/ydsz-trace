@@ -35,8 +35,8 @@ type LogsResp struct {
 	Data interface{} `json:"data"`
 }
 
-// httpClient 带超时的 HTTP 客户端
-var httpClient = &http.Client{Timeout: 120 * time.Second}
+// httpClient 共享 HTTP 客户端（带连接池，120秒超时用于日志查询场景）
+var httpClient = util.NewClientWithTimeout(120 * time.Second)
 
 // errNonOK 非 200 状态码错误
 func errNonOK(status int) error {

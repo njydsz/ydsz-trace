@@ -57,7 +57,7 @@ func RegisterLocalIp(server string, vKey string) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := util.NewClientWithTimeout(10 * time.Second)
 	resp, err := client.Do(req)
 	log.Printf("logc register url=%v param=%v errMsg=%v\n", url, vKey, err)
 	if err != nil {
