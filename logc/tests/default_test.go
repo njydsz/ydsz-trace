@@ -1,37 +1,42 @@
 package test
 
 import (
-	_ "ydsz-trace/logc/routers"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
-	"runtime"
 	"testing"
 
-	"github.com/astaxie/beego"
+	"ydsz-trace/logc/routers"
+	"ydsz-trace/pkg/config"
+
 	. "github.com/smartystreets/goconvey/convey"
 )
 
-func init() {
-	_, file, _, _ := runtime.Caller(0)
-	apppath, _ := filepath.Abs(filepath.Dir(filepath.Join(file, ".."+string(filepath.Separator))))
-	beego.TestBeegoInit(apppath)
-}
-
-// TestBeego is a sample to run an endpoint test
-func TestBeego(t *testing.T) {
-	r, _ := http.NewRequest("GET", "/", nil)
-	w := httptest.NewRecorder()
-	beego.BeeApp.Handlers.ServeHTTP(w, r)
-
-	beego.Trace("testing", "TestBeego", "Code[%d]\n%s", w.Code, w.Body.String())
+// TestMainRoute 根路径测试
+func TestMainRoute(t *testing.T) {
+	cfg := config.NewDefault()
+	r := routers.SetupRouter(cfg)
 
 	Convey("Subject: Test Station Endpoint\n", t, func() {
-		Convey("Status Code Should Be 200", func() {
+		Convey("GET / Should Return 200", func() {
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/", nil)
+			r.ServeHTTP(w, req)
+			So(w.Code, ShouldEqual, 200)
+			So(w.Body.Len(), ShouldBeGreaterThan, 0)
+		})
+
+		Convey("GET /health Should Return 200", func() {
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/health", nil)
+			r.ServeHTTP(w, req)
 			So(w.Code, ShouldEqual, 200)
 		})
-		Convey("The Result Should Not Be Empty", func() {
-			So(w.Body.Len(), ShouldBeGreaterThan, 0)
+
+		Convey("GET /ready Should Return 200", func() {
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/ready", nil)
+			r.ServeHTTP(w, req)
+			So(w.Code, ShouldEqual, 200)
 		})
 	})
 }

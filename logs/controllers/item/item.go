@@ -1,113 +1,114 @@
 package item
 
 import (
-	"encoding/json"
-	"log"
+	"net/http"
+	"strconv"
 	"time"
 
 	models "ydsz-trace/logs/models"
 
-	"github.com/astaxie/beego"
+	"github.com/gin-gonic/gin"
 )
 
-// ItemController 项目控制器
-type ItemController struct {
-	beego.Controller
-}
-
-// PageResp 分页响应
-type PageResp struct {
-	Code string      `json:"code"`
-	Msg  string      `json:"msg"`
-	Data models.Page `json:"data"`
-}
-
-// ItemResp 项目响应
-type ItemResp struct {
-	Code string       `json:"code"`
-	Msg  string       `json:"msg"`
-	Data models.TItem `json:"data"`
+// queryInt64 从 query 参数解析 int64
+func queryInt64(c *gin.Context, key string) (int64, error) {
+	return strconv.ParseInt(c.Query(key), 10, 64)
 }
 
 // Add 新增项目日志
-func (this *ItemController) Add() {
+func Add(c *gin.Context) {
 	var item models.TItem
-	req := this.Ctx.Input.RequestBody
-	err := json.Unmarshal(req, &item)
-	if err != nil {
-		data := ItemResp{"400", "请求参数错误", models.TItem{}}
-		this.Data["json"] = &data
-		this.ServeJSON()
+	if err := c.ShouldBindJSON(&item); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": "400", "msg": "请求参数错误", "data": nil})
 		return
 	}
 	item.CreatedBy = "admin"
 	item.CreatedTime = time.Now()
 	item.UpdatedBy = "admin"
 	item.UpdatedTime = time.Now()
-	id, err := models.AddItem(&item)
-	log.Printf("ID: %d, ERR: %v\n", id, err)
-	data := ItemResp{"200", "项目日志新增成功", models.TItem{}}
-	this.Data["json"] = &data
-	this.ServeJSON()
+	if _, err := models.AddItem(&item); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": "500", "msg": "项目日志新增失败", "data": nil})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": "200", "msg": "项目日志新增成功", "data": nil})
 }
 
 // Delete 删除项目日志
-func (this *ItemController) Delete() {
-	id, _ := this.GetInt64("id")
-	models.DeleteItem(id)
-	data := ItemResp{"200", "删除项目日志成功", models.TItem{}}
-	this.Data["json"] = &data
-	this.ServeJSON()
+func Delete(c *gin.Context) {
+	itemId, err := queryInt64(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": "400", "msg": "参数错误", "data": nil})
+		return
+	}
+	if _, err := models.DeleteItem(itemId); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": "500", "msg": "删除项目日志失败", "data": nil})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": "200", "msg": "删除项目日志成功", "data": nil})
 }
 
 // Query 根据Id查询项目日志
-func (this *ItemController) Query() {
-	id, _ := this.GetInt64("id")
-	item := models.ReadItem(id)
-	data := ItemResp{"200", "查询项目日志成功", item}
-	this.Data["json"] = &data
-	this.ServeJSON()
+func Query(c *gin.Context) {
+	itemId, err := queryInt64(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": "400", "msg": "参数错误", "data": nil})
+		return
+	}
+	item, err := models.ReadItem(itemId)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"code": "404", "msg": "项目不存在", "data": nil})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": "200", "msg": "查询项目日志成功", "data": item})
 }
 
 // Update 更新项目日志
-func (this *ItemController) Update() {
+func Update(c *gin.Context) {
 	var item models.TItem
-	req := this.Ctx.Input.RequestBody
-	err := json.Unmarshal(req, &item)
-	if err != nil {
-		data := ItemResp{"400", "请求参数错误", models.TItem{}}
-		this.Data["json"] = &data
-		this.ServeJSON()
+	if err := c.ShouldBindJSON(&item); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": "400", "msg": "请求参数错误", "data": nil})
 		return
 	}
-	models.UpdateItem(&item)
-	data := ItemResp{"200", "更新项目日志成功", models.TItem{}}
-	this.Data["json"] = &data
-	this.ServeJSON()
+	item.UpdatedTime = time.Now()
+	if _, err := models.UpdateItem(&item); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": "500", "msg": "更新项目日志失败", "data": nil})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": "200", "msg": "更新项目日志成功", "data": nil})
 }
 
 // ChangeItemStatus 切换项目状态
-func (this *ItemController) ChangeItemStatus() {
-	id, _ := this.GetInt64("id")
-	models.ChangeItemStatus(id)
-	data := ItemResp{"200", "更新项目日志成功", models.TItem{}}
-	this.Data["json"] = &data
-	this.ServeJSON()
+func ChangeItemStatus(c *gin.Context) {
+	itemId, err := queryInt64(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": "400", "msg": "参数错误", "data": nil})
+		return
+	}
+	if _, err := models.ChangeItemStatus(itemId); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": "500", "msg": "更新项目日志失败", "data": nil})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": "200", "msg": "更新项目日志成功", "data": nil})
 }
 
 // QueryAll 查询所有项目日志
-func (this *ItemController) QueryAll() {
-	items, _ := models.QueryAllItem()
-	this.Data["json"] = &items
-	this.ServeJSON()
+func QueryAll(c *gin.Context) {
+	items, err := models.QueryAllItem()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": "500", "msg": "查询项目日志失败", "data": nil})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": "200", "msg": "查询项目日志成功", "data": items})
 }
 
 // QueryPage 分页查询项目日志
-func (this *ItemController) QueryPage() {
-	pageNum, _ := this.GetInt("page")
-	pageSize, _ := this.GetInt("limit")
-	page := models.QueryPageItem(pageNum, pageSize)
-	data := PageResp{"200", "分页查询项目日志成功", page}
-	this.Data["json"] = &data
-	this.ServeJSON()
+func QueryPage(c *gin.Context) {
+	pageNum, _ := strconv.Atoi(c.Query("page"))
+	pageSize, _ := strconv.Atoi(c.Query("limit"))
+	page, err := models.QueryPageItem(pageNum, pageSize)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": "500", "msg": "分页查询项目日志失败", "data": nil})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"code": "200", "msg": "分页查询项目日志成功", "data": page})
 }

@@ -1,120 +1,140 @@
 package models
 
 import (
-	"log"
 	"time"
-
-	"github.com/astaxie/beego/orm"
-	_ "github.com/lib/pq"
 )
 
 // AddItem 新增项目日志
 func AddItem(item *TItem) (int64, error) {
-	o := orm.NewOrm()
-	id, err := o.Insert(item)
+	result, err := DB.Exec(`INSERT INTO t_item
+		(client_id, item_name, item_desc, log_path, log_prefix, log_suffix, status,
+		created_by, created_time, updated_by, updated_time)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		item.ClientId, item.ItemName, item.ItemDesc, item.LogPath,
+		item.LogPrefix, item.LogSuffix, item.Status,
+		item.CreatedBy, item.CreatedTime, item.UpdatedBy, item.UpdatedTime)
 	if err != nil {
-		log.Printf("insert item err : %v", err)
+		return 0, err
 	}
-	log.Printf("id : %d", id)
-	return id, err
+	return result.LastInsertId()
 }
 
 // DeleteItem 根据Id删除项目日志
-func DeleteItem(id int64) int64 {
-	o := orm.NewOrm()
-	item := TItem{}
-	item.Id = id
-	num, _ := o.Delete(&item)
-	return num
+func DeleteItem(id int64) (int64, error) {
+	result, err := DB.Exec("DELETE FROM t_item WHERE id = ?", id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // UpdateItem 更新项目日志，先查后改
 func UpdateItem(item *TItem) (int64, error) {
-	o := orm.NewOrm()
-	c := TItem{}
-	c.Id = item.Id
-	err := o.Read(&c)
-	if o.Read(&c) == nil {
-		c.ClientId = item.ClientId
-		c.ItemName = item.ItemName
-		c.ItemDesc = item.ItemDesc
-		c.LogPath = item.LogPath
-		c.LogPrefix = item.LogPrefix
-		c.LogSuffix = item.LogSuffix
-		c.Status = item.Status
-		c.UpdatedTime = time.Now()
-		if num, err := o.Update(&c); err == nil {
-			log.Printf("update return num : %d", num)
-			return num, err
-		}
+	result, err := DB.Exec(`UPDATE t_item SET
+		client_id = ?, item_name = ?, item_desc = ?, log_path = ?, log_prefix = ?, log_suffix = ?,
+		status = ?, updated_by = ?, updated_time = ? WHERE id = ?`,
+		item.ClientId, item.ItemName, item.ItemDesc, item.LogPath,
+		item.LogPrefix, item.LogSuffix, item.Status,
+		item.UpdatedBy, item.UpdatedTime, item.Id)
+	if err != nil {
+		return 0, err
 	}
-	return 0, err
+	return result.RowsAffected()
 }
 
 // ChangeItemStatus 切换项目状态（启用/禁用）
 func ChangeItemStatus(id int64) (int64, error) {
-	o := orm.NewOrm()
-	c := TItem{}
-	c.Id = id
-	err := o.Read(&c)
-	if o.Read(&c) == nil {
-		if "1" == c.Status {
-			c.Status = "0"
-		} else {
-			c.Status = "1"
-		}
-		c.UpdatedTime = time.Now()
-		if num, err := o.Update(&c, "Status", "UpdatedTime"); err == nil {
-			log.Printf("update return num : %d", num)
-			return num, err
-		}
+	result, err := DB.Exec("UPDATE t_item SET status = IF(status='1','0','1'), updated_time = ? WHERE id = ?",
+		time.Now(), id)
+	if err != nil {
+		return 0, err
 	}
-	return 0, err
+	return result.RowsAffected()
 }
 
 // ReadItem 根据Id查询项目日志
-func ReadItem(id int64) (item TItem) {
-	o := orm.NewOrm()
-	item.Id = id
-	err := o.Read(&item)
-	if err == orm.ErrNoRows {
-		log.Println("查询不到")
-	} else if err == orm.ErrMissPK {
-		log.Println("找不到主键")
-	}
-	return item
+func ReadItem(id int64) (TItem, error) {
+	var c TItem
+	err := DB.QueryRow(`SELECT id, client_id, item_name, item_desc, log_path, log_prefix, log_suffix,
+		status, created_by, created_time, updated_by, updated_time FROM t_item WHERE id = ?`, id).
+		Scan(&c.Id, &c.ClientId, &c.ItemName, &c.ItemDesc, &c.LogPath,
+			&c.LogPrefix, &c.LogSuffix, &c.Status,
+			&c.CreatedBy, &c.CreatedTime, &c.UpdatedBy, &c.UpdatedTime)
+	return c, err
 }
 
 // QueryItemsByClientId 根据客户端ID查询所有项目
-func QueryItemsByClientId(id int64) (*[]TItem, error) {
-	o := orm.NewOrm()
-	items := new([]TItem)
-	_, err := o.QueryTable("t_item").Filter("client_id", id).All(items)
+func QueryItemsByClientId(id int64) ([]TItem, error) {
+	rows, err := DB.Query(`SELECT id, client_id, item_name, item_desc, log_path, log_prefix, log_suffix,
+		status, created_by, created_time, updated_by, updated_time FROM t_item WHERE client_id = ?`, id)
 	if err != nil {
-		log.Println(err)
 		return nil, err
 	}
-	return items, nil
+	defer rows.Close()
+
+	var items []TItem
+	for rows.Next() {
+		var c TItem
+		if err := rows.Scan(&c.Id, &c.ClientId, &c.ItemName, &c.ItemDesc, &c.LogPath,
+			&c.LogPrefix, &c.LogSuffix, &c.Status,
+			&c.CreatedBy, &c.CreatedTime, &c.UpdatedBy, &c.UpdatedTime); err != nil {
+			return nil, err
+		}
+		items = append(items, c)
+	}
+	return items, rows.Err()
 }
 
 // QueryAllItem 查询所有项目日志
-func QueryAllItem() (*[]TItem, error) {
-	o := orm.NewOrm()
-	items := new([]TItem)
-	_, err := o.QueryTable("t_item").All(items)
+func QueryAllItem() ([]TItem, error) {
+	rows, err := DB.Query(`SELECT id, client_id, item_name, item_desc, log_path, log_prefix, log_suffix,
+		status, created_by, created_time, updated_by, updated_time FROM t_item`)
 	if err != nil {
-		log.Println(err)
 		return nil, err
 	}
-	return items, nil
+	defer rows.Close()
+
+	var items []TItem
+	for rows.Next() {
+		var c TItem
+		if err := rows.Scan(&c.Id, &c.ClientId, &c.ItemName, &c.ItemDesc, &c.LogPath,
+			&c.LogPrefix, &c.LogSuffix, &c.Status,
+			&c.CreatedBy, &c.CreatedTime, &c.UpdatedBy, &c.UpdatedTime); err != nil {
+			return nil, err
+		}
+		items = append(items, c)
+	}
+	return items, rows.Err()
 }
 
 // QueryPageItem 分页查询所有项目日志
-func QueryPageItem(pageNum int, pageSize int) (page Page) {
-	o := orm.NewOrm()
-	items := new([]TItem)
-	o.QueryTable("t_item").Limit(pageSize, (pageNum-1)*pageSize).All(items)
-	TotalCount, _ := o.QueryTable("t_item").Count()
-	page = PageUtil(int(TotalCount), pageNum, pageSize, items)
-	return page
+func QueryPageItem(pageNum int, pageSize int) (Page, error) {
+	offset := (pageNum - 1) * pageSize
+	rows, err := DB.Query(`SELECT id, client_id, item_name, item_desc, log_path, log_prefix, log_suffix,
+		status, created_by, created_time, updated_by, updated_time FROM t_item LIMIT ? OFFSET ?`,
+		pageSize, offset)
+	if err != nil {
+		return Page{}, err
+	}
+	defer rows.Close()
+
+	var items []TItem
+	for rows.Next() {
+		var c TItem
+		if err := rows.Scan(&c.Id, &c.ClientId, &c.ItemName, &c.ItemDesc, &c.LogPath,
+			&c.LogPrefix, &c.LogSuffix, &c.Status,
+			&c.CreatedBy, &c.CreatedTime, &c.UpdatedBy, &c.UpdatedTime); err != nil {
+			return Page{}, err
+		}
+		items = append(items, c)
+	}
+	if err := rows.Err(); err != nil {
+		return Page{}, err
+	}
+
+	var total int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM t_item").Scan(&total); err != nil {
+		return Page{}, err
+	}
+	return PageUtil(total, pageNum, pageSize, items), nil
 }

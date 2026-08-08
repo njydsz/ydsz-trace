@@ -1,138 +1,143 @@
 package models
 
 import (
-	"log"
+	"database/sql"
 	"time"
-
-	"github.com/astaxie/beego/orm"
 )
 
 // AddClient 新增客户端
 func AddClient(client *TClient) (int64, error) {
-	o := orm.NewOrm()
-	id, err := o.Insert(client)
+	result, err := DB.Exec(`INSERT INTO t_client
+		(ip, port, vkey, info, zip, online, status, created_by, created_time, updated_by, updated_time)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		client.Ip, client.Port, client.Vkey, client.Info, client.Zip,
+		client.Online, client.Status,
+		client.CreatedBy, client.CreatedTime, client.UpdatedBy, client.UpdatedTime)
 	if err != nil {
-		log.Printf("insert client err : %v", err)
+		return 0, err
 	}
-	log.Printf("id : %d", id)
-	return id, err
+	return result.LastInsertId()
 }
 
 // DeleteClient 根据Id删除客户端
-func DeleteClient(id int64) int64 {
-	o := orm.NewOrm()
-	client := TClient{}
-	client.Id = id
-	num, _ := o.Delete(&client)
-	return num
+func DeleteClient(id int64) (int64, error) {
+	result, err := DB.Exec("DELETE FROM t_client WHERE id = ?", id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 // UpdateClient 更新客户端，先查后改
 func UpdateClient(client *TClient) (int64, error) {
-	o := orm.NewOrm()
-	c := TClient{}
-	c.Id = client.Id
-	err := o.Read(&c)
-	if o.Read(&c) == nil {
-		c.Ip = client.Ip
-		c.Port = client.Port
-		c.Vkey = client.Vkey
-		c.Info = client.Info
-		c.Zip = client.Zip
-		c.Status = client.Status
-		c.UpdatedTime = time.Now()
-		if num, err := o.Update(&c); err == nil {
-			log.Printf("update return num : %d", num)
-			return num, err
-		}
+	result, err := DB.Exec(`UPDATE t_client SET
+		ip = ?, port = ?, vkey = ?, info = ?, zip = ?, status = ?, updated_by = ?, updated_time = ?
+		WHERE id = ?`,
+		client.Ip, client.Port, client.Vkey, client.Info, client.Zip,
+		client.Status, client.UpdatedBy, client.UpdatedTime, client.Id)
+	if err != nil {
+		return 0, err
 	}
-	return 0, err
+	return result.RowsAffected()
 }
 
 // ChangeClientOnline 更新客户端在线状态
 func ChangeClientOnline(client *TClient) (int64, error) {
-	o := orm.NewOrm()
-	c := TClient{}
-	c.Id = client.Id
-	err := o.Read(&c)
-	if o.Read(&c) == nil {
-		c.Online = client.Online
-		c.UpdatedTime = time.Now()
-		if num, err := o.Update(&c, "Online", "UpdatedTime"); err == nil {
-			log.Printf("update return num : %d", num)
-			return num, err
-		}
+	result, err := DB.Exec("UPDATE t_client SET online = ?, updated_time = ? WHERE id = ?",
+		client.Online, time.Now(), client.Id)
+	if err != nil {
+		return 0, err
 	}
-	return 0, err
+	return result.RowsAffected()
 }
 
 // ChangeClientStatus 切换客户端状态（启用/禁用）
 func ChangeClientStatus(id int64) (int64, error) {
-	o := orm.NewOrm()
-	c := TClient{}
-	c.Id = id
-	err := o.Read(&c)
-	if o.Read(&c) == nil {
-		if "1" == c.Status {
-			c.Status = "0"
-		} else {
-			c.Status = "1"
-		}
-		c.UpdatedTime = time.Now()
-		if num, err := o.Update(&c, "Status", "UpdatedTime"); err == nil {
-			log.Printf("update return num : %d", num)
-			return num, err
-		}
+	result, err := DB.Exec("UPDATE t_client SET status = IF(status='1','0','1'), updated_time = ? WHERE id = ?",
+		time.Now(), id)
+	if err != nil {
+		return 0, err
 	}
-	return 0, err
+	return result.RowsAffected()
 }
 
 // ReadClient 根据Id查询客户端
-func ReadClient(id int64) (client TClient) {
-	o := orm.NewOrm()
-	client.Id = id
-	err := o.Read(&client)
-	if err == orm.ErrNoRows {
-		log.Println("查询不到")
-	} else if err == orm.ErrMissPK {
-		log.Println("找不到主键")
-	}
-	return client
+func ReadClient(id int64) (TClient, error) {
+	var c TClient
+	err := DB.QueryRow(`SELECT id, ip, port, vkey, info, zip, online, status,
+		created_by, created_time, updated_by, updated_time FROM t_client WHERE id = ?`, id).
+		Scan(&c.Id, &c.Ip, &c.Port, &c.Vkey, &c.Info, &c.Zip, &c.Online, &c.Status,
+			&c.CreatedBy, &c.CreatedTime, &c.UpdatedBy, &c.UpdatedTime)
+	return c, err
 }
 
 // CheckClient 根据ip、port、vkey校验客户端
-func CheckClient(ip, port, vkey string) (client TClient) {
-	o := orm.NewOrm()
-	client.Ip = ip
-	client.Port = port
-	client.Vkey = vkey
-	_, err := o.QueryTable("t_client").Filter("ip", ip).Filter("port", port).Filter("vkey", vkey).All(&client)
-	if err == orm.ErrNoRows {
-		log.Println("查询不到")
-	} else if err == orm.ErrMissPK {
-		log.Println("找不到主键")
-	}
-	return client
+func CheckClient(ip, port, vkey string) (TClient, error) {
+	var c TClient
+	err := DB.QueryRow(`SELECT id, ip, port, vkey, info, zip, online, status,
+		created_by, created_time, updated_by, updated_time FROM t_client
+		WHERE ip = ? AND port = ? AND vkey = ?`, ip, port, vkey).
+		Scan(&c.Id, &c.Ip, &c.Port, &c.Vkey, &c.Info, &c.Zip, &c.Online, &c.Status,
+			&c.CreatedBy, &c.CreatedTime, &c.UpdatedBy, &c.UpdatedTime)
+	return c, err
 }
 
 // QueryAllClient 查询所有客户端
 func QueryAllClient() ([]TClient, error) {
-	o := orm.NewOrm()
-	var clients []TClient
-	_, err := o.QueryTable("t_client").All(&clients)
+	rows, err := DB.Query(`SELECT id, ip, port, vkey, info, zip, online, status,
+		created_by, created_time, updated_by, updated_time FROM t_client`)
 	if err != nil {
-		log.Println(err)
 		return nil, err
 	}
-	return clients, nil
+	defer rows.Close()
+
+	var clients []TClient
+	for rows.Next() {
+		var c TClient
+		if err := rows.Scan(&c.Id, &c.Ip, &c.Port, &c.Vkey, &c.Info, &c.Zip, &c.Online, &c.Status,
+			&c.CreatedBy, &c.CreatedTime, &c.UpdatedBy, &c.UpdatedTime); err != nil {
+			return nil, err
+		}
+		clients = append(clients, c)
+	}
+	return clients, rows.Err()
 }
 
 // QueryPageClient 分页查询所有客户端
-func QueryPageClient(pageNum int, pageSize int) (page Page) {
-	o := orm.NewOrm()
-	clients := new([]TClient)
-	o.QueryTable("t_client").Limit(pageSize, (pageNum-1)*pageSize).All(clients)
-	TotalCount, _ := o.QueryTable("t_client").Count()
-	page = PageUtil(int(TotalCount), pageNum, pageSize, clients)
-	return page
+func QueryPageClient(pageNum int, pageSize int) (Page, error) {
+	offset := (pageNum - 1) * pageSize
+	rows, err := DB.Query(`SELECT id, ip, port, vkey, info, zip, online, status,
+		created_by, created_time, updated_by, updated_time FROM t_client LIMIT ? OFFSET ?`,
+		pageSize, offset)
+	if err != nil {
+		return Page{}, err
+	}
+	defer rows.Close()
+
+	var clients []TClient
+	for rows.Next() {
+		var c TClient
+		if err := rows.Scan(&c.Id, &c.Ip, &c.Port, &c.Vkey, &c.Info, &c.Zip, &c.Online, &c.Status,
+			&c.CreatedBy, &c.CreatedTime, &c.UpdatedBy, &c.UpdatedTime); err != nil {
+			return Page{}, err
+		}
+		clients = append(clients, c)
+	}
+	if err := rows.Err(); err != nil {
+		return Page{}, err
+	}
+
+	var total int
+	if err := DB.QueryRow("SELECT COUNT(*) FROM t_client").Scan(&total); err != nil {
+		return Page{}, err
+	}
+	return PageUtil(total, pageNum, pageSize, clients), nil
+}
+
+// scanClient 扫描一行客户端数据
+func scanClient(row *sql.Row) (TClient, error) {
+	var c TClient
+	err := row.Scan(&c.Id, &c.Ip, &c.Port, &c.Vkey, &c.Info, &c.Zip, &c.Online, &c.Status,
+		&c.CreatedBy, &c.CreatedTime, &c.UpdatedBy, &c.UpdatedTime)
+	return c, err
 }

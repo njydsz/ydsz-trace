@@ -1,48 +1,48 @@
 package models
 
 import (
+	"database/sql"
 	"fmt"
 	"time"
 
-	"github.com/astaxie/beego"
-	log "github.com/astaxie/beego/logs"
-	"github.com/astaxie/beego/orm"
+	"ydsz-trace/pkg/config"
+
 	_ "github.com/go-sql-driver/mysql"
 )
 
-//TClient 客户端
+// TClient 客户端
 type TClient struct {
-	Id          int64     `json:"id" pk:"auto" orm:"column(id)"`
-	Ip          string    `json:"ip" orm:"column(ip)"`
-	Port        string    `json:"port" orm:"column(port)"`
-	Vkey        string    `json:"vkey" orm:"column(vkey)"`
-	Info        string    `json:"info" orm:"column(info)"`
-	Zip         string    `json:"zip" orm:"column(zip)"`
-	Online      string    `json:"online" orm:"column(online)"`
-	Status      string    `json:"status" orm:"column(status)"`
-	CreatedBy   string    `json:"createdBy" orm:"column(created_by)"`
-	CreatedTime time.Time `json:"createdTime" orm:"column(created_time)"`
-	UpdatedBy   string    `json:"updatedBy" orm:"column(updated_by)"`
-	UpdatedTime time.Time `json:"updatedTime" orm:"column(updated_time)"`
+	Id          int64     `json:"id"`
+	Ip          string    `json:"ip"`
+	Port        string    `json:"port"`
+	Vkey        string    `json:"vkey"`
+	Info        string    `json:"info"`
+	Zip         string    `json:"zip"`
+	Online      string    `json:"online"`
+	Status      string    `json:"status"`
+	CreatedBy   string    `json:"createdBy"`
+	CreatedTime time.Time `json:"createdTime"`
+	UpdatedBy   string    `json:"updatedBy"`
+	UpdatedTime time.Time `json:"updatedTime"`
 }
 
-//TItem 客户端
+// TItem 项目日志
 type TItem struct {
-	Id          int64     `json:"id" pk:"auto" orm:"column(id)"`
-	ClientId    int64     `json:"clientId" orm:"column(client_id)"`
-	ItemName    string    `json:"itemName" orm:"column(item_name)"`
-	ItemDesc    string    `json:"itemDesc" orm:"column(item_desc)"`
-	LogPath     string    `json:"logPath" orm:"column(log_path)"`
-	LogPrefix   string    `json:"logPrefix" orm:"column(log_prefix)"`
-	LogSuffix   string    `json:"logSuffix" orm:"column(log_suffix)"`
-	Status      string    `json:"status" orm:"column(status)"`
-	CreatedBy   string    `json:"createdBy" orm:"column(created_by)"`
-	CreatedTime time.Time `json:"createdTime" orm:"column(created_time)"`
-	UpdatedBy   string    `json:"updatedBy" orm:"column(updated_by)"`
-	UpdatedTime time.Time `json:"updatedTime" orm:"column(updated_time)"`
+	Id          int64     `json:"id"`
+	ClientId    int64     `json:"clientId"`
+	ItemName    string    `json:"itemName"`
+	ItemDesc    string    `json:"itemDesc"`
+	LogPath     string    `json:"logPath"`
+	LogPrefix   string    `json:"logPrefix"`
+	LogSuffix   string    `json:"logSuffix"`
+	Status      string    `json:"status"`
+	CreatedBy   string    `json:"createdBy"`
+	CreatedTime time.Time `json:"createdTime"`
+	UpdatedBy   string    `json:"updatedBy"`
+	UpdatedTime time.Time `json:"updatedTime"`
 }
 
-//Page 分页
+// Page 分页
 type Page struct {
 	PageNo     int         `json:"pageNo"`
 	PageSize   int         `json:"pageSize"`
@@ -53,7 +53,7 @@ type Page struct {
 	List       interface{} `json:"list"`
 }
 
-//DBConfig 数据相关配置
+// DBConfig 数据相关配置
 type DBConfig struct {
 	Host         string
 	Port         string
@@ -64,42 +64,46 @@ type DBConfig struct {
 	MaxOpenConns int //最大连接数
 }
 
-type Def struct {
-	DBConf *DBConfig
-}
+// DB 全局数据库句柄
+var DB *sql.DB
 
-/*
- * clientmanger构造器
- */
-func NewDef(dbConf *DBConfig) *Def {
-	mgr := &Def{
-		DBConf: dbConf,
-	}
-	//初始化orm
-	mgr.initDB()
-	return mgr
-}
+// InitDB 初始化数据库连接
+func InitDB(cfg *config.Config) error {
+	host := config.EnvOrConfig("YDSZ_DB_HOST", cfg.String("sqlhost"), "127.0.0.1")
+	port := config.EnvOrConfig("YDSZ_DB_PORT", cfg.String("sqlport"), "3306")
+	user := config.EnvOrConfig("YDSZ_DB_USER", cfg.String("sqluser"), "root")
+	pwd := config.EnvOrConfig("YDSZ_DB_PASSWORD", cfg.String("sqlpwd"), "")
+	database := config.EnvOrConfig("YDSZ_DB_NAME", cfg.String("database"), "ydsz_trace")
+	maxIdle := cfg.Int("maxIdleConns", 10)
+	maxOpen := cfg.Int("maxOpenConns", 50)
 
-/**
-  初始化db，注册默认数据库，同时将实体模型也注册上去
-*/
-func (mgr *Def) initDB() {
-	// 根据运行模式控制调试模式：dev 模式打印 SQL，prod 模式不打印
-	orm.Debug = beego.BConfig.RunMode == "dev"
-	// orm.RegisterDriver("postgres", orm.DRPostgres)
-	ds := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable", mgr.DBConf.Host, mgr.DBConf.Port, mgr.DBConf.Username, mgr.DBConf.Password, mgr.DBConf.Database)
-	log.Info("datasource=[%s]", ds)
-	// err := orm.RegisterDataBase("default", "postgres", ds, mgr.DBConf.MaxIdleConns, mgr.DBConf.MaxOpenConns)
-	// err := orm.RegisterDataBase("default", "mysql", "root:123456@tcp(127.0.0.1:3306)/logs?charset=utf8&parseTime=true&loc=Local")
-	err := orm.RegisterDataBase("default", "mysql", mgr.DBConf.Username+":"+mgr.DBConf.Password+"@tcp("+mgr.DBConf.Host+":"+mgr.DBConf.Port+")/"+mgr.DBConf.Database+"?charset=utf8&parseTime=true&loc=Local")
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=true&loc=Local",
+		user, pwd, host, port, database)
+
+	db, err := sql.Open("mysql", dsn)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("打开数据库失败: %w", err)
 	}
-	orm.RegisterModel(new(TClient), new(TItem))
+	db.SetMaxIdleConns(maxIdle)
+	db.SetMaxOpenConns(maxOpen)
+	db.SetConnMaxLifetime(time.Hour)
+
+	if err := db.Ping(); err != nil {
+		return fmt.Errorf("数据库连接失败: %w", err)
+	}
+
+	DB = db
+	return nil
 }
 
-//PageUtil 分页工具
+// PageUtil 分页工具
 func PageUtil(count int, pageNo int, pageSize int, list interface{}) Page {
+	if pageNo <= 0 {
+		pageNo = 1
+	}
+	if pageSize <= 0 {
+		pageSize = 10
+	}
 	tp := count / pageSize
 	if count%pageSize > 0 {
 		tp = count/pageSize + 1
