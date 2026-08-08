@@ -2,6 +2,7 @@ package logs
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log"
@@ -128,7 +129,7 @@ func Query(c *gin.Context) {
 			log.Printf("调用客户端 %s 失败: %v", server, err)
 		}
 	} else {
-		// 多客户端并发查询
+		// 多客户端并发查询（带并发限流）
 		clients, err := models.QueryAllClient()
 		if err != nil || len(clients) == 0 {
 			c.JSON(http.StatusOK, LogsResp{"404", "无可用客户端", nil})
@@ -137,28 +138,65 @@ func Query(c *gin.Context) {
 
 		log.Printf("%s 多客户端并发查询开始，共 %d 个客户端\n", time.Now().Format("2006-01-02 15:04:05"), len(clients))
 
-		// 局部 WaitGroup，避免全局状态并发问题
+		// 并发限流：同时最多查询 maxConcurrentClients 个客户端
+		const maxConcurrentClients = 20
+		sem := make(chan struct{}, maxConcurrentClients)
+
+		// 使用带超时的 context，整体查询不超过 5 分钟
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
 		var wg sync.WaitGroup
-		wg.Add(len(clients))
+		var mu sync.Mutex
+		successCount := 0
+		failCount := 0
 
 		for i := 0; i < len(clients); i++ {
-			go func(idx int, cl models.TClient) {
-				defer wg.Done()
-				server := cl.Ip + ":" + cl.Port
-				item := models.ReadItem(logsReq.Item)
-				path := item.LogPath + item.LogPrefix + logsReq.Date + item.LogSuffix + ".log"
+			// 检查是否整体超时
+			select {
+			case <-ctx.Done():
+				log.Printf("查询整体超时，跳过剩余 %d 个客户端", len(clients)-i)
+				goto waitClients
+			default:
+			}
 
-				log.Printf("%s 调用客户端 %d 开始: %s\n", time.Now().Format("2006-01-02 15:04:05"), idx, cl.Ip)
-				err := postToLogc(server, path, logsReq.Key, logsReq.Line, filepath.Join(workDir, cl.Ip+".zip"))
-				if err != nil {
-					log.Printf("%s 调用客户端 %d 失败: %s, err: %v\n", time.Now().Format("2006-01-02 15:04:05"), idx, cl.Ip, err)
-				}
-				log.Printf("%s 调用客户端 %d 结束: %s\n", time.Now().Format("2006-01-02 15:04:05"), idx, cl.Ip)
-			}(i, clients[i])
+			// 获取信号量（限流）
+			sem <- struct{}{}
+			wg.Add(1)
+
+		go func(idx int, cl models.TClient) {
+			defer wg.Done()
+			defer func() { <-sem }() // 释放信号量
+
+			item, err := models.ReadItem(logsReq.Item)
+			if err != nil {
+				log.Printf("读取项目[%d]失败: %v", logsReq.Item, err)
+				mu.Lock()
+				failCount++
+				mu.Unlock()
+				return
+			}
+			path := item.LogPath + item.LogPrefix + logsReq.Date + item.LogSuffix + ".log"
+			serverAddr := cl.Ip + ":" + cl.Port
+
+			log.Printf("%s 调用客户端 %d 开始: %s\n", time.Now().Format("2006-01-02 15:04:05"), idx, cl.Ip)
+			err = postToLogc(serverAddr, path, logsReq.Key, logsReq.Line, filepath.Join(workDir, cl.Ip+".zip"))
+			mu.Lock()
+			if err != nil {
+				failCount++
+				log.Printf("%s 调用客户端 %d 失败: %s, err: %v\n", time.Now().Format("2006-01-02 15:04:05"), idx, cl.Ip, err)
+			} else {
+				successCount++
+			}
+			mu.Unlock()
+			log.Printf("%s 调用客户端 %d 结束: %s\n", time.Now().Format("2006-01-02 15:04:05"), idx, cl.Ip)
+		}(i, clients[i])
 		}
 
+	waitClients:
 		wg.Wait()
-		log.Printf("%s 多客户端并发查询结束\n", time.Now().Format("2006-01-02 15:04:05"))
+		log.Printf("%s 多客户端并发查询结束，成功: %d, 失败: %d\n",
+			time.Now().Format("2006-01-02 15:04:05"), successCount, failCount)
 	}
 
 	// 压缩所有结果
