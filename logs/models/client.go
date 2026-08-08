@@ -2,7 +2,6 @@ package models
 
 import (
 	"log"
-	"time"
 )
 
 // AddClient 新增客户端
@@ -42,7 +41,7 @@ func UpdateClient(client *TClient) (int64, error) {
 		ip = ?, port = ?, vkey = ?, info = ?, zip = ?, status = ?, updated_time = ?
 		WHERE id = ?`,
 		client.Ip, client.Port, client.Vkey, client.Info, client.Zip, client.Status,
-		time.Now(), client.Id)
+		client.UpdatedTime, client.Id)
 	if err != nil {
 		log.Printf("update client err : %v", err)
 		return 0, err
@@ -55,7 +54,7 @@ func UpdateClient(client *TClient) (int64, error) {
 // ChangeClientOnline 更新客户端在线状态
 func ChangeClientOnline(client *TClient) (int64, error) {
 	res, err := DB.Exec(`UPDATE t_client SET online = ?, updated_time = ? WHERE id = ?`,
-		client.Online, time.Now(), client.Id)
+		client.Online, client.UpdatedTime, client.Id)
 	if err != nil {
 		log.Printf("update client online err : %v", err)
 		return 0, err
@@ -66,14 +65,14 @@ func ChangeClientOnline(client *TClient) (int64, error) {
 }
 
 // ChangeClientStatus 切换客户端状态（启用/禁用）
-func ChangeClientStatus(id int64) (int64, error) {
+func ChangeClientStatus(id int64, now string) (int64, error) {
 	client := ReadClient(id)
 	status := "1"
 	if client.Status == "1" {
 		status = "0"
 	}
 	res, err := DB.Exec(`UPDATE t_client SET status = ?, updated_time = ? WHERE id = ?`,
-		status, time.Now(), id)
+		status, now, id)
 	if err != nil {
 		log.Printf("update client status err : %v", err)
 		return 0, err

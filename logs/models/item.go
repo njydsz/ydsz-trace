@@ -2,7 +2,6 @@ package models
 
 import (
 	"log"
-	"time"
 )
 
 // AddItem 新增项目日志
@@ -42,7 +41,7 @@ func UpdateItem(item *TItem) (int64, error) {
 		client_id = ?, item_name = ?, item_desc = ?, log_path = ?, log_prefix = ?, log_suffix = ?, status = ?, updated_time = ?
 		WHERE id = ?`,
 		item.ClientId, item.ItemName, item.ItemDesc, item.LogPath, item.LogPrefix, item.LogSuffix,
-		item.Status, time.Now(), item.Id)
+		item.Status, item.UpdatedTime, item.Id)
 	if err != nil {
 		log.Printf("update item err : %v", err)
 		return 0, err
@@ -53,14 +52,14 @@ func UpdateItem(item *TItem) (int64, error) {
 }
 
 // ChangeItemStatus 切换项目状态（启用/禁用）
-func ChangeItemStatus(id int64) (int64, error) {
+func ChangeItemStatus(id int64, now string) (int64, error) {
 	item := ReadItem(id)
 	status := "1"
 	if item.Status == "1" {
 		status = "0"
 	}
 	res, err := DB.Exec(`UPDATE t_item SET status = ?, updated_time = ? WHERE id = ?`,
-		status, time.Now(), id)
+		status, now, id)
 	if err != nil {
 		log.Printf("update item status err : %v", err)
 		return 0, err

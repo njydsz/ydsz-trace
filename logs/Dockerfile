@@ -14,6 +14,7 @@ COPY logs/go.mod logs/go.sum ./
 RUN go mod download
 COPY logs/ ./
 COPY pkg/ ../pkg/
+# CGO_ENABLED=0 即可，modernc.org/sqlite 是纯 Go 实现
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /app/ydsz-trace-logs .
 
 # ========== 运行阶段 ==========
@@ -22,10 +23,12 @@ RUN apk add --no-cache ca-certificates tzdata \
     && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && echo "Asia/Shanghai" > /etc/timezone
 WORKDIR /app
-RUN mkdir -p /app/temp/logs /app/web/dist
+RUN mkdir -p /app/data /app/temp/logs /app/web/dist
 COPY --from=builder /app/ydsz-trace-logs /app/ydsz-trace-logs
 COPY logs/conf/app.conf /app/conf/app.conf
 COPY --from=web-builder /web/dist /app/web/dist
+# 初始化时执行 schema（首次启动自动建表）
+COPY sqls/sqlite.sql /app/sqls/sqlite.sql
 EXPOSE 2021
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD wget -qO- http://127.0.0.1:2021/health || exit 1

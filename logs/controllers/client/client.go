@@ -1,3 +1,4 @@
+// Package client 包含客户端（logc agent）管理控制器。
 package client
 
 import (
@@ -13,26 +14,32 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// PageResp 分页响应
+// PageResp 分页查询响应体。
 type PageResp struct {
 	Code string      `json:"code"`
 	Msg  string      `json:"msg"`
 	Data models.Page `json:"data"`
 }
 
-// ClientResp 客户端响应
+// ClientResp 单条客户端操作响应体。
 type ClientResp struct {
 	Code string         `json:"code"`
 	Msg  string         `json:"msg"`
 	Data models.TClient `json:"data"`
 }
 
-// RegisterReq 客户端注册请求
+// RegisterReq 客户端注册请求体。
 type RegisterReq struct {
+	// VKey 预共享密钥
 	VKey string `json:"key"`
 }
 
-// Add 新增客户端
+// nowStr 返回当前时间的格式化字符串（统一时间格式）。
+func nowStr() string {
+	return time.Now().Format("2006-01-02 15:04:05")
+}
+
+// Add 新增客户端：解析请求体并落库（online 初始化为 "0"）。
 func Add(c *gin.Context) {
 	var client models.TClient
 	req, err := c.GetRawData()
@@ -47,29 +54,29 @@ func Add(c *gin.Context) {
 	}
 	client.Online = "0"
 	client.CreatedBy = "admin"
-	client.CreatedTime = time.Now()
+	client.CreatedTime = nowStr()
 	client.UpdatedBy = "admin"
-	client.UpdatedTime = time.Now()
+	client.UpdatedTime = nowStr()
 	id, err := models.AddClient(&client)
 	log.Printf("ID: %d, ERR: %v\n", id, err)
 	c.JSON(http.StatusOK, ClientResp{"200", "客户端新增成功", models.TClient{}})
 }
 
-// Delete 删除客户端
+// Delete 按 id 删除客户端。
 func Delete(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Query("id"), 10, 64)
 	models.DeleteClient(id)
 	c.JSON(http.StatusOK, ClientResp{"200", "删除客户端成功", models.TClient{}})
 }
 
-// Query 根据Id查询客户端
+// Query 按 id 查询单个客户端详情。
 func Query(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Query("id"), 10, 64)
 	client := models.ReadClient(id)
 	c.JSON(http.StatusOK, ClientResp{"200", "查询客户端成功", client})
 }
 
-// Update 更新客户端
+// Update 更新客户端全量字段。
 func Update(c *gin.Context) {
 	var client models.TClient
 	req, err := c.GetRawData()
@@ -82,11 +89,12 @@ func Update(c *gin.Context) {
 		c.JSON(http.StatusOK, ClientResp{"400", "请求参数错误", models.TClient{}})
 		return
 	}
+	client.UpdatedTime = nowStr()
 	models.UpdateClient(&client)
 	c.JSON(http.StatusOK, ClientResp{"200", "更新客户端成功", models.TClient{}})
 }
 
-// Register 客户端上线注册（供 logc 代理调用）
+// Register 接收 logc 自注册请求：校验 ip + port + vkey，通过后置 online=1。
 func Register(c *gin.Context) {
 	// 获取请求的IP
 	addr := c.Request.RemoteAddr
@@ -105,6 +113,7 @@ func Register(c *gin.Context) {
 				cl := models.TClient{}
 				cl.Id = client.Id
 				cl.Online = "1"
+				cl.UpdatedTime = nowStr()
 				models.ChangeClientOnline(&cl)
 			}
 		}
@@ -112,23 +121,17 @@ func Register(c *gin.Context) {
 	c.JSON(http.StatusOK, ClientResp{"200", "客户端上线成功", models.TClient{}})
 }
 
-// ChangeClientStatus 切换客户端状态
+// ChangeClientStatus 切换客户端启用/禁用状态（0 ↔ 1）。
 func ChangeClientStatus(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Query("id"), 10, 64)
-	models.ChangeClientStatus(id)
+	models.ChangeClientStatus(id, nowStr())
 	c.JSON(http.StatusOK, ClientResp{"200", "更新客户端成功", models.TClient{}})
 }
 
-// QueryAll 查询所有客户端
+// QueryAll 查询全部客户端列表。
 func QueryAll(c *gin.Context) {
 	clients, _ := models.QueryAllClient()
 	c.JSON(http.StatusOK, clients)
 }
 
-// QueryPage 分页查询客户端
-func QueryPage(c *gin.Context) {
-	pageNum, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
-	page := models.QueryPageClient(pageNum, pageSize)
-	c.JSON(http.StatusOK, PageResp{"200", "分页查询客户端成功", page})
-}
+// QueryPage 分

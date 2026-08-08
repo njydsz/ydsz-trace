@@ -26,6 +26,11 @@ type ItemResp struct {
 	Data models.TItem `json:"data"`
 }
 
+// nowStr 返回当前时间的格式化字符串（SQLite 存储格式）
+func nowStr() string {
+	return time.Now().Format("2006-01-02 15:04:05")
+}
+
 // Add 新增项目日志
 func Add(c *gin.Context) {
 	var item models.TItem
@@ -40,9 +45,9 @@ func Add(c *gin.Context) {
 		return
 	}
 	item.CreatedBy = "admin"
-	item.CreatedTime = time.Now()
+	item.CreatedTime = nowStr()
 	item.UpdatedBy = "admin"
-	item.UpdatedTime = time.Now()
+	item.UpdatedTime = nowStr()
 	id, err := models.AddItem(&item)
 	log.Printf("ID: %d, ERR: %v\n", id, err)
 	c.JSON(http.StatusOK, ItemResp{"200", "项目日志新增成功", models.TItem{}})
@@ -75,6 +80,7 @@ func Update(c *gin.Context) {
 		c.JSON(http.StatusOK, ItemResp{"400", "请求参数错误", models.TItem{}})
 		return
 	}
+	item.UpdatedTime = nowStr()
 	models.UpdateItem(&item)
 	c.JSON(http.StatusOK, ItemResp{"200", "更新项目日志成功", models.TItem{}})
 }
@@ -82,7 +88,7 @@ func Update(c *gin.Context) {
 // ChangeItemStatus 切换项目状态
 func ChangeItemStatus(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Query("id"), 10, 64)
-	models.ChangeItemStatus(id)
+	models.ChangeItemStatus(id, nowStr())
 	c.JSON(http.StatusOK, ItemResp{"200", "更新项目日志成功", models.TItem{}})
 }
 

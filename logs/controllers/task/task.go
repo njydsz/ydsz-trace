@@ -71,6 +71,7 @@ func updateOnline(clientId int64, online string) {
 	c := models.TClient{}
 	c.Id = clientId
 	c.Online = online
+	c.UpdatedTime = time.Now().Format("2006-01-02 15:04:05")
 	_, err := models.ChangeClientOnline(&c)
 	if err != nil {
 		log.Printf("更新客户端[%d]在线状态失败: %v", clientId, err)

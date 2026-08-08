@@ -1,3 +1,8 @@
+// Package admin 包含用户认证与 SPA 控制台相关控制器。
+//
+// 安全说明：
+//	- 账号密码来自环境变量 / 配置文件（当前为单账号，后续可扩展）
+//	- 密码明文比对，生产建议改为加盐哈希
 package admin
 
 import (
@@ -14,27 +19,35 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// UserResp 用户响应体
+// UserResp 用户相关接口响应体。
 type UserResp struct {
+	// Code 业务状态码，"200" 表示成功
 	Code string `json:"code"`
-	Msg  string `json:"msg"`
-	Data User   `json:"data"`
+	// Msg 提示信息
+	Msg string `json:"msg"`
+	// Data 用户数据负载
+	Data User `json:"data"`
 }
 
-// User 用户信息
+// User 用户登录凭证。
 type User struct {
+	// Username 用户名
 	Username string `json:"username"`
+	// Password 密码（明文传输，需 HTTPS）
 	Password string `json:"password"`
 }
 
-// HealthResp 健康检查响应
+// HealthResp 健康检查响应结构。
 type HealthResp struct {
+	// Status 状态标识
 	Status string `json:"status"`
-	App    string `json:"app"`
-	Time   string `json:"time"`
+	// App 服务标识
+	App string `json:"app"`
+	// Time 当前服务器本地时间
+	Time string `json:"time"`
 }
 
-// Health 健康检查端点（K8s liveness probe）
+// Health 存活探针（K8s liveness probe）。
 func Health(c *gin.Context) {
 	c.JSON(http.StatusOK, HealthResp{
 		Status: "ok",
@@ -43,7 +56,7 @@ func Health(c *gin.Context) {
 	})
 }
 
-// Ready 就绪检查端点（K8s readiness probe）
+// Ready 就绪探针（K8s readiness probe）。
 func Ready(c *gin.Context) {
 	c.JSON(http.StatusOK, HealthResp{
 		Status: "ready",
@@ -52,7 +65,7 @@ func Ready(c *gin.Context) {
 	})
 }
 
-// getAdminUser 从环境变量获取管理员用户名，降级到配置文件
+// getAdminUser 获取管理员用户名（环境变量 YDSZ_ADMIN_USER > 配置文件）。
 func getAdminUser(cfg *config.Config) string {
 	if v := os.Getenv("YDSZ_ADMIN_USER"); v != "" {
 		return v
@@ -60,7 +73,9 @@ func getAdminUser(cfg *config.Config) string {
 	return cfg.StringOr("username", "admin")
 }
 
-// getAdminPassword 从环境变量获取管理员密码，降级到配置文件
+// getAdminPassword 获取管理员密码（环境变量 YDSZ_ADMIN_PASSWORD > 配置文件）。
+//
+// 安全提示：生产必须使用环境变量注入强密码，避免写在配置文件中。
 func getAdminPassword(cfg *config.Config) string {
 	if v := os.Getenv("YDSZ_ADMIN_PASSWORD"); v != "" {
 		return v
@@ -68,7 +83,7 @@ func getAdminPassword(cfg *config.Config) string {
 	return cfg.StringOr("password", "change_me_production")
 }
 
-// webRoot 前端构建产物目录，可通过环境变量 YDSZ_WEB_ROOT 覆盖（容器内默认 /app/web/dist）
+// webRoot 前端构建产物根目录（环境变量 YDSZ_WEB_ROOT > 默认 web/dist）。
 func webRoot() string {
 	if v := os.Getenv("YDSZ_WEB_ROOT"); v != "" {
 		return v
@@ -76,17 +91,17 @@ func webRoot() string {
 	return "web/dist"
 }
 
-// Index 控制台首页（SPA 入口）
+// Index 控制台 SPA 入口，返回 index.html。
 func Index(c *gin.Context) {
 	serveIndex(c)
 }
 
-// Console 控制台入口（兼容旧路由，返回 SPA 首页）
+// Console 兼容旧路由（重定向到 index.html）。
 func Console(c *gin.Context) {
 	serveIndex(c)
 }
 
-// serveIndex 返回 Vite 构建的 index.html；未构建时给出提示
+// serveIndex 返回 Vite 构建产物 index.html；未构建时返回部署指引文本。
 func serveIndex(c *gin.Context) {
 	root := webRoot()
 	indexFile := filepath.Join(root, "index.html")
@@ -99,7 +114,10 @@ func serveIndex(c *gin.Context) {
 	c.File(indexFile)
 }
 
-// ServeStatic 静态资源服务 + SPA history 路由回退（用于 r.NoRoute）
+// ServeStatic 处理静态资源与 SPA history 回退：
+//
+//   - API 前缀未命中返回 404（避免误当 SPA 页面）
+//   - 文件存在直接返回，否则回退到 index.html
 func ServeStatic(c *gin.Context) {
 	if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
 		c.JSON(http.StatusNotFound, gin.H{"code": "404", "msg": "not found"})
@@ -132,7 +150,9 @@ func ServeStatic(c *gin.Context) {
 	c.File(filepath.Join(root, "index.html"))
 }
 
-// Login 用户登陆接口
+// Login 用户登录：校验账号密码并在会话中设置 username。
+//
+// 安全提示：密码明文比对，生产环境建议改为 bcrypt/argon2 加盐哈希。
 func Login(c *gin.Context) {
 	cfg := c.MustGet("cfg").(*config.Config)
 
@@ -169,7 +189,7 @@ func Login(c *gin.Context) {
 	}
 }
 
-// Exit 退出登陆
+// Exit 退出登录：清除会话中的 username 并销毁会话。
 func Exit(c *gin.Context) {
 	session.Delete(c, "username")
 	session.Destroy(c)

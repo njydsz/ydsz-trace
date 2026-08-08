@@ -13,7 +13,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -28,8 +28,6 @@ import (
 )
 
 // getEnv 获取环境变量；未设置时返回 fallback。
-//
-// 与 pkg/util.GetEnv 功能重叠，统一考虑收敛。
 func getEnv(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
 		return value
@@ -45,30 +43,24 @@ func main() {
 		cfg = config.NewDefault()
 	}
 
-	// 数据库连接配置：环境变量优先，其次配置文件。
-	sqlhost := getEnv("YDSZ_DB_HOST", cfg.StringOr("sqlhost", "127.0.0.1"))
-	sqlport := getEnv("YDSZ_DB_PORT", cfg.StringOr("sqlport", "3306"))
-	sqluser := getEnv("YDSZ_DB_USER", cfg.StringOr("sqluser", "root"))
-	sqlpwd := getEnv("YDSZ_DB_PASSWORD", cfg.StringOr("sqlpwd", "change_me_production"))
-	database := getEnv("YDSZ_DB_NAME", cfg.StringOr("database", "ydsz_trace"))
-	maxIdleConns := cfg.Int("maxIdleConns", 10)
-	maxOpenConns := cfg.Int("maxOpenConns", 50)
+	// SQLite 数据库文件路径：环境变量优先，其次配置文件。
+	sqlitePath := getEnv("YDSZ_DB_PATH", cfg.StringOr("dbpath", "./data/ydsz_trace.db"))
 
-	// 初始化数据库连接。
-	dbConf := models.DBConfig{
-		Host:         sqlhost,
-		Port:         sqlport,
-		Username:     sqluser,
-		Password:     sqlpwd,
-		Database:     database,
-		MaxIdleConns: maxIdleConns,
-		MaxOpenConns: maxOpenConns,
+	// 确保数据库目录存在
+	if dir := filepath.Dir(sqlitePath); dir != "." && dir != "/" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			log.Fatalf("创建数据库目录失败: %v", err)
+		}
+	}
+
+	// 初始化 SQLite 数据库连接。
+	dbConf := models.SQLiteConfig{
+		FilePath: sqlitePath,
 	}
 	if err := models.InitDB(&dbConf); err != nil {
-		log.Fatalf("数据库连接失败: %v", err)
+		log.Fatalf("SQLite 数据库初始化失败: %v", err)
 	}
 	defer models.DB.Close()
-
 
 	// 启动定时任务：按 cron 表达式定期探测所有客户端在线状态。
 	cronTask := task.InitTask(cfg)
@@ -81,7 +73,6 @@ func main() {
 	if cleanedFiles > 0 || cleanedDirs > 0 {
 		log.Printf("启动清理：删除 %d 个过期文件，%d 个过期目录", cleanedFiles, cleanedDirs)
 	}
-
 
 	// 构建 Gin 路由并启动 HTTP 服务。
 	port := cfg.StringOr("httpport", "2021")
