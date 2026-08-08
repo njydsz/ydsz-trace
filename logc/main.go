@@ -43,6 +43,9 @@ func main() {
 	log.Printf("logc register -server=%v -vkey=%v\n", server, vkey)
 	register.RegisterLocalIp(server, vkey)
 
+	// 启动定期心跳续约（每 60 秒重注册一次）
+	register.StartGlobalHeartbeat(server, vkey)
+
 	// 构建 Gin 路由
 	port := cfg.StringOr("httpport", "2020")
 	handler := routers.SetupRouter(cfg)
@@ -67,6 +70,9 @@ func gracefulShutdown(srv *http.Server) {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	log.Println("收到退出信号，正在优雅关闭...")
+
+	// 停放心跳续约
+	register.StopGlobalHeartbeat()
 
 	// 设置关闭超时 10 秒
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
