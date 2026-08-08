@@ -1,3 +1,4 @@
+// Package item 包含日志项（t_item）管理控制器。
 package item
 
 import (
@@ -12,14 +13,14 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// PageResp 分页响应
+// PageResp 分页查询响应体。
 type PageResp struct {
 	Code string      `json:"code"`
 	Msg  string      `json:"msg"`
 	Data models.Page `json:"data"`
 }
 
-// ItemResp 项目响应
+// ItemResp 单条项目操作响应体。
 type ItemResp struct {
 	Code string       `json:"code"`
 	Msg  string       `json:"msg"`
@@ -31,7 +32,7 @@ func nowStr() string {
 	return time.Now().Format("2006-01-02 15:04:05")
 }
 
-// Add 新增项目日志
+// Add 新增项目日志项。
 func Add(c *gin.Context) {
 	var item models.TItem
 	req, err := c.GetRawData()
@@ -53,21 +54,21 @@ func Add(c *gin.Context) {
 	c.JSON(http.StatusOK, ItemResp{"200", "项目日志新增成功", models.TItem{}})
 }
 
-// Delete 删除项目日志
+// Delete 按 id 删除项目日志项。
 func Delete(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Query("id"), 10, 64)
 	models.DeleteItem(id)
 	c.JSON(http.StatusOK, ItemResp{"200", "删除项目日志成功", models.TItem{}})
 }
 
-// Query 根据Id查询项目日志
+// Query 按 id 查询单个项目日志项详情。
 func Query(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Query("id"), 10, 64)
 	item := models.ReadItem(id)
 	c.JSON(http.StatusOK, ItemResp{"200", "查询项目日志成功", item})
 }
 
-// Update 更新项目日志
+// Update 更新项目日志项全量字段。
 func Update(c *gin.Context) {
 	var item models.TItem
 	req, err := c.GetRawData()
@@ -85,20 +86,20 @@ func Update(c *gin.Context) {
 	c.JSON(http.StatusOK, ItemResp{"200", "更新项目日志成功", models.TItem{}})
 }
 
-// ChangeItemStatus 切换项目状态
+// ChangeItemStatus 切换项目启用/禁用状态（0 ↔ 1）。
 func ChangeItemStatus(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Query("id"), 10, 64)
 	models.ChangeItemStatus(id, nowStr())
 	c.JSON(http.StatusOK, ItemResp{"200", "更新项目日志成功", models.TItem{}})
 }
 
-// QueryAll 查询所有项目日志
+// QueryAll 查询全部项目日志列表。
 func QueryAll(c *gin.Context) {
 	items, _ := models.QueryAllItem()
 	c.JSON(http.StatusOK, items)
 }
 
-// QueryPage 分页查询项目日志
+// QueryPage 分页查询项目日志列表。
 func QueryPage(c *gin.Context) {
 	pageNum, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))

@@ -134,4 +134,10 @@ func QueryAll(c *gin.Context) {
 	c.JSON(http.StatusOK, clients)
 }
 
-// QueryPage 分
+// QueryPage 分页查询客户端列表。
+func QueryPage(c *gin.Context) {
+	pageNum, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+	page := models.QueryPageClient(pageNum, pageSize)
+	c.JSON(http.StatusOK, PageResp{"200", "分页查询客户端成功", page})
+}
