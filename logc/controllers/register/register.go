@@ -2,39 +2,47 @@ package register
 
 import (
 	"log"
+	"os"
 
 	"github.com/astaxie/beego"
 	"github.com/astaxie/beego/httplib"
 )
 
+// RegisterController 注册控制器
 type RegisterController struct {
 	beego.Controller
 }
 
+// Resp 通用响应
 type Resp struct {
-	//必须的大写开头
 	Code string `json:"code"`
 	Msg  string `json:"msg"`
 }
 
-// Register Local client registered by local app.conf
+// Register 通过配置文件注册本地客户端
 func (this *RegisterController) Register() {
 	server := beego.AppConfig.String("logs")
-	vKey := beego.AppConfig.String("key")
+	vKey := getVKey()
 	RegisterLocalIp(server, vKey)
-	// log.Printf("Local client registered successfully.")
 }
 
-// CheckOnline Online interface for logs detection
+// CheckOnline 在线检测接口，供 logs 服务端探测
 func (this *RegisterController) CheckOnline() {
 	data := Resp{"200", "客户端在线"}
 	this.Data["json"] = &data
 	this.ServeJSON()
 }
 
-// RegisterLocalIp Automatically register the client at startup
+// getVKey 优先从环境变量获取密钥，降级到配置文件
+func getVKey() string {
+	if v := os.Getenv("YDSZ_CLIENT_KEY"); v != "" {
+		return v
+	}
+	return beego.AppConfig.String("key")
+}
+
+// RegisterLocalIp 启动时自动注册客户端到服务端
 func RegisterLocalIp(server string, vKey string) {
-	//通过Http调用客户端
 	req := httplib.Post("http://" + server + "/client/register").Debug(true)
 	req.JSONBody(map[string]interface{}{"key": vKey})
 	_, err := req.String()
