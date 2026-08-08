@@ -22,7 +22,7 @@ type Resp struct {
 // Register 通过配置文件注册本地客户端
 func (this *RegisterController) Register() {
 	server := beego.AppConfig.String("logs")
-	vKey := getVKey()
+	vKey := GetVKey()
 	RegisterLocalIp(server, vKey)
 }
 
@@ -33,8 +33,8 @@ func (this *RegisterController) CheckOnline() {
 	this.ServeJSON()
 }
 
-// getVKey 优先从环境变量获取密钥，降级到配置文件
-func getVKey() string {
+// GetVKey 优先从环境变量获取密钥，降级到配置文件
+func GetVKey() string {
 	if v := os.Getenv("YDSZ_CLIENT_KEY"); v != "" {
 		return v
 	}

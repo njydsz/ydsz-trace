@@ -26,6 +26,35 @@ type User struct {
 	Password string `json:"password"`
 }
 
+// HealthResp 健康检查响应
+type HealthResp struct {
+	Status string `json:"status"`
+	App    string `json:"app"`
+	Time   string `json:"time"`
+}
+
+// Health 健康检查端点（K8s liveness probe）
+func (this *UserController) Health() {
+	data := HealthResp{
+		Status: "ok",
+		App:    "ydsz-trace-logs",
+		Time:   beego.Date(0, "2006-01-02 15:04:05"),
+	}
+	this.Data["json"] = &data
+	this.ServeJSON()
+}
+
+// Ready 就绪检查端点（K8s readiness probe）
+func (this *UserController) Ready() {
+	data := HealthResp{
+		Status: "ready",
+		App:    "ydsz-trace-logs",
+		Time:   beego.Date(0, "2006-01-02 15:04:05"),
+	}
+	this.Data["json"] = &data
+	this.ServeJSON()
+}
+
 // getAdminUser 从环境变量获取管理员用户名，降级到配置文件
 func getAdminUser() string {
 	if v := os.Getenv("YDSZ_ADMIN_USER"); v != "" {

@@ -2,53 +2,56 @@ package item
 
 import (
 	"encoding/json"
-	models "ydsz-trace/logs/models"
 	"log"
 	"time"
+
+	models "ydsz-trace/logs/models"
 
 	"github.com/astaxie/beego"
 )
 
+// ItemController 项目控制器
 type ItemController struct {
 	beego.Controller
 }
 
+// PageResp 分页响应
 type PageResp struct {
-	//必须的大写开头
 	Code string      `json:"code"`
 	Msg  string      `json:"msg"`
 	Data models.Page `json:"data"`
 }
 
+// ItemResp 项目响应
 type ItemResp struct {
-	//必须的大写开头
 	Code string       `json:"code"`
 	Msg  string       `json:"msg"`
 	Data models.TItem `json:"data"`
 }
 
-//Console 控制台
-/*func (this *ItemController) Index() {
-	this.TplName = "item.html"
-}*/
-
+// Add 新增项目日志
 func (this *ItemController) Add() {
 	var item models.TItem
 	req := this.Ctx.Input.RequestBody
 	err := json.Unmarshal(req, &item)
-	if err == nil {
-		item.CreatedBy = "admin"
-		item.CreatedTime = time.Now()
-		item.UpdatedBy = "admin"
-		item.UpdatedTime = time.Now()
-		id, err := models.AddItem(&item)
-		log.Println("ID: %d, ERR: %v\n", id, err)
-		data := ItemResp{"200", "项目日志新增成功", models.TItem{}}
+	if err != nil {
+		data := ItemResp{"400", "请求参数错误", models.TItem{}}
 		this.Data["json"] = &data
 		this.ServeJSON()
+		return
 	}
+	item.CreatedBy = "admin"
+	item.CreatedTime = time.Now()
+	item.UpdatedBy = "admin"
+	item.UpdatedTime = time.Now()
+	id, err := models.AddItem(&item)
+	log.Printf("ID: %d, ERR: %v\n", id, err)
+	data := ItemResp{"200", "项目日志新增成功", models.TItem{}}
+	this.Data["json"] = &data
+	this.ServeJSON()
 }
 
+// Delete 删除项目日志
 func (this *ItemController) Delete() {
 	id, _ := this.GetInt64("id")
 	models.DeleteItem(id)
@@ -56,28 +59,34 @@ func (this *ItemController) Delete() {
 	this.Data["json"] = &data
 	this.ServeJSON()
 }
+
+// Query 根据Id查询项目日志
 func (this *ItemController) Query() {
 	id, _ := this.GetInt64("id")
-	// id, _ := this.GetInt("id")
 	item := models.ReadItem(id)
 	data := ItemResp{"200", "查询项目日志成功", item}
 	this.Data["json"] = &data
 	this.ServeJSON()
 }
 
+// Update 更新项目日志
 func (this *ItemController) Update() {
-	// client := models.TClient{}
 	var item models.TItem
 	req := this.Ctx.Input.RequestBody
 	err := json.Unmarshal(req, &item)
-	if err == nil {
-		models.UpdateItem(&item)
-		data := ItemResp{"200", "更新项目日志成功", models.TItem{}}
+	if err != nil {
+		data := ItemResp{"400", "请求参数错误", models.TItem{}}
 		this.Data["json"] = &data
 		this.ServeJSON()
+		return
 	}
+	models.UpdateItem(&item)
+	data := ItemResp{"200", "更新项目日志成功", models.TItem{}}
+	this.Data["json"] = &data
+	this.ServeJSON()
 }
 
+// ChangeItemStatus 切换项目状态
 func (this *ItemController) ChangeItemStatus() {
 	id, _ := this.GetInt64("id")
 	models.ChangeItemStatus(id)
@@ -86,12 +95,14 @@ func (this *ItemController) ChangeItemStatus() {
 	this.ServeJSON()
 }
 
+// QueryAll 查询所有项目日志
 func (this *ItemController) QueryAll() {
 	items, _ := models.QueryAllItem()
 	this.Data["json"] = &items
 	this.ServeJSON()
 }
 
+// QueryPage 分页查询项目日志
 func (this *ItemController) QueryPage() {
 	pageNum, _ := this.GetInt("page")
 	pageSize, _ := this.GetInt("limit")

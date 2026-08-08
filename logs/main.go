@@ -1,7 +1,12 @@
 package main
 
 import (
+	"context"
+	"log"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"ydsz-trace/logs/controllers/task"
 	models "ydsz-trace/logs/models"
@@ -49,5 +54,28 @@ func main() {
 	// 定时任务启动
 	toolbox.StartTask()
 	defer toolbox.StopTask()
+
+	// 优雅关闭：监听系统信号
+	go gracefulShutdown()
+
 	beego.Run()
+}
+
+// gracefulShutdown 监听 SIGTERM/SIGINT，优雅关闭 HTTP 服务
+func gracefulShutdown() {
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("收到退出信号，正在优雅关闭...")
+
+	// 设置关闭超时 10 秒
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := beego.BeeApp.Server.Shutdown(ctx); err != nil {
+		log.Printf("HTTP服务关闭失败: %v", err)
+	} else {
+		log.Println("HTTP服务已优雅关闭")
+	}
+	os.Exit(0)
 }

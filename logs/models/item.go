@@ -8,40 +8,18 @@ import (
 	_ "github.com/lib/pq"
 )
 
-/**
-*CreatedBy:dianjiu
-*Time:2017 2021/01/20 14:34
-*Project:gos_log
-*Discription:使用orm操作postgre,实现对项目日志的增删改查
-*o := orm.NewOrm()
-*user := UserInfo{Username: "zhangsan", Password: "123456"}
-*插入数据
-*id, err := o.Insert(&user)
-*更新数据
-*user.Id = 2
-*user.Username = "lisi"
-*id, err := o.Update(&user)
-*删除数据
-*user.Id = 3
-*id, err := o.Delete(&user)
-*读取
-*user.Id = 1
-*o.Read(&user)
- */
-
-//AddItem 新增项目日志
+// AddItem 新增项目日志
 func AddItem(item *TItem) (int64, error) {
 	o := orm.NewOrm()
-	// 插入一条数据，返回自增 id
 	id, err := o.Insert(item)
 	if err != nil {
-		log.Println("insert item err : ", err)
+		log.Printf("insert item err : %v", err)
 	}
-	log.Println("id :", id)
+	log.Printf("id : %d", id)
 	return id, err
 }
 
-//DeleteItem 根据Id查询项目日志
+// DeleteItem 根据Id删除项目日志
 func DeleteItem(id int64) int64 {
 	o := orm.NewOrm()
 	item := TItem{}
@@ -50,7 +28,7 @@ func DeleteItem(id int64) int64 {
 	return num
 }
 
-//UpdateItem 更新项目日志，先查后改
+// UpdateItem 更新项目日志，先查后改
 func UpdateItem(item *TItem) (int64, error) {
 	o := orm.NewOrm()
 	c := TItem{}
@@ -62,19 +40,18 @@ func UpdateItem(item *TItem) (int64, error) {
 		c.ItemDesc = item.ItemDesc
 		c.LogPath = item.LogPath
 		c.LogPrefix = item.LogPrefix
-		c.LogSuffix = c.LogSuffix
+		c.LogSuffix = item.LogSuffix
 		c.Status = item.Status
 		c.UpdatedTime = time.Now()
-		// 修改操作，返回值为受影响的行数
 		if num, err := o.Update(&c); err == nil {
-			log.Println("update return num : ", num)
+			log.Printf("update return num : %d", num)
 			return num, err
 		}
 	}
 	return 0, err
 }
 
-//ChangeItemStatus 更新项目日志，先查后改
+// ChangeItemStatus 切换项目状态（启用/禁用）
 func ChangeItemStatus(id int64) (int64, error) {
 	o := orm.NewOrm()
 	c := TItem{}
@@ -87,16 +64,15 @@ func ChangeItemStatus(id int64) (int64, error) {
 			c.Status = "1"
 		}
 		c.UpdatedTime = time.Now()
-		// 修改操作，返回值为受影响的行数
 		if num, err := o.Update(&c, "Status", "UpdatedTime"); err == nil {
-			log.Println("update return num : ", num)
+			log.Printf("update return num : %d", num)
 			return num, err
 		}
 	}
 	return 0, err
 }
 
-//ReadItem 根据Id查询项目日志
+// ReadItem 根据Id查询项目日志
 func ReadItem(id int64) (item TItem) {
 	o := orm.NewOrm()
 	item.Id = id
@@ -105,8 +81,6 @@ func ReadItem(id int64) (item TItem) {
 		log.Println("查询不到")
 	} else if err == orm.ErrMissPK {
 		log.Println("找不到主键")
-	} else {
-		log.Println(item)
 	}
 	return item
 }
@@ -115,7 +89,6 @@ func ReadItem(id int64) (item TItem) {
 func QueryItemsByClientId(id int64) (*[]TItem, error) {
 	o := orm.NewOrm()
 	items := new([]TItem)
-	//查找全部
 	_, err := o.QueryTable("t_item").Filter("client_id", id).All(items)
 	if err != nil {
 		log.Println(err)
@@ -124,11 +97,10 @@ func QueryItemsByClientId(id int64) (*[]TItem, error) {
 	return items, nil
 }
 
-//QueryAllItem 查询所有的项目日志
+// QueryAllItem 查询所有项目日志
 func QueryAllItem() (*[]TItem, error) {
 	o := orm.NewOrm()
 	items := new([]TItem)
-	//查找全部
 	_, err := o.QueryTable("t_item").All(items)
 	if err != nil {
 		log.Println(err)
@@ -137,7 +109,7 @@ func QueryAllItem() (*[]TItem, error) {
 	return items, nil
 }
 
-//QueryPageItem 分页查询所有项目日志
+// QueryPageItem 分页查询所有项目日志
 func QueryPageItem(pageNum int, pageSize int) (page Page) {
 	o := orm.NewOrm()
 	items := new([]TItem)

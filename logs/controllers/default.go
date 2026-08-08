@@ -4,12 +4,12 @@ import (
 	"github.com/astaxie/beego"
 )
 
+// MainController 根路径控制器
 type MainController struct {
 	beego.Controller
 }
 
+// Get 根路径返回服务信息
 func (c *MainController) Get() {
-	c.Data["Website"] = "beego.me"
-	c.Data["Email"] = "astaxie@gmail.com"
-	c.TplName = "index.html"
+	c.Ctx.WriteString("Ydsz Trace logs server is running.")
 }

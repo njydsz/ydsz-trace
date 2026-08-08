@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/astaxie/beego"
 	log "github.com/astaxie/beego/logs"
 	"github.com/astaxie/beego/orm"
 	_ "github.com/go-sql-driver/mysql"
@@ -83,8 +84,8 @@ func NewDef(dbConf *DBConfig) *Def {
   初始化db，注册默认数据库，同时将实体模型也注册上去
 */
 func (mgr *Def) initDB() {
-	// 是否开启调试模式 调试模式下会打印出sql语句
-	orm.Debug = true
+	// 根据运行模式控制调试模式：dev 模式打印 SQL，prod 模式不打印
+	orm.Debug = beego.BConfig.RunMode == "dev"
 	// orm.RegisterDriver("postgres", orm.DRPostgres)
 	ds := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable", mgr.DBConf.Host, mgr.DBConf.Port, mgr.DBConf.Username, mgr.DBConf.Password, mgr.DBConf.Database)
 	log.Info("datasource=[%s]", ds)

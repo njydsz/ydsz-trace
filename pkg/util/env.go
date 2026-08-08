@@ -1,0 +1,13 @@
+package util
+
+import (
+	"os"
+)
+
+// GetEnv 获取环境变量，不存在时返回默认值
+func GetEnv(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
+}
