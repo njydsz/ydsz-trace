@@ -3,10 +3,12 @@ package logs
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -47,7 +49,8 @@ func postJSONToFile(url string, payload interface{}, dstFile string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return logError("代理返回非200状态: %d", resp.StatusCode)
+		log.Printf("代理返回非200状态: %d", resp.StatusCode)
+		return errNonOK
 	}
 
 	f, err := os.Create(dstFile)
@@ -56,39 +59,12 @@ func postJSONToFile(url string, payload interface{}, dstFile string) error {
 	}
 	defer f.Close()
 
-	_, err = copyStream(f, resp.Body)
+	_, err = io.Copy(f, resp.Body)
 	return err
 }
 
-// copyStream 从 Reader 拷贝到 Writer（避免直接引用 io 包别名冲突）
-func copyStream(dst *os.File, src interface{ Read([]byte) (int, error) }) (int64, error) {
-	buf := make([]byte, 32*1024)
-	var total int64
-	for {
-		n, err := src.Read(buf)
-		if n > 0 {
-			if _, werr := dst.Write(buf[:n]); werr != nil {
-				return total, werr
-			}
-			total += int64(n)
-		}
-		if err != nil {
-			if err.Error() == "EOF" {
-				return total, nil
-			}
-			return total, err
-		}
-	}
-}
-
-// logError 返回一个带日志的错误
-func logError(format string, args ...interface{}) error {
-	log.Printf(format, args...)
-	return errBadStatus
-}
-
-// errBadStatus 非200状态错误
-var errBadStatus = &statusError{}
+// errNonOK 代理返回非200状态
+var errNonOK = &statusError{}
 
 type statusError struct{}
 
@@ -204,7 +180,7 @@ func QueryClient(c *gin.Context) {
 
 // QueryItem 根据客户端ID查询项目日志
 func QueryItem(c *gin.Context) {
-	clientId, err := strconvParseInt(c.Query("client_id"))
+	clientId, err := strconv.ParseInt(c.Query("client_id"), 10, 64)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"code": "400", "msg": "参数错误", "data": nil})
 		return
@@ -215,11 +191,4 @@ func QueryItem(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": "200", "msg": "根据客户端ID查询项目日志成功", "data": items})
-}
-
-// strconvParseInt 解析字符串为 int64
-func strconvParseInt(s string) (int64, error) {
-	var v int64
-	_, err := fmtSscan(s, &v)
-	return v, err
 }
