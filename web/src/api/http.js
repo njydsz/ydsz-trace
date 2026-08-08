@@ -1,3 +1,6 @@
+// 全局 axios 实例 + 响应拦截器
+//
+// 默认 120s 超时（适配日志查询场景）；401 自动清空登录态跳登录页。
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
 import { useAuth } from '@/store/auth'

@@ -4,7 +4,7 @@ import (
 	"log"
 )
 
-// AddItem 新增项目日志
+// AddItem 新增项目日志项。
 func AddItem(item *TItem) (int64, error) {
 	res, err := DB.Exec(`INSERT INTO t_item
 		(client_id, item_name, item_desc, log_path, log_prefix, log_suffix, status, created_by, created_time, updated_by, updated_time)
@@ -24,7 +24,7 @@ func AddItem(item *TItem) (int64, error) {
 	return id, nil
 }
 
-// DeleteItem 根据Id删除项目日志
+// DeleteItem 按 id 删除项目日志项，返回影响行数。
 func DeleteItem(id int64) int64 {
 	res, err := DB.Exec(`DELETE FROM t_item WHERE id = ?`, id)
 	if err != nil {
@@ -35,7 +35,7 @@ func DeleteItem(id int64) int64 {
 	return num
 }
 
-// UpdateItem 更新项目日志，先查后改
+// UpdateItem 按 id 更新项目日志项全量字段。
 func UpdateItem(item *TItem) (int64, error) {
 	res, err := DB.Exec(`UPDATE t_item SET
 		client_id = ?, item_name = ?, item_desc = ?, log_path = ?, log_prefix = ?, log_suffix = ?, status = ?, updated_time = ?
@@ -51,7 +51,7 @@ func UpdateItem(item *TItem) (int64, error) {
 	return num, nil
 }
 
-// ChangeItemStatus 切换项目状态（启用/禁用）
+// ChangeItemStatus 切换项目日志状态（0 ↔ 1）。
 func ChangeItemStatus(id int64, now string) (int64, error) {
 	item := ReadItem(id)
 	status := "1"
@@ -68,7 +68,7 @@ func ChangeItemStatus(id int64, now string) (int64, error) {
 	return num, nil
 }
 
-// ReadItem 根据Id查询项目日志
+// ReadItem 按 id 查询单个项目日志项。
 func ReadItem(id int64) (item TItem) {
 	err := DB.Get(&item, `SELECT * FROM t_item WHERE id = ?`, id)
 	if err != nil {
@@ -77,7 +77,7 @@ func ReadItem(id int64) (item TItem) {
 	return item
 }
 
-// QueryItemsByClientId 根据客户端ID查询所有项目
+// QueryItemsByClientId 按 client_id 查询所有项目日志。
 func QueryItemsByClientId(id int64) ([]TItem, error) {
 	items := []TItem{}
 	err := DB.Select(&items, `SELECT * FROM t_item WHERE client_id = ? ORDER BY id DESC`, id)
@@ -88,7 +88,7 @@ func QueryItemsByClientId(id int64) ([]TItem, error) {
 	return items, nil
 }
 
-// QueryAllItem 查询所有项目日志
+// QueryAllItem 查询全部项目日志列表（按 id 倒序）。
 func QueryAllItem() ([]TItem, error) {
 	items := []TItem{}
 	err := DB.Select(&items, `SELECT * FROM t_item ORDER BY id DESC`)
@@ -99,7 +99,7 @@ func QueryAllItem() ([]TItem, error) {
 	return items, nil
 }
 
-// QueryPageItem 分页查询所有项目日志
+// QueryPageItem 分页查询项目日志列表（LIMIT/OFFSET）。
 func QueryPageItem(pageNum int, pageSize int) (page Page) {
 	items := []TItem{}
 	err := DB.Select(&items, `SELECT * FROM t_item ORDER BY id DESC LIMIT ? OFFSET ?`, pageSize, (pageNum-1)*pageSize)

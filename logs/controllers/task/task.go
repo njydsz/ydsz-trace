@@ -1,3 +1,7 @@
+// Package task 包含 logs 后端的定时任务定义。
+//
+// 当前任务：
+//	- checkOnlineTask（默认每 5 分钟）：轮询所有客户端的 /checkOn，更新 online 字段。
 package task
 
 import (
@@ -13,13 +17,15 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// Resp 探测响应
+// Resp 客户端在线探测响应体。
 type Resp struct {
+	// Code 业务状态码
 	Code string `json:"code"`
-	Msg  string `json:"msg"`
+	// Msg 提示信息
+	Msg string `json:"msg"`
 }
 
-// checkOnlineTask 定时检测所有客户端在线状态
+// checkOnlineTask 定时任务：轮询所有客户端 /checkOn，更新在线状态。
 func checkOnlineTask() {
 	log.Printf("定时检测客户端是否在线 Time: %s\n", time.Now().Format("2006-01-02 15:04:05"))
 
@@ -66,7 +72,7 @@ func checkOnlineTask() {
 	}
 }
 
-// updateOnline 更新客户端在线状态
+// updateOnline 写入客户端在线状态（1=在线，0=离线）。
 func updateOnline(clientId int64, online string) {
 	c := models.TClient{}
 	c.Id = clientId
@@ -78,7 +84,9 @@ func updateOnline(clientId int64, online string) {
 	}
 }
 
-// InitTask 初始化定时任务，返回 cron 实例
+// InitTask 基于 robfig/cron 创建定时任务，返回 Cron 实例。
+//
+// 通过配置 cron 表达式控制调度（默认 "0 0/5 * * * *"，即每 5 分钟）。
 func InitTask(cfg *config.Config) *cron.Cron {
 	c := cron.New(cron.WithSeconds())
 

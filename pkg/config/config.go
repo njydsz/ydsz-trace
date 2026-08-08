@@ -14,7 +14,6 @@ package config
 
 import (
 	"bufio"
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -159,13 +158,3 @@ func EnvOrConfig(envKey, configValue, def string) string {
 	return def
 }
 
-// DSN 构建 MySQL 连接数据源名称（Data Source Name）。
-//
-// 输出格式：user:password@tcp(host:port)/dbname?charset=utf8[&parseTime=true&loc=Local]
-func (c *Config) DSN(host, port, user, pwd, database string, parseTime bool) string {
-	parse := ""
-	if parseTime {
-		parse = "&parseTime=true&loc=Local"
-	}
-	return fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8%s", user, pwd, host, port, database, parse)
-}

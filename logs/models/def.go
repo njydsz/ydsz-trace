@@ -1,3 +1,6 @@
+// Package models 包含 logs 服务端的 ORM 映射与数据库操作。
+//
+// 数据库使用 SQLite（文件存储，WAL 模式），表结构见 schema 常量。
 package models
 
 import (
@@ -8,7 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// TClient 客户端
+// TClient 客户端实体（表 t_client）。
 type TClient struct {
 	Id          int64     `json:"id" db:"id"`
 	Ip          string    `json:"ip" db:"ip"`
@@ -24,7 +27,7 @@ type TClient struct {
 	UpdatedTime string    `json:"updatedTime" db:"updated_time"`
 }
 
-// TItem 项目
+// TItem 项目日志实体（表 t_item）。
 type TItem struct {
 	Id          int64  `json:"id" db:"id"`
 	ClientId    int64  `json:"clientId" db:"client_id"`
@@ -40,7 +43,7 @@ type TItem struct {
 	UpdatedTime string `json:"updatedTime" db:"updated_time"`
 }
 
-// Page 分页
+// Page 通用分页响应结构体。
 type Page struct {
 	PageNo     int         `json:"pageNo"`
 	PageSize   int         `json:"pageSize"`
@@ -51,13 +54,49 @@ type Page struct {
 	List       interface{} `json:"list"`
 }
 
-// SQLiteConfig SQLite 数据库配置
+// SQLiteConfig SQLite 数据库文件路径配置。
 type SQLiteConfig struct {
 	FilePath string // 数据库文件路径，如 ./data/ydsz_trace.db
 }
 
-// DB 全局数据库句柄
+// DB 全局数据库句柄，通过 InitDB 初始化 SQLite 连接。
 var DB *sqlx.DB
+
+// schema 自动建表 SQL（幂等操作）
+const schema = `
+CREATE TABLE IF NOT EXISTS t_client (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    ip           TEXT,
+    port         TEXT,
+    vkey         TEXT,
+    info         TEXT,
+    zip          TEXT    DEFAULT '1',
+    status       TEXT    DEFAULT '1',
+    online       TEXT    DEFAULT '0',
+    created_by   TEXT,
+    created_time TEXT    DEFAULT (datetime('now', 'localtime')),
+    updated_by   TEXT,
+    updated_time TEXT    DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_t_client_ip_port ON t_client(ip, port);
+
+CREATE TABLE IF NOT EXISTS t_item (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    client_id    INTEGER NOT NULL,
+    item_name    TEXT,
+    item_desc    TEXT,
+    log_path     TEXT,
+    log_prefix   TEXT,
+    log_suffix   TEXT,
+    status       TEXT    DEFAULT '1',
+    created_by   TEXT,
+    created_time TEXT    DEFAULT (datetime('now', 'localtime')),
+    updated_by   TEXT,
+    updated_time TEXT    DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (client_id) REFERENCES t_client(id)
+);
+CREATE INDEX IF NOT EXISTS idx_t_item_client_id ON t_item(client_id);
+`
 
 // InitDB 初始化 SQLite 数据库连接
 //
@@ -65,7 +104,7 @@ var DB *sqlx.DB
 // WAL 模式提供更好的并发读写性能
 func InitDB(conf *SQLiteConfig) error {
 	dsn := fmt.Sprintf("file:%s?_journal=WAL&_busy_timeout=5000&_synchronous=NORMAL", conf.FilePath)
-	log.Printf("sqlite dsn: %s", conf.FilePath)
+	log.Printf("sqlite path: %s", conf.FilePath)
 
 	db, err := sqlx.Connect("sqlite", dsn)
 	if err != nil {
@@ -86,12 +125,17 @@ func InitDB(conf *SQLiteConfig) error {
 		log.Printf("enable foreign keys failed: %v", err)
 	}
 
+	// 自动建表（幂等：IF NOT EXISTS），首次启动自动完成 schema 初始化
+	if _, err := db.Exec(schema); err != nil {
+		return fmt.Errorf("auto migrate schema failed: %w", err)
+	}
+
 	DB = db
 	log.Printf("SQLite 数据库初始化完成: %s", conf.FilePath)
 	return nil
 }
 
-// PageUtil 分页工具
+// PageUtil 构建分页响应结构（计算总页数、首/末页标志）。
 func PageUtil(count int, pageNo int, pageSize int, list interface{}) Page {
 	tp := count / pageSize
 	if count%pageSize > 0 {

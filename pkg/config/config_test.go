@@ -96,12 +96,3 @@ func TestEnvOrConfig(t *testing.T) {
 	}
 }
 
-// TestDSN 验证 DSN 拼接生成正确的连接串。
-func TestDSN(t *testing.T) {
-	cfg := NewDefault()
-	dsn := cfg.DSN("127.0.0.1", "3306", "u", "p", "db", true)
-	want := "u:p@tcp(127.0.0.1:3306)/db?charset=utf8&parseTime=true&loc=Local"
-	if dsn != want {
-		t.Fatalf("DSN 拼接错误:\n got %q\nwant %q", dsn, want)
-	}
-}

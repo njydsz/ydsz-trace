@@ -1,4 +1,4 @@
-package logs
+// Package logs 包含日志查询控制器：并发拉取多节点日志并打包返回。package logs
 
 import (
 	"bytes"
@@ -20,7 +20,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// LogsReq 日志查询请求
+// LogsReq 日志查询请求体。
 type LogsReq struct {
 	Client int64  `json:"client"`
 	Item   int64  `json:"item"`
@@ -29,22 +29,22 @@ type LogsReq struct {
 	Line   int64  `json:"line"`
 }
 
-// LogsResp 日志查询响应
+// LogsResp 通用日志查询响应体。
 type LogsResp struct {
 	Code string      `json:"code"`
 	Msg  string      `json:"msg"`
 	Data interface{} `json:"data"`
 }
 
-// httpClient 共享 HTTP 客户端（带连接池，120秒超时用于日志查询场景）
+// httpClient 共享 HTTP 客户端（带连接池，120 秒超时）。
 var httpClient = util.NewClientWithTimeout(120 * time.Second)
 
-// errNonOK 非 200 状态码错误
+// errNonOK 构造非 200 状态码错误。
 func errNonOK(status int) error {
 	return &statusError{status: status}
 }
 
-// statusError HTTP 状态码错误
+// statusError HTTP 状态码错误类型。
 type statusError struct {
 	status int
 }
@@ -53,7 +53,7 @@ func (e *statusError) Error() string {
 	return "logc 返回非 200 状态码: " + strconv.Itoa(e.status)
 }
 
-// postToLogc 调用 logc 客户端 /file/query 并保存 zip 文件
+// postToLogc 调用 logc 客户端 /file/query 并保存返回的 zip 到 savePath。
 func postToLogc(server, path, key string, line int64, savePath string) error {
 	body, err := json.Marshal(map[string]interface{}{
 		"path": path, "key": key, "line": line,
@@ -90,7 +90,12 @@ func postToLogc(server, path, key string, line int64, savePath string) error {
 	return err
 }
 
-// Query 日志查询：支持单客户端和多客户端并发查询
+// Query 日志查询入口：
+//
+//   - client != 0：单客户端同步查询
+//   - client == 0：多客户端并发查询（限流 20 并发，整体 5 分钟超时）
+//
+// 返回：zip 文件（application/octet-stream）。
 func Query(c *gin.Context) {
 	cfg := c.MustGet("cfg").(*config.Config)
 
@@ -216,13 +221,13 @@ func Query(c *gin.Context) {
 	c.File(zipFile)
 }
 
-// QueryClient 查询所有客户端列表
+// QueryClient 查询所有客户端列表（供前端下拉框使用）。
 func QueryClient(c *gin.Context) {
 	clients, _ := models.QueryAllClient()
 	c.JSON(http.StatusOK, LogsResp{"200", "查询客户端列表成功", clients})
 }
 
-// QueryItem 根据客户端ID查询项目日志
+// QueryItem 根据 client_id 查询其下的日志项列表。
 func QueryItem(c *gin.Context) {
 	clientId, _ := strconv.ParseInt(c.Query("client_id"), 10, 64)
 	items, _ := models.QueryItemsByClientId(clientId)

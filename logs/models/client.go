@@ -4,7 +4,7 @@ import (
 	"log"
 )
 
-// AddClient 新增客户端
+// AddClient 新增客户端记录。
 func AddClient(client *TClient) (int64, error) {
 	res, err := DB.Exec(`INSERT INTO t_client
 		(ip, port, vkey, info, zip, online, status, created_by, created_time, updated_by, updated_time)
@@ -24,7 +24,7 @@ func AddClient(client *TClient) (int64, error) {
 	return id, nil
 }
 
-// DeleteClient 根据Id删除客户端
+// DeleteClient 按 id 删除客户端，返回影响行数。
 func DeleteClient(id int64) int64 {
 	res, err := DB.Exec(`DELETE FROM t_client WHERE id = ?`, id)
 	if err != nil {
@@ -35,7 +35,7 @@ func DeleteClient(id int64) int64 {
 	return num
 }
 
-// UpdateClient 更新客户端，先查后改
+// UpdateClient 按 id 更新客户端全量字段（不含 created_*）。
 func UpdateClient(client *TClient) (int64, error) {
 	res, err := DB.Exec(`UPDATE t_client SET
 		ip = ?, port = ?, vkey = ?, info = ?, zip = ?, status = ?, updated_time = ?
@@ -51,7 +51,7 @@ func UpdateClient(client *TClient) (int64, error) {
 	return num, nil
 }
 
-// ChangeClientOnline 更新客户端在线状态
+// ChangeClientOnline 更新客户端在线状态（online 字段）。
 func ChangeClientOnline(client *TClient) (int64, error) {
 	res, err := DB.Exec(`UPDATE t_client SET online = ?, updated_time = ? WHERE id = ?`,
 		client.Online, client.UpdatedTime, client.Id)
@@ -64,7 +64,7 @@ func ChangeClientOnline(client *TClient) (int64, error) {
 	return num, nil
 }
 
-// ChangeClientStatus 切换客户端状态（启用/禁用）
+// ChangeClientStatus 切换客户端启用/禁用状态（0 ↔ 1）。
 func ChangeClientStatus(id int64, now string) (int64, error) {
 	client := ReadClient(id)
 	status := "1"
@@ -81,7 +81,7 @@ func ChangeClientStatus(id int64, now string) (int64, error) {
 	return num, nil
 }
 
-// ReadClient 根据Id查询客户端
+// ReadClient 按 id 查询单个客户端。
 func ReadClient(id int64) (client TClient) {
 	err := DB.Get(&client, `SELECT * FROM t_client WHERE id = ?`, id)
 	if err != nil {
@@ -90,7 +90,7 @@ func ReadClient(id int64) (client TClient) {
 	return client
 }
 
-// CheckClient 根据ip、port、vkey校验客户端
+// CheckClient 按 ip + port + vkey 校验客户端身份。
 func CheckClient(ip, port, vkey string) (client TClient) {
 	err := DB.Get(&client, `SELECT * FROM t_client WHERE ip = ? AND port = ? AND vkey = ?`, ip, port, vkey)
 	if err != nil {
@@ -99,7 +99,7 @@ func CheckClient(ip, port, vkey string) (client TClient) {
 	return client
 }
 
-// QueryAllClient 查询所有客户端
+// QueryAllClient 查询全部客户端列表（按 id 倒序）。
 func QueryAllClient() ([]TClient, error) {
 	clients := []TClient{}
 	err := DB.Select(&clients, `SELECT * FROM t_client ORDER BY id DESC`)
@@ -110,7 +110,7 @@ func QueryAllClient() ([]TClient, error) {
 	return clients, nil
 }
 
-// QueryPageClient 分页查询所有客户端
+// QueryPageClient 分页查询客户端列表（LIMIT/OFFSET）。
 func QueryPageClient(pageNum int, pageSize int) (page Page) {
 	clients := []TClient{}
 	err := DB.Select(&clients, `SELECT * FROM t_client ORDER BY id DESC LIMIT ? OFFSET ?`, pageSize, (pageNum-1)*pageSize)
