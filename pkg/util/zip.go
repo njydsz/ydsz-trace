@@ -18,52 +18,59 @@ func Zip(dst, src string) error {
 	defer fw.Close()
 
 	zw := zip.NewWriter(fw)
-	defer func() {
-		if err := zw.Close(); err != nil {
-			log.Printf("关闭zip writer失败: %v", err)
-		}
-		// 压缩成功后删除原文件
-		os.RemoveAll(src)
-	}()
+	// 注意：zw.Close() 必须且只能调用一次，否则会重复写中央目录导致 zip 损坏
+	walkErr := func() error {
+		defer func() {
+			if cerr := zw.Close(); cerr != nil {
+				log.Printf("关闭zip writer失败: %v", cerr)
+			}
+		}()
+		return filepath.Walk(src, func(path string, fi os.FileInfo, errBack error) error {
+			if errBack != nil {
+				return errBack
+			}
 
-	return filepath.Walk(src, func(path string, fi os.FileInfo, errBack error) error {
-		if errBack != nil {
-			return errBack
-		}
+			fh, hdrErr := zip.FileInfoHeader(fi)
+			if hdrErr != nil {
+				return hdrErr
+			}
 
-		fh, err := zip.FileInfoHeader(fi)
-		if err != nil {
-			return err
-		}
+			fh.Name = strings.TrimPrefix(path, string(filepath.Separator))
 
-		fh.Name = strings.TrimPrefix(path, string(filepath.Separator))
+			if fi.IsDir() {
+				fh.Name += "/"
+			}
 
-		if fi.IsDir() {
-			fh.Name += "/"
-		}
+			w, createErr := zw.CreateHeader(fh)
+			if createErr != nil {
+				return createErr
+			}
 
-		w, err := zw.CreateHeader(fh)
-		if err != nil {
-			return err
-		}
+			if !fh.Mode().IsRegular() {
+				return nil
+			}
 
-		if !fh.Mode().IsRegular() {
+			fr, openErr := os.Open(path)
+			if openErr != nil {
+				return openErr
+			}
+			defer fr.Close()
+
+			if _, copyErr := io.Copy(w, fr); copyErr != nil {
+				return copyErr
+			}
 			return nil
-		}
+		})
+	}()
+	if walkErr != nil {
+		return walkErr
+	}
 
-		fr, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer fr.Close()
-
-		n, err := io.Copy(w, fr)
-		if err != nil {
-			return err
-		}
-		log.Printf("成功压缩文件：%s, 共写入了 %d 个字符\n", path, n)
-		return nil
-	})
+	// 压缩成功后删除原文件
+	if err := os.RemoveAll(src); err != nil {
+		log.Printf("删除原文件失败: %v", err)
+	}
+	return nil
 }
 
 // UnZip 解压缩 zip 文件到目标目录
@@ -81,7 +88,15 @@ func UnZip(dst, src string) error {
 	}
 
 	for _, file := range zr.File {
+		// 防止 zip slip 路径穿越：确保解压目标始终在 dst 之内
 		path := filepath.Join(dst, file.Name)
+		if dst != "" {
+			cleanDst := filepath.Clean(dst)
+			if path != cleanDst && !strings.HasPrefix(path, cleanDst+string(filepath.Separator)) {
+				log.Printf("跳过非法路径条目（疑似 zip slip）: %s", file.Name)
+				continue
+			}
+		}
 
 		if file.FileInfo().IsDir() {
 			if err := os.MkdirAll(path, file.Mode()); err != nil {
