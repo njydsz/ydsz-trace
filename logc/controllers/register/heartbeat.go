@@ -1,3 +1,9 @@
+// Package register 处理 logc 客户端向 logs 服务端的注册与心跳续约。
+//
+// 心跳策略：
+//   - 默认每 60 秒重注册一次
+//   - 失败后按指数退避：5s → 10s → 20s → ... → 上限 10 分钟
+//   - 成功后重置退避计数
 package register
 
 import (
@@ -16,7 +22,9 @@ const (
 	initialRetryInterval = 5 * time.Second
 )
 
-// HeartbeatManager 心跳管理器
+// HeartbeatManager 心跳续约管理器。
+//
+// 负责按固定/退避间隔反复调用 RegisterLocalIp，保持客户端在 logs 侧的在线状态。
 type HeartbeatManager struct {
 	mu           sync.Mutex
 	server       string
@@ -28,7 +36,7 @@ type HeartbeatManager struct {
 	lastFailTime time.Time
 }
 
-// NewHeartbeatManager 创建心跳管理器
+// NewHeartbeatManager 创建指定目标服务地址与密钥的心跳管理器。
 func NewHeartbeatManager(server, vKey string) *HeartbeatManager {
 	return &HeartbeatManager{
 		server: server,
@@ -38,7 +46,7 @@ func NewHeartbeatManager(server, vKey string) *HeartbeatManager {
 	}
 }
 
-// Start 启用心跳（如果已启动则忽略）
+// Start 启用心调循环 goroutine；重复调用无效。
 func (h *HeartbeatManager) Start() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -52,7 +60,7 @@ func (h *HeartbeatManager) Start() {
 	log.Printf("[心跳] 心跳续约已启动，间隔: %v，目标: %s", heartbeatInterval, h.server)
 }
 
-// Stop 停用心程
+// Stop 停止心跳 goroutine，阻塞至循环退出。
 func (h *HeartbeatManager) Stop() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -67,7 +75,7 @@ func (h *HeartbeatManager) Stop() {
 	log.Println("[心跳] 心跳续约已停止")
 }
 
-// heartbeatLoop 心跳循环
+// heartbeatLoop 主循环：先立即注册一次，再按动态间隔定时执行。
 func (h *HeartbeatManager) heartbeatLoop() {
 	defer close(h.doneCh)
 
@@ -89,7 +97,7 @@ func (h *HeartbeatManager) heartbeatLoop() {
 	}
 }
 
-// doRegister 执行一次注册/心跳
+// doRegister 执行一次注册请求（持有锁读 server/vKey 后解锁再发起 HTTP）。
 func (h *HeartbeatManager) doRegister() {
 	h.mu.Lock()
 	server, vKey := h.server, h.vKey
@@ -105,7 +113,7 @@ func (h *HeartbeatManager) doRegister() {
 	// 实际可通过 channel 传回结果
 }
 
-// getInterval 根据重试次数计算间隔（指数退避）
+// getInterval 根据失败次数计算心跳间隔：失败次数指数增长，上限 maxRetryInterval。
 func (h *HeartbeatManager) getInterval() time.Duration {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -121,14 +129,16 @@ func (h *HeartbeatManager) getInterval() time.Duration {
 	return interval
 }
 
-// RecordSuccess 记录注册成功，重置重试计数
+// RecordSuccess 记录一次注册成功，重置内部失败计数。
+//
+// 当前 doRegister 未传回调用结果，保留此方法供后续补齐。
 func (h *HeartbeatManager) RecordSuccess() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.retryCount = 0
 }
 
-// RecordFailure 记录注册失败
+// RecordFailure 记录一次注册失败，递增计数与最近失败时间。
 func (h *HeartbeatManager) RecordFailure() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -143,7 +153,7 @@ var (
 	heartbeatOnce   sync.Once
 )
 
-// StartGlobalHeartbeat 启动全局心跳（仅首次调用生效）
+// StartGlobalheartbeat 启动全局唯一心跳（仅首次调用生效）。
 func StartGlobalHeartbeat(server, vKey string) {
 	heartbeatOnce.Do(func() {
 		globalHeartbeat = NewHeartbeatManager(server, vKey)
@@ -151,7 +161,7 @@ func StartGlobalHeartbeat(server, vKey string) {
 	})
 }
 
-// StopGlobalHeartbeat 停止全局心跳
+// StopGlobalHeartbeat 停止全局心跳（空值时静默返回）。
 func StopGlobalHeartbeat() {
 	if globalHeartbeat != nil {
 		globalHeartbeat.Stop()

@@ -1,3 +1,11 @@
+// Package main 是 logs 日志收集服务端的入口。
+//
+// 职责：
+//   - 管理客户端（logc agent）注册、心跳状态维护
+//   - 接收前端查询请求，并发拉取各客户端日志并合并返回
+//   - 提供 Web 控制台（SPA 托管）
+//
+// 启动流程：加载配置 → 初始化数据库 → 启动定时任务 → 清理临时文件 → 启动 HTTP 服务
 package main
 
 import (
@@ -19,7 +27,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// getEnv 获取环境变量，如果不存在则返回默认值
+// getEnv 获取环境变量；未设置时返回 fallback。
+//
+// 与 pkg/util.GetEnv 功能重叠，统一考虑收敛。
 func getEnv(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
 		return value
@@ -28,14 +38,14 @@ func getEnv(key, fallback string) string {
 }
 
 func main() {
-	// 加载配置
+	// 加载配置（日志服务端固定使用 conf/app.conf）。
 	cfg, err := config.Load("conf/app.conf")
 	if err != nil {
 		log.Printf("加载配置失败: %v，使用内置默认值", err)
 		cfg = config.NewDefault()
 	}
 
-	// 数据库配置：优先从环境变量读取，其次从配置文件读取
+	// 数据库连接配置：环境变量优先，其次配置文件。
 	sqlhost := getEnv("YDSZ_DB_HOST", cfg.StringOr("sqlhost", "127.0.0.1"))
 	sqlport := getEnv("YDSZ_DB_PORT", cfg.StringOr("sqlport", "3306"))
 	sqluser := getEnv("YDSZ_DB_USER", cfg.StringOr("sqluser", "root"))
@@ -44,7 +54,7 @@ func main() {
 	maxIdleConns := cfg.Int("maxIdleConns", 10)
 	maxOpenConns := cfg.Int("maxOpenConns", 50)
 
-	// 初始化数据库连接
+	// 初始化数据库连接。
 	dbConf := models.DBConfig{
 		Host:         sqlhost,
 		Port:         sqlport,
@@ -59,24 +69,25 @@ func main() {
 	}
 	defer models.DB.Close()
 
-	// 初始化定时任务
+
+	// 启动定时任务：按 cron 表达式定期探测所有客户端在线状态。
 	cronTask := task.InitTask(cfg)
 	cronTask.Start()
 	defer cronTask.Stop()
 
-	// 启动时清理残留临时文件（TTL 2 小时）
+	// 启动时清理残留临时文件（日志查询产生的中间文件，超过 2 小时自动删除）。
 	temppath := cfg.StringOr("temppath", "./temp/logs/")
 	cleanedFiles, cleanedDirs, _ := util.CleanupOldFiles(temppath, util.DefaultCleanupOptions)
 	if cleanedFiles > 0 || cleanedDirs > 0 {
 		log.Printf("启动清理：删除 %d 个过期文件，%d 个过期目录", cleanedFiles, cleanedDirs)
 	}
 
-	// 构建 Gin 路由
+
+	// 构建 Gin 路由并启动 HTTP 服务。
 	port := cfg.StringOr("httpport", "2021")
 	sessionMgr := session.NewManager()
 	handler := routers.SetupRouter(cfg, sessionMgr)
 
-	// 释放 gin 调试模式内存（可选）
 	gin.SetMode(gin.ReleaseMode)
 
 	srv := &http.Server{
@@ -84,7 +95,7 @@ func main() {
 		Handler: handler,
 	}
 
-	// 优雅关闭：监听系统信号
+	// 后台监听退出信号，触发优雅关闭。
 	go gracefulShutdown(srv)
 
 	log.Printf("logs 启动成功，监听端口 %s\n", port)
@@ -93,7 +104,7 @@ func main() {
 	}
 }
 
-// gracefulShutdown 监听 SIGTERM/SIGINT，优雅关闭 HTTP 服务
+// gracefulShutdown 监听 SIGTERM/SIGINT，10 秒内优雅关闭 HTTP 服务。
 func gracefulShutdown(srv *http.Server) {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

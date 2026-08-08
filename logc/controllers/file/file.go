@@ -1,3 +1,9 @@
+// Package file 提供日志文件搜索与下载能力。
+//
+// 关键安全措施：
+//   - key 参数白名单校验（仅字母/数字/连字符/下划线）
+//   - path 参数禁止包含 ".."
+//   - 所有文件拼接使用 filepath.Join
 package file
 
 import (
@@ -18,18 +24,22 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// FileReq 文件查询请求
+// FileReq 文件查询请求体。
 type FileReq struct {
+	// Path 日志文件的绝对路径
 	Path string `json:"path"`
-	Key  string `json:"key"`
-	Line int64  `json:"line"`
+	// Key 搜索关键字（同时用于生成临时文件名）
+	Key string `json:"key"`
+	// Line 命中行后追加读取的上下文行数
+	Line int64 `json:"line"`
 }
 
-// safeKeyPattern 安全的 key：只允许字母、数字、连字符和下划线
+// safeKeyPattern 合法 key 白名单：字母、数字、连字符、下划线，长度 1-128。
 var safeKeyPattern = regexp.MustCompile(`^[a-zA-Z0-9\-_]{1,128}$`)
 
-// sanitizeKey 清洗 key 参数，防止路径遍历攻击
-// 只允许字母、数字、连字符、下划线，长度限制 1-128
+// sanitizeKey 校验 key 参数，防止路径遍历与恶意输入。
+//
+// 返回清洗后的 key 与是否合法。
 func sanitizeKey(key string) (string, bool) {
 	if len(key) == 0 || len(key) > 128 {
 		return "", false
@@ -40,7 +50,10 @@ func sanitizeKey(key string) (string, bool) {
 	return key, true
 }
 
-// Query 查询日志文件并返回压缩包下载
+// Query 处理日志文件查询请求：搜索 → 过滤上下文 → zip 压缩 → 下载。
+//
+// 响应：application/octet-stream（zip 文件）。
+// 安全措施：调用 sanitizeKey 与 path ".." 校验，参数非法直接返回 400。
 func Query(c *gin.Context) {
 	cfg := c.MustGet("cfg").(*config.Config)
 
@@ -86,7 +99,14 @@ func Query(c *gin.Context) {
 	c.File(result)
 }
 
-// ReadString 按关键字搜索日志文件，返回匹配上下文行并压缩
+// ReadString 按关键字搜索日志文件并输出到临时文件，再压缩为 zip 返回路径。
+//
+// 行为：
+//   - 每次命中关键字所在行及其后 line 行写入结果
+//   - 若后续命中在当前上下文窗口内，则扩展窗口
+//   - 结果文件位于 temppath/key.log
+//
+// 返回 zip 文件路径；失败返回空字符串。
 func ReadString(filename string, key string, line int64, temppath string) (file string) {
 	startTime := time.Now()
 	defer func(startTime time.Time) {
@@ -173,7 +193,9 @@ func ReadString(filename string, key string, line int64, temppath string) (file 
 	return dst
 }
 
-// GetLocalIPv4 获取本机的IPv4地址
+// GetLocalIPv4 返回本机第一个非 loopback 的 IPv4 地址。
+//
+// 未找到时返回 "unknown"。
 func GetLocalIPv4() (ip string) {
 	netInterfaces, err := net.Interfaces()
 	if err != nil {
@@ -196,7 +218,9 @@ func GetLocalIPv4() (ip string) {
 	return "unknown"
 }
 
-// Zip 压缩文件
+// Zip 将 src 文件/目录压缩为 dst zip 文件；压缩成功后删除 src。
+//
+// 注意：与 pkg/util.Zip 重复，建议后续收敛到统一实现。
 func Zip(dst, src string) (err error) {
 	fw, err := os.Create(dst)
 	if err != nil {
@@ -253,7 +277,10 @@ func Zip(dst, src string) (err error) {
 	})
 }
 
-// UnZip 解压缩
+// UnZip 将 src zip 解压到 dst 目录。
+//
+// 注意：当前实现缺少 zip slip 路径穿越校验，与 pkg/util.UnZip 存在安全差异。
+//       生产使用推荐统一为 pkg/util.UnZip。
 func UnZip(dst, src string) (err error) {
 	zr, err := zip.OpenReader(src)
 	if err != nil {
