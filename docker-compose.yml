@@ -1,0 +1,74 @@
+version: "3.8"
+
+services:
+  # ========== 数据库 ==========
+  mysql:
+    image: mysql:8.0
+    container_name: ydsz-trace-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${YDSZ_DB_PASSWORD:-ydsz_trace_dev}
+      MYSQL_DATABASE: ydsz_trace
+      TZ: Asia/Shanghai
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./sqls/mysql.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ========== 服务端 ==========
+  logs:
+    build:
+      context: .
+      dockerfile: logs/Dockerfile
+    container_name: ydsz-trace-logs
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      YDSZ_DB_HOST: mysql
+      YDSZ_DB_PORT: "3306"
+      YDSZ_DB_USER: root
+      YDSZ_DB_PASSWORD: ${YDSZ_DB_PASSWORD:-ydsz_trace_dev}
+      YDSZ_DB_NAME: ydsz_trace
+      YDSZ_ADMIN_USER: ${YDSZ_ADMIN_USER:-admin}
+      YDSZ_ADMIN_PASSWORD: ${YDSZ_ADMIN_PASSWORD:-ydsz_trace_admin}
+      YDSZ_CORS_ORIGINS: ${YDSZ_CORS_ORIGINS:-http://localhost:*}
+      TZ: Asia/Shanghai
+    ports:
+      - "2021:2021"
+    volumes:
+      - logs-temp:/app/temp/logs
+    restart: unless-stopped
+
+  # ========== 客户端代理（示例） ==========
+  logc:
+    build:
+      context: .
+      dockerfile: logc/Dockerfile
+    container_name: ydsz-trace-logc
+    depends_on:
+      - logs
+    environment:
+      YDSZ_LOGS_SERVER: logs:2021
+      YDSZ_CLIENT_KEY: ${YDSZ_CLIENT_KEY:-ydsz_trace_key}
+      YDSZ_CORS_ORIGINS: ${YDSZ_CORS_ORIGINS:-http://localhost:*}
+      TZ: Asia/Shanghai
+    ports:
+      - "2020:2020"
+    volumes:
+      - logc-temp:/app/temp/logc
+      # 将宿主机日志目录挂载进来（按需配置）
+      # - /var/log:/var/log:ro
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  logs-temp:
+  logc-temp:
