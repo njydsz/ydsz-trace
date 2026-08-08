@@ -2,7 +2,7 @@ package item
 
 import (
 	"encoding/json"
-	models "gos-log/logs/models"
+	models "ydsz-trace/logs/models"
 	"log"
 	"time"
 

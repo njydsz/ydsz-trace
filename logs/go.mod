@@ -1,4 +1,4 @@
-module gos-log/logs
+module ydsz-trace/logs
 
 go 1.17
 

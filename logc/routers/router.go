@@ -1,9 +1,9 @@
 package routers
 
 import (
-	"gos-log/logc/controllers"
-	"gos-log/logc/controllers/file"
-	"gos-log/logc/controllers/register"
+	"ydsz-trace/logc/controllers"
+	"ydsz-trace/logc/controllers/file"
+	"ydsz-trace/logc/controllers/register"
 
 	"github.com/astaxie/beego"
 	"github.com/astaxie/beego/plugins/cors"

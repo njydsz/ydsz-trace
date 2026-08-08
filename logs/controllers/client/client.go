@@ -2,10 +2,10 @@ package client
 
 import (
 	"encoding/json"
-	models "gos-log/logs/models"
 	"log"
 	"strings"
 	"time"
+	models "ydsz-trace/logs/models"
 
 	"github.com/astaxie/beego"
 )

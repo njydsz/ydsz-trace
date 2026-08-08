@@ -3,7 +3,7 @@ package logs
 import (
 	"archive/zip"
 	"encoding/json"
-	models "gos-log/logs/models"
+	models "ydsz-trace/logs/models"
 	"io"
 	"log"
 	"os"

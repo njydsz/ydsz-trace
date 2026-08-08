@@ -2,8 +2,8 @@ package main
 
 import (
 	"flag"
-	register "gos-log/logc/controllers/register"
-	_ "gos-log/logc/routers"
+	register "ydsz-trace/logc/controllers/register"
+	_ "ydsz-trace/logc/routers"
 	"log"
 
 	"github.com/astaxie/beego"

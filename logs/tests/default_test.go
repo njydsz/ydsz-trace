@@ -1,7 +1,7 @@
 package test
 
 import (
-	_ "logs/routers"
+	_ "ydsz-trace/logs/routers"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"

@@ -1,9 +1,9 @@
 package main
 
 import (
-	"gos-log/logs/controllers/task"
-	models "gos-log/logs/models"
-	_ "gos-log/logs/routers"
+	"ydsz-trace/logs/controllers/task"
+	models "ydsz-trace/logs/models"
+	_ "ydsz-trace/logs/routers"
 
 	"github.com/astaxie/beego"
 	"github.com/astaxie/beego/toolbox"
