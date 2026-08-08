@@ -7,39 +7,37 @@ import (
 
 	"ydsz-trace/logs/routers"
 	"ydsz-trace/pkg/config"
+	"ydsz-trace/pkg/session"
 
-	"github.com/gin-gonic/gin"
+	. "github.com/smartystreets/goconvey/convey"
 )
 
-// newTestRouter 构建测试用路由（使用默认配置，不连接数据库）
-func newTestRouter() *gin.Engine {
-	gin.SetMode(gin.TestMode)
+// TestMainRoute 根路径测试
+func TestMainRoute(t *testing.T) {
 	cfg := config.NewDefault()
-	return routers.SetupRouter(cfg)
-}
+	sessionMgr := session.NewManager()
+	r := routers.SetupRouter(cfg, sessionMgr)
 
-// TestHealth 健康检查端点测试
-func TestHealth(t *testing.T) {
-	router := newTestRouter()
+	Convey("Subject: Test Station Endpoint\n", t, func() {
+		Convey("GET /health Should Return 200", func() {
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/health", nil)
+			r.ServeHTTP(w, req)
+			So(w.Code, ShouldEqual, 200)
+		})
 
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/health", nil)
-	router.ServeHTTP(w, req)
+		Convey("GET /ready Should Return 200", func() {
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/ready", nil)
+			r.ServeHTTP(w, req)
+			So(w.Code, ShouldEqual, 200)
+		})
 
-	if w.Code != http.StatusOK {
-		t.Errorf("Health endpoint returned %d, want 200", w.Code)
-	}
-}
-
-// TestLoginInvalid 未登录访问受保护接口应返回401
-func TestLoginRequired(t *testing.T) {
-	router := newTestRouter()
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/client/queryAll", nil)
-	router.ServeHTTP(w, req)
-
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("Protected endpoint returned %d, want 401", w.Code)
-	}
+		Convey("未登录访问 /client/queryAll Should Return 401", func() {
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/client/queryAll", nil)
+			r.ServeHTTP(w, req)
+			So(w.Code, ShouldEqual, 401)
+		})
+	})
 }

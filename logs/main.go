@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"log"
 	"net/http"
 	"os"
@@ -10,37 +9,67 @@ import (
 	"syscall"
 	"time"
 
+	"ydsz-trace/logs/routers"
 	"ydsz-trace/logs/controllers/task"
 	models "ydsz-trace/logs/models"
-	"ydsz-trace/logs/routers"
 	"ydsz-trace/pkg/config"
+	"ydsz-trace/pkg/session"
+
+	"github.com/gin-gonic/gin"
 )
 
-func main() {
-	var confPath string
-	flag.StringVar(&confPath, "c", "conf/app.conf", "配置文件路径")
-	flag.Parse()
+// getEnv 获取环境变量，如果不存在则返回默认值
+func getEnv(key, fallback string) string {
+	if value, ok := os.LookupEnv(key); ok {
+		return value
+	}
+	return fallback
+}
 
+func main() {
 	// 加载配置
-	cfg, err := config.Load(confPath)
+	cfg, err := config.Load("conf/app.conf")
 	if err != nil {
 		log.Printf("加载配置失败: %v，使用内置默认值", err)
 		cfg = config.NewDefault()
 	}
 
-	// 初始化数据库连接
-	if err := models.InitDB(cfg); err != nil {
-		log.Fatalf("数据库初始化失败: %v", err)
-	}
-	log.Println("数据库连接成功")
+	// 数据库配置：优先从环境变量读取，其次从配置文件读取
+	sqlhost := getEnv("YDSZ_DB_HOST", cfg.StringOr("sqlhost", "127.0.0.1"))
+	sqlport := getEnv("YDSZ_DB_PORT", cfg.StringOr("sqlport", "3306"))
+	sqluser := getEnv("YDSZ_DB_USER", cfg.StringOr("sqluser", "root"))
+	sqlpwd := getEnv("YDSZ_DB_PASSWORD", cfg.StringOr("sqlpwd", "change_me_production"))
+	database := getEnv("YDSZ_DB_NAME", cfg.StringOr("database", "ydsz_trace"))
+	maxIdleConns := cfg.Int("maxIdleConns", 10)
+	maxOpenConns := cfg.Int("maxOpenConns", 50)
 
-	// 启动定时任务（客户端在线状态检测）
-	cron := task.StartMonitor(cfg)
-	defer cron.Stop()
+	// 初始化数据库连接
+	dbConf := models.DBConfig{
+		Host:         sqlhost,
+		Port:         sqlport,
+		Username:     sqluser,
+		Password:     sqlpwd,
+		Database:     database,
+		MaxIdleConns: maxIdleConns,
+		MaxOpenConns: maxOpenConns,
+	}
+	if err := models.InitDB(&dbConf); err != nil {
+		log.Fatalf("数据库连接失败: %v", err)
+	}
+	defer models.DB.Close()
+
+	// 初始化定时任务
+	cronTask := task.InitTask(cfg)
+	cronTask.Start()
+	defer cronTask.Stop()
 
 	// 构建 Gin 路由
 	port := cfg.StringOr("httpport", "2021")
-	handler := routers.SetupRouter(cfg)
+	sessionMgr := session.NewManager()
+	handler := routers.SetupRouter(cfg, sessionMgr)
+
+	// 释放 gin 调试模式内存（可选）
+	gin.SetMode(gin.ReleaseMode)
 
 	srv := &http.Server{
 		Addr:    ":" + port,
@@ -50,7 +79,7 @@ func main() {
 	// 优雅关闭：监听系统信号
 	go gracefulShutdown(srv)
 
-	log.Printf("ydsz-trace-logs 启动成功，监听端口 %s\n", port)
+	log.Printf("logs 启动成功，监听端口 %s\n", port)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("HTTP服务启动失败: %v", err)
 	}
@@ -72,4 +101,5 @@ func gracefulShutdown(srv *http.Server) {
 	} else {
 		log.Println("HTTP服务已优雅关闭")
 	}
+	os.Exit(0)
 }
