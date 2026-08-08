@@ -28,55 +28,80 @@ type LogsReq struct {
 	Line   int64  `json:"line"`
 }
 
-// postJSONToFile 向 logc 代理发起查询请求，结果保存到目标文件
-func postJSONToFile(url string, payload interface{}, dstFile string) error {
-	body, err := json.Marshal(payload)
+// LogsResp 日志查询响应
+type LogsResp struct {
+	Code string      `json:"code"`
+	Msg  string      `json:"msg"`
+	Data interface{} `json:"data"`
+}
+
+// httpClient 带超时的 HTTP 客户端
+var httpClient = &http.Client{Timeout: 120 * time.Second}
+
+// errNonOK 非 200 状态码错误
+func errNonOK(status int) error {
+	return &statusError{status: status}
+}
+
+// statusError HTTP 状态码错误
+type statusError struct {
+	status int
+}
+
+func (e *statusError) Error() string {
+	return "logc 返回非 200 状态码: " + strconv.Itoa(e.status)
+}
+
+// postToLogc 调用 logc 客户端 /file/query 并保存 zip 文件
+func postToLogc(server, path, key string, line int64, savePath string) error {
+	body, err := json.Marshal(map[string]interface{}{
+		"path": path, "key": key, "line": line,
+	})
 	if err != nil {
 		return err
 	}
 
+	url := "http://" + server + "/file/query"
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("代理返回非200状态: %d", resp.StatusCode)
-		return errNonOK
+		return errNonOK(resp.StatusCode)
 	}
 
-	f, err := os.Create(dstFile)
+	// 保存 zip 到本地
+	out, err := os.Create(savePath)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer out.Close()
 
-	_, err = io.Copy(f, resp.Body)
+	_, err = io.Copy(out, resp.Body)
 	return err
 }
-
-// errNonOK 代理返回非200状态
-var errNonOK = &statusError{}
-
-type statusError struct{}
-
-func (e *statusError) Error() string { return "代理返回非200状态" }
 
 // Query 日志查询：支持单客户端和多客户端并发查询
 func Query(c *gin.Context) {
 	cfg := c.MustGet("cfg").(*config.Config)
 
 	var logsReq LogsReq
-	if err := c.ShouldBindJSON(&logsReq); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": "400", "msg": "请求参数错误", "data": nil})
+	data, err := c.GetRawData()
+	if err != nil {
+		c.JSON(http.StatusOK, LogsResp{"400", "请求参数错误", nil})
+		return
+	}
+	err = json.Unmarshal(data, &logsReq)
+	if err != nil {
+		c.JSON(http.StatusOK, LogsResp{"400", "请求参数错误", nil})
 		return
 	}
 
@@ -87,36 +112,26 @@ func Query(c *gin.Context) {
 	// 创建工作目录
 	if err := util.CreateDir(workDir); err != nil {
 		log.Printf("创建工作目录失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"code": "500", "msg": "系统错误", "data": nil})
+		c.JSON(http.StatusOK, LogsResp{"500", "系统错误", nil})
 		return
 	}
 
 	if logsReq.Client != 0 {
 		// 单客户端查询
-		client, err := models.ReadClient(logsReq.Client)
-		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"code": "404", "msg": "客户端不存在", "data": nil})
-			return
-		}
-		url := "http://" + client.Ip + ":" + client.Port + "/file/query"
-		item, err := models.ReadItem(logsReq.Item)
-		if err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"code": "404", "msg": "项目不存在", "data": nil})
-			return
-		}
+		client := models.ReadClient(logsReq.Client)
+		server := client.Ip + ":" + client.Port
+		item := models.ReadItem(logsReq.Item)
 		path := item.LogPath + item.LogPrefix + logsReq.Date + item.LogSuffix + ".log"
 
-		if err := postJSONToFile(url, map[string]interface{}{"path": path, "key": logsReq.Key, "line": logsReq.Line},
-			filepath.Join(workDir, client.Ip+".zip")); err != nil {
-			log.Printf("单客户端查询失败: %v", err)
-			c.JSON(http.StatusBadGateway, gin.H{"code": "502", "msg": "客户端查询失败", "data": nil})
-			return
+		err := postToLogc(server, path, logsReq.Key, logsReq.Line, filepath.Join(workDir, client.Ip+".zip"))
+		if err != nil {
+			log.Printf("调用客户端 %s 失败: %v", server, err)
 		}
 	} else {
 		// 多客户端并发查询
 		clients, err := models.QueryAllClient()
 		if err != nil || len(clients) == 0 {
-			c.JSON(http.StatusNotFound, gin.H{"code": "404", "msg": "无可用客户端", "data": nil})
+			c.JSON(http.StatusOK, LogsResp{"404", "无可用客户端", nil})
 			return
 		}
 
@@ -129,19 +144,14 @@ func Query(c *gin.Context) {
 		for i := 0; i < len(clients); i++ {
 			go func(idx int, cl models.TClient) {
 				defer wg.Done()
-				url := "http://" + cl.Ip + ":" + cl.Port + "/file/query"
-				item, err := models.ReadItem(logsReq.Item)
-				if err != nil {
-					log.Printf("读取项目[%d]失败: %v", logsReq.Item, err)
-					return
-				}
+				server := cl.Ip + ":" + cl.Port
+				item := models.ReadItem(logsReq.Item)
 				path := item.LogPath + item.LogPrefix + logsReq.Date + item.LogSuffix + ".log"
 
 				log.Printf("%s 调用客户端 %d 开始: %s\n", time.Now().Format("2006-01-02 15:04:05"), idx, cl.Ip)
-				if err := postJSONToFile(url, map[string]interface{}{"path": path, "key": logsReq.Key, "line": logsReq.Line},
-					filepath.Join(workDir, cl.Ip+".zip")); err != nil {
-					log.Printf("调用客户端 %d 失败: %v", idx, err)
-					return
+				err := postToLogc(server, path, logsReq.Key, logsReq.Line, filepath.Join(workDir, cl.Ip+".zip"))
+				if err != nil {
+					log.Printf("%s 调用客户端 %d 失败: %s, err: %v\n", time.Now().Format("2006-01-02 15:04:05"), idx, cl.Ip, err)
 				}
 				log.Printf("%s 调用客户端 %d 结束: %s\n", time.Now().Format("2006-01-02 15:04:05"), idx, cl.Ip)
 			}(i, clients[i])
@@ -155,7 +165,7 @@ func Query(c *gin.Context) {
 	zipFile := filepath.Join(temppath, logsReq.Key+".zip")
 	if err := util.Zip(zipFile, workDir); err != nil {
 		log.Printf("压缩结果失败: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"code": "500", "msg": "压缩结果失败", "data": nil})
+		c.JSON(http.StatusOK, LogsResp{"500", "压缩结果失败", nil})
 		return
 	}
 
@@ -170,25 +180,13 @@ func Query(c *gin.Context) {
 
 // QueryClient 查询所有客户端列表
 func QueryClient(c *gin.Context) {
-	clients, err := models.QueryAllClient()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": "500", "msg": "查询客户端列表失败", "data": nil})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"code": "200", "msg": "查询客户端列表成功", "data": clients})
+	clients, _ := models.QueryAllClient()
+	c.JSON(http.StatusOK, LogsResp{"200", "查询客户端列表成功", clients})
 }
 
 // QueryItem 根据客户端ID查询项目日志
 func QueryItem(c *gin.Context) {
-	clientId, err := strconv.ParseInt(c.Query("client_id"), 10, 64)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"code": "400", "msg": "参数错误", "data": nil})
-		return
-	}
-	items, err := models.QueryItemsByClientId(clientId)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": "500", "msg": "查询项目日志失败", "data": nil})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"code": "200", "msg": "根据客户端ID查询项目日志成功", "data": items})
+	clientId, _ := strconv.ParseInt(c.Query("client_id"), 10, 64)
+	items, _ := models.QueryItemsByClientId(clientId)
+	c.JSON(http.StatusOK, LogsResp{"200", "根据客户端ID查询项目日志成功", items})
 }
