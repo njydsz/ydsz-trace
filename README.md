@@ -1,93 +1,145 @@
 # Ydsz Trace
 
+<p align="center">
+	<strong>轻量级高性能分布式日志追踪与检索系统</strong>
+</p>
 
+-------------------------------------------------------------------------------
 
-## Getting started
+[**🌎 English Documentation**](README.md)
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+-------------------------------------------------------------------------------
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+## 📖 简介
 
-## Add your files
+**Ydsz Trace** 是一款基于 Go 语言开发的轻量级高性能分布式日志追踪检索系统。通过简洁的 Client-Server 架构，实现跨多台服务器节点的集中式实时日志搜索，让分布式环境下的问题排查变得简单高效。
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+### 核心特性
+
+- **极致性能**：纯 Go 编写，单线程读取 17.8GB 日志文件仅需约 33 秒
+- **分布式架构**：每台服务器部署 Client Agent，通过 Web 控制台集中管理
+- **关键词检索**：基于关键字匹配的实时日志搜索，支持上下文行数控制
+- **轻量级**：资源占用极低，无需 Elasticsearch 等重量级依赖
+- **多数据库支持**：兼容 MySQL 和 PostgreSQL
+
+## 🏗️ 架构
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.njydsz.com/ydszopen/ydsz-trace.git
-git branch -M main
-git push -uf origin main
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  logc 代理   │     │  logc 代理   │     │  logc 代理   │
+│  (服务器 A)  │     │  (服务器 B)  │     │  (服务器 C)  │
+│  端口 2020  │     │  端口 2020  │     │  端口 2020  │
+└──────┬──────┘     └──────┬──────┘     └──────┬──────┘
+       │                   │                   │
+       └───────────────────┼───────────────────┘
+                           │ HTTP
+                    ┌──────▼──────┐
+                    │  logs 服务端 │
+                    │  端口 2021  │
+                    └──────┬──────┘
+                           │
+                    ┌──────▼──────┐
+                    │   数据库     │
+                    │ MySQL / PG  │
+                    └─────────────┘
 ```
 
-## Integrate with your tools
+## 🚀 快速开始
 
-- [ ] [Set up project integrations](http://da18fd123d58/ydszopen/ydsz-trace/-/settings/integrations)
+### 环境要求
 
-## Collaborate with your team
+- Go 1.17+
+- MySQL 5.7+ 或 PostgreSQL 10+
+- Linux / macOS / Windows
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+### 安装部署
 
-## Test and Deploy
+```bash
+# 克隆仓库
+git clone https://github.com/njydsz/ydsz-trace.git
+cd ydsz-trace
 
-Use the built-in continuous integration in GitLab.
+# 初始化数据库
+# MySQL:
+mysql -u root -p < sqls/mysql.sql
+# PostgreSQL:
+psql -U postgres -f sqls/postgresql.sql
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+# 修改配置
+# 服务端: 编辑 logs/conf/app.conf
+# 客户端: 编辑 logc/conf/app.conf
 
-***
+# 编译运行服务端
+cd logs && go build && ./logs
 
-# Editing this README
+# 编译运行客户端代理
+cd logc && go build && ./logc -s <服务端IP>:2021 -v 123456
+```
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+## 📦 模块说明
 
-## Suggestions for a good README
+| 模块 | 说明 | 默认端口 |
+|------|------|---------|
+| `logs` | 集中管理服务端，提供 Web 控制台 | 2021 |
+| `logc` | 部署在目标机器上的客户端代理 | 2020 |
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+## ⚙️ 配置说明
 
-## Name
-Choose a self-explaining name for your project.
+### 服务端 (`logs/conf/app.conf`)
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| `httpport` | HTTP 监听端口 | 2021 |
+| `sqlhost` | 数据库地址 | 127.0.0.1 |
+| `sqlport` | 数据库端口 | 3306 |
+| `sqluser` | 数据库用户 | root |
+| `sqlpwd` | 数据库密码 | - |
+| `database` | 数据库名称 | demo |
+| `cron` | 健康检查间隔（cron 表达式） | `0 0/5 * * * *` |
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+### 客户端 (`logc/conf/app.conf`)
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| `httpport` | HTTP 监听端口 | 2020 |
+| `logs` | 服务端地址 | 127.0.0.1:2021 |
+| `key` | 认证密钥 | 123456 |
+| `temppath` | 临时文件存储路径 | - |
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+## 📊 性能测试
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+### 硬件环境
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+| 配置 | 参数 |
+|------|------|
+| CPU | Intel Core i5-10210U @ 1.60GHz × 8 |
+| 内存 | 16 GB |
+| 硬盘 | 512.1 GB SSD |
+| 操作系统 | Ubuntu 20.04.2 LTS (64位) |
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+### 性能对比：17.8GB 日志文件单行顺序读取（单线程）
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+| 语言 | 第1次 | 第2次 | 第3次 | 第4次 | 第5次 | 总耗时 | 平均耗时 |
+|------|-------|-------|-------|-------|-------|--------|----------|
+| **Go** | 32.99s | 34.24s | 30.33s | 31.21s | 35.70s | 164.16s | **32.83s** |
+| Python | 超时未完成 | - | - | - | - | - | - |
+| Java | 226s | 206s | 153s | 219s | 183s | 987s | 197.4s |
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+## 🤝 参与贡献
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+### 分支策略
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+| 分支 | 用途 |
+|------|------|
+| `master` | 稳定发布分支 |
+| `dev` | 开发分支，接受 PR |
 
-## License
-For open source projects, say how it is licensed.
+### 问题反馈
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+提交 Issue 时请附上 Go 版本、Ydsz Trace 版本及相关依赖版本信息。
+
+- [GitHub Issues](https://github.com/your-org/ydsz-trace/issues)
+
+## 📄 开源协议
+
+详见 [LICENSE](LICENSE)
