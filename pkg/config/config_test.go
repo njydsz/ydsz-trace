@@ -6,6 +6,7 @@ import (
 	"testing"
 )
 
+// writeTempConfig 写入临时配置文件并返回路径（测试辅助）。
 func writeTempConfig(t *testing.T, content string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "config.ini")
@@ -15,6 +16,7 @@ func writeTempConfig(t *testing.T, content string) string {
 	return p
 }
 
+// TestLoad_Basic 验证基本键值解析和行尾注释去除。
 func TestLoad_Basic(t *testing.T) {
 	content := "host = 0.0.0.0\nport = 8080\nlevel = debug ; 行尾注释\n# 注释行\n"
 	p := writeTempConfig(t, content)
@@ -34,6 +36,7 @@ func TestLoad_Basic(t *testing.T) {
 	}
 }
 
+// TestInt_InvalidFallsBackToDefault 验证非法整数回落默认值。
 func TestInt_InvalidFallsBackToDefault(t *testing.T) {
 	p := writeTempConfig(t, "port = notanumber\n")
 	cfg, err := Load(p)
@@ -45,6 +48,7 @@ func TestInt_InvalidFallsBackToDefault(t *testing.T) {
 	}
 }
 
+// TestStringOr_Default 验证缺失 key 返回默认值。
 func TestStringOr_Default(t *testing.T) {
 	p := writeTempConfig(t, "")
 	cfg, err := Load(p)
@@ -56,6 +60,7 @@ func TestStringOr_Default(t *testing.T) {
 	}
 }
 
+// TestBool 验证布尔解析及默认值逻辑。
 func TestBool(t *testing.T) {
 	p := writeTempConfig(t, "enable = true\nflag = no\n")
 	cfg, _ := Load(p)
@@ -71,12 +76,14 @@ func TestBool(t *testing.T) {
 	}
 }
 
+// TestLoad_MissingFile 验证文件不存在时返回错误。
 func TestLoad_MissingFile(t *testing.T) {
 	if _, err := Load(filepath.Join(t.TempDir(), "nope.ini")); err == nil {
 		t.Fatalf("文件不存在时应返回错误")
 	}
 }
 
+// TestEnvOrConfig 验证环境变量优先，再到配置文件。
 func TestEnvOrConfig(t *testing.T) {
 	key := "YDSZ_TEST_ENVORC"
 	os.Unsetenv(key)
@@ -89,6 +96,7 @@ func TestEnvOrConfig(t *testing.T) {
 	}
 }
 
+// TestDSN 验证 DSN 拼接生成正确的连接串。
 func TestDSN(t *testing.T) {
 	cfg := NewDefault()
 	dsn := cfg.DSN("127.0.0.1", "3306", "u", "p", "db", true)

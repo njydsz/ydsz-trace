@@ -1,5 +1,15 @@
-// Package logger 提供轻量级结构化日志，基于标准库 log 实现，
-// 不依赖第三方库，提供类似 zap 的风格接口，便于后续平滑升级到 zap。
+// Package logger 提供零依赖的结构化日志，输出 JSON 格式便于日志采集。
+//
+// 设计定位：
+//   - 在标准 log 基础上封装，零第三方依赖
+//   - 输出结构化 JSON，便于 ELK / ClickHouse 采集解析
+//   - 接口风格贴近 zap（WithField / WithPrefix），便于后续平滑升级
+//
+// 输出示例：
+//
+//	{"time":"2026-08-08T20:00:00.000+08:00","level":"INFO","msg":"server started","port":"8080"}
+//
+// 全局默认日志器通过 SetDefaultLogger 替换；业务代码建议使用包级便捷函数。
 package logger
 
 import (
@@ -11,17 +21,23 @@ import (
 	"time"
 )
 
-// Level 日志级别
+// Level 日志级别，数值越大越严重。
 type Level int
 
 const (
+	// DebugLevel 调试信息，生产环境通常关闭
 	DebugLevel Level = iota
+	// InfoLevel 常规信息（启动、配置、关键事件）
 	InfoLevel
+	// WarnLevel 警告（可恢复异常、降级）
 	WarnLevel
+	// ErrorLevel 错误（业务失败、外部依赖异常）
 	ErrorLevel
+	// FatalLevel 致命错误（输出后调用 os.Exit(1)）
 	FatalLevel
 )
 
+// levelNames 日志级别到字符串的映射。
 var levelNames = map[Level]string{
 	DebugLevel: "DEBUG",
 	InfoLevel:  "INFO",
@@ -30,7 +46,9 @@ var levelNames = map[Level]string{
 	FatalLevel: "FATAL",
 }
 
-// Logger 结构化日志器
+// Logger 结构化日志器实例。
+//
+// 并发安全：通过互斥锁保护 output;level;prefix 写操作。
 type Logger struct {
 	mu     sync.Mutex
 	output io.Writer
@@ -38,7 +56,11 @@ type Logger struct {
 	prefix string
 }
 
-// New 创建新的日志器
+// New 创建新的日志器。
+//
+// 参数：
+//   - output: 输出目标，nil 默认 os.Stderr
+//   - level: 最低输出级别
 func New(output io.Writer, level Level) *Logger {
 	if output == nil {
 		output = os.Stderr
@@ -49,24 +71,26 @@ func New(output io.Writer, level Level) *Logger {
 	}
 }
 
-// NewDefault 创建默认日志器（输出到 stderr，级别 INFO）
+// NewDefault 创建默认日志器：输出到 os.Stderr，级别 INFO。
 func NewDefault() *Logger {
 	return New(os.Stderr, InfoLevel)
 }
 
-// NewDevelopment 创建开发模式日志器（DEBUG 级别）
+// NewDevelopment 创建开发模式日志器：级别 DEBUG，输出到 os.Stderr。
 func NewDevelopment() *Logger {
 	return New(os.Stderr, DebugLevel)
 }
 
-// SetLevel 设置日志级别
+// SetLevel 动态调整日志级别（并发安全）。
 func (l *Logger) SetLevel(level Level) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.level = level
 }
 
-// WithPrefix 添加日志前缀
+// WithPrefix 返回带指定前缀的新 Logger（不影响原实例）。
+//
+// 适用场景：为某一类日志增加模块标识，例如 WithPrefix("[Auth]") 。
 func (l *Logger) WithPrefix(prefix string) *Logger {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -77,12 +101,16 @@ func (l *Logger) WithPrefix(prefix string) *Logger {
 	}
 }
 
-// WithField 添加字段
+// WithField 返回带字段前缀的新 Logger，输出时 key=value 作为 msg 前缀。
+//
+// 如需输出为 JSON 字段而非前缀，可改造 outputEntry 支持 fields 写入 JSON。
 func (l *Logger) WithField(key string, value interface{}) *Logger {
 	return l.WithPrefix(fmt.Sprintf("%s=%v", key, value))
 }
 
-// outputEntry 输出日志条目
+// outputEntry 序列化并写入一条日志（并发安全，级别过滤）。
+//
+// 序列化失败时输出一条专用的错误日志，避免静默丢失。
 func (l *Logger) outputEntry(level Level, msg string, fields map[string]interface{}) {
 	if level < l.level {
 		return

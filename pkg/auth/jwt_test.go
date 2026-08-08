@@ -5,6 +5,7 @@ import (
 	"time"
 )
 
+// TestGenerateAndValidateToken 验证正常签发 - 验证往返正确性。
 func TestGenerateAndValidateToken(t *testing.T) {
 	j := NewJWT("unit-secret", time.Hour)
 	token, err := j.GenerateToken("alice", "admin")
@@ -30,6 +31,7 @@ func TestGenerateAndValidateToken(t *testing.T) {
 	}
 }
 
+// TestValidateToken_WrongSecret 验证不同密钥签发 token 须校验失败。
 func TestValidateToken_WrongSecret(t *testing.T) {
 	a := NewJWT("secret-a", time.Hour)
 	token, err := a.GenerateToken("u", "r")
@@ -42,6 +44,7 @@ func TestValidateToken_WrongSecret(t *testing.T) {
 	}
 }
 
+// TestValidateToken_Tampered 验证篡改 token 后校验失败。
 func TestValidateToken_Tampered(t *testing.T) {
 	j := NewJWT("secret", time.Hour)
 	token, _ := j.GenerateToken("u", "r")
@@ -50,6 +53,7 @@ func TestValidateToken_Tampered(t *testing.T) {
 	}
 }
 
+// TestValidateToken_Malformed 验证非法格式 token 返回 ErrTokenFormat。
 func TestValidateToken_Malformed(t *testing.T) {
 	j := NewJWT("secret", time.Hour)
 	if _, err := j.ValidateToken("not.a.jwt"); err == nil {
@@ -57,6 +61,7 @@ func TestValidateToken_Malformed(t *testing.T) {
 	}
 }
 
+// TestValidateToken_Expired 验证已过期的 token 返回 ErrTokenExpired。
 func TestValidateToken_Expired(t *testing.T) {
 	j := NewJWT("secret", -time.Hour)
 	token, err := j.GenerateToken("u", "r")
@@ -68,6 +73,7 @@ func TestValidateToken_Expired(t *testing.T) {
 	}
 }
 
+// TestRefreshToken 验证 RefreshToken 保持用户信息一致。
 func TestRefreshToken(t *testing.T) {
 	j := NewJWT("secret", time.Hour)
 	token, _ := j.GenerateToken("bob", "user")
@@ -84,6 +90,7 @@ func TestRefreshToken(t *testing.T) {
 	}
 }
 
+// TestInitDefaultJWT 验证全局默认 JWT 初始化后的可用性。
 func TestInitDefaultJWT(t *testing.T) {
 	InitDefaultJWT("secret-default", time.Hour)
 	j := Default()
