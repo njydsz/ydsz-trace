@@ -1,4 +1,5 @@
 // Package controllers 包含 logs 服务端的公共控制器（根路径等）。
+// Main 是最简单的健康探针，通过纯文本响应指示服务存活。
 package controllers
 
 import (

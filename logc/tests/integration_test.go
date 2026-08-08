@@ -1,3 +1,4 @@
+// Package test 提供 logc 微服务的集成测试，验证路由可用性。
 package test
 
 import (
@@ -9,6 +10,7 @@ import (
 	"ydsz-trace/pkg/config"
 )
 
+// setupLogcServer 构造一个用于集成测试的 logc HTTP 测试服务器。
 func setupLogcServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	cfg := config.NewDefault()

@@ -1,3 +1,4 @@
+// Package test 提供 logs 服务端基础路由测试。
 package test
 
 import (
