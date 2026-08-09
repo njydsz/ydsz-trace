@@ -65,6 +65,9 @@ type ScanConfig struct {
 	EndTime string
 	// ContextLines 命中行后追加读取的上下文行数
 	ContextLines int64
+	// Query 可选布尔查询表达式（field:value AND/OR/NOT，隐式 AND）。
+	// 与 Key 并用时取交集（两者都得匹配）。空表示不使用查询表达式。
+	Query string
 }
 
 // TailConfig 实时跟踪配置。
@@ -124,7 +127,8 @@ type lineFilter struct {
 	endSeconds   int
 	contextLines int64
 	curLine      int64
-	windowEnd    int64 // 当前上下文窗口结束行号
+	windowEnd    int64                  // 当前上下文窗口结束行号
+	queryFn      func(line string) bool // 编译后的布尔查询表达式
 }
 
 // newLineFilter 根据配置创建过滤器；regex 编译失败返回 error。
@@ -144,6 +148,14 @@ func newLineFilter(cfg ScanConfig) (*lineFilter, error) {
 		}
 	}
 
+	if cfg.Query != "" {
+		fn, err := CompileQuery(cfg.Query)
+		if err != nil {
+			return nil, fmt.Errorf("布尔查询编译失败: %w", err)
+		}
+		f.queryFn = fn
+	}
+
 	if cfg.StartTime != "" || cfg.EndTime != "" {
 		f.hasTimeRange = true
 		f.startSeconds = parseTimeToSeconds(cfg.StartTime)
@@ -156,6 +168,7 @@ func newLineFilter(cfg ScanConfig) (*lineFilter, error) {
 // shouldKeep 判断给定日志行是否应写入输出（命中主要条件或在上下文窗口内）。
 //
 // 命中主要条件的行及其后 contextLines 行均视为应当保留。
+// 当配置了布尔查询表达式时，主要条件取新旧两者的交集。
 func (f *lineFilter) shouldKeep(line string) bool {
 	f.curLine++
 
@@ -165,7 +178,7 @@ func (f *lineFilter) shouldKeep(line string) bool {
 		return true
 	}
 
-	// 关键字匹配
+	// 关键字匹配（旧接口）
 	keyMatched := false
 	if f.regex && f.re != nil {
 		keyMatched = f.re.MatchString(line)
@@ -197,6 +210,11 @@ func (f *lineFilter) shouldKeep(line string) bool {
 				return false
 			}
 		}
+	}
+
+	// 布尔查询表达式（两者取交集）
+	if f.queryFn != nil && !f.queryFn(line) {
+		return false
 	}
 
 	// 命中，扩展上下文窗口

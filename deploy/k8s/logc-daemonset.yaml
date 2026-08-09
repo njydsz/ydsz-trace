@@ -1,0 +1,96 @@
+# logc DaemonSet（K8s 模式：每个节点运行一个，自动发现 Pod 并上报日志）
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ydsz-trace-logc
+  namespace: ydsz-trace
+spec:
+  selector:
+    matchLabels:
+      app: ydsz-trace-logc
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app: ydsz-trace-logc
+    spec:
+      serviceAccountName: ydsz-trace-logc
+      # 保证 logc DaemonSet 尽量在每个节点上都跑
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: logc
+          image: ydsz-trace/logc:latest
+          ports:
+            - containerPort: 2020
+              hostPort: 2020    # 可选：hostPort 直接暴露端口供外部访问
+          env:
+            - name: YDSZ_LOG_SOURCE
+              value: "k8s"
+            - name: YDSZ_LOG_SERVER
+              value: "ydsz-trace-logs:2021"
+            - name: YDSZ_CLIENT_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: ydsz-trace-secrets
+                  key: client-key
+            - name: YDSZ_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: YDSZ_POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: YDSZ_DISCOVERY_ANNOTATION
+              value: "ydsz-trace/collect"
+            - name: YDSZ_APP_NAME_KEY
+              value: "ydsz-trace/app-name"
+            - name: TZ
+              value: "Asia/Shanghai"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 2020
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 2020
+            periodSeconds: 30
+---
+# 为 logc 暴露的 Service（用于 logs 服务端反查 logc）
+# 在 DaemonSet 模式下，logs 通过节点 IP + 端口调用
+# 这里提供 headless service 或直接用 hostPort
+apiVersion: v1
+kind: Service
+metadata:
+  name: ydsz-trace-logc
+  namespace: ydsz-trace
+spec:
+  selector:
+    app: ydsz-trace-logc
+  ports:
+    - port: 2020
+      targetPort: 2020
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ydsz-trace-secrets
+  namespace: ydsz-trace
+type: Opaque
+stringData:
+  client-key: "PLEASE_CHANGE_ME_TO_A_STRONG_SECRET"

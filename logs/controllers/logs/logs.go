@@ -34,6 +34,9 @@ type LogsReq struct {
 	Level     string `json:"level"`
 	StartTime string `json:"startTime"`
 	EndTime   string `json:"endTime"`
+	// Query 可选布尔查询表达式（field:value AND/OR/NOT，隐式 AND）。
+	// 与 Key 并用时取交集。空表示不使用布尔查询。
+	Query string `json:"query"`
 }
 
 // httpClient 共享 HTTP 客户端（带连接池，120 秒超时）。
@@ -54,12 +57,13 @@ func (e *statusError) Error() string {
 }
 
 // postToLogc 调用 logc 客户端 /file/query 并保存返回的 zip 到 savePath。
-// regex/level/startTime/endTime 为可选的高级搜索参数。
-func postToLogc(server, path, key string, line int64, savePath string, regex bool, level, startTime, endTime string) error {
+// regex/level/startTime/endTime/query 为可选的高级搜索参数。
+func postToLogc(server, path, key string, line int64, savePath string, regex bool, level, startTime, endTime, query string) error {
 	body, err := json.Marshal(map[string]interface{}{
 		"path": path, "key": key, "line": line,
 		"regex": regex, "level": level,
 		"startTime": startTime, "endTime": endTime,
+		"query": query,
 	})
 	if err != nil {
 		return err
@@ -146,7 +150,7 @@ func Query(c *gin.Context) {
 		path := item.LogPath + item.LogPrefix + logsReq.Date + item.LogSuffix + ".log"
 
 		err := postToLogc(server, path, logsReq.Key, logsReq.Line, filepath.Join(workDir, client.Ip+".zip"),
-			logsReq.Regex, logsReq.Level, logsReq.StartTime, logsReq.EndTime)
+			logsReq.Regex, logsReq.Level, logsReq.StartTime, logsReq.EndTime, logsReq.Query)
 		if err != nil {
 			log.Printf("调用客户端 %s 失败: %v", server, err)
 		}
@@ -186,34 +190,34 @@ func Query(c *gin.Context) {
 			sem <- struct{}{}
 			wg.Add(1)
 
-		go func(idx int, cl models.TClient) {
-			defer wg.Done()
-			defer func() { <-sem }() // 释放信号量
+			go func(idx int, cl models.TClient) {
+				defer wg.Done()
+				defer func() { <-sem }() // 释放信号量
 
-			item := models.ReadItem(logsReq.Item)
-			if item.Id == 0 {
-				log.Printf("读取项目[%d]失败: 项目不存在", logsReq.Item)
+				item := models.ReadItem(logsReq.Item)
+				if item.Id == 0 {
+					log.Printf("读取项目[%d]失败: 项目不存在", logsReq.Item)
+					mu.Lock()
+					failCount++
+					mu.Unlock()
+					return
+				}
+				path := item.LogPath + item.LogPrefix + logsReq.Date + item.LogSuffix + ".log"
+				serverAddr := cl.Ip + ":" + cl.Port
+
+				log.Printf("%s 调用客户端 %d 开始: %s\n", time.Now().Format("2006-01-02 15:04:05"), idx, cl.Ip)
+				err := postToLogc(serverAddr, path, logsReq.Key, logsReq.Line, filepath.Join(workDir, cl.Ip+".zip"),
+					logsReq.Regex, logsReq.Level, logsReq.StartTime, logsReq.EndTime, logsReq.Query)
 				mu.Lock()
-				failCount++
+				if err != nil {
+					failCount++
+					log.Printf("%s 调用客户端 %d 失败: %s, err: %v\n", time.Now().Format("2006-01-02 15:04:05"), idx, cl.Ip, err)
+				} else {
+					successCount++
+				}
 				mu.Unlock()
-				return
-			}
-			path := item.LogPath + item.LogPrefix + logsReq.Date + item.LogSuffix + ".log"
-			serverAddr := cl.Ip + ":" + cl.Port
-
-			log.Printf("%s 调用客户端 %d 开始: %s\n", time.Now().Format("2006-01-02 15:04:05"), idx, cl.Ip)
-			err := postToLogc(serverAddr, path, logsReq.Key, logsReq.Line, filepath.Join(workDir, cl.Ip+".zip"),
-				logsReq.Regex, logsReq.Level, logsReq.StartTime, logsReq.EndTime)
-			mu.Lock()
-			if err != nil {
-				failCount++
-				log.Printf("%s 调用客户端 %d 失败: %s, err: %v\n", time.Now().Format("2006-01-02 15:04:05"), idx, cl.Ip, err)
-			} else {
-				successCount++
-			}
-			mu.Unlock()
-			log.Printf("%s 调用客户端 %d 结束: %s\n", time.Now().Format("2006-01-02 15:04:05"), idx, cl.Ip)
-		}(i, clients[i])
+				log.Printf("%s 调用客户端 %d 结束: %s\n", time.Now().Format("2006-01-02 15:04:05"), idx, cl.Ip)
+			}(i, clients[i])
 		}
 
 	waitClients:

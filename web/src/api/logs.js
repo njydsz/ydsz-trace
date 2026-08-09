@@ -14,3 +14,8 @@ export function queryItemsByClient(clientId) {
 export function queryLogs(payload) {
   return http.post('/logs/query', payload, { responseType: 'blob' })
 }
+
+// searchLogs 发起在线分页检索（返回 JSON 行列表）。
+export function searchLogs(payload) {
+  return http.post('/logs/search', payload)
+}

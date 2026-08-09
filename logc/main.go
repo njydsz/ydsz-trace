@@ -160,7 +160,7 @@ func handleDiscoveryEvent(ctx context.Context, server, vkey string, evt source.D
 		case "add":
 			err := register.VirtualClient(&register.VirtualRegisterRequest{
 				Server:         server,
-				VKey:           vKey,
+				VKey:           vkey,
 				SourceType:     t.SourceType,
 				Identity:       t.Identity,
 				DisplayName:    t.DisplayName,

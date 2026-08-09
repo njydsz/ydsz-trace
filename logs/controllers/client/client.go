@@ -178,7 +178,7 @@ func handleTraditionalRegister(c *gin.Context, ip, port, vKey, localLogcPort str
 //
 // reg.Action = remove：注销指定 identity；
 // reg.Action 非 remove：新增或更新 identity。
-func handleVirtualRegister(c *gin.Context, ip, port string, reg *Register) {
+func handleVirtualRegister(c *gin.Context, ip, port string, reg *ClientRegisterReq) {
 	port2 := port
 	if reg.LocalLogcPort != "" {
 		port2 = reg.LocalLogcPort

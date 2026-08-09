@@ -1,0 +1,118 @@
+# Ydsz-Trace 多模式部署示例（Docker）
+#
+# 两种部署方式：
+#   1. file 模式（默认）：传统部署，挂载宿主机日志目录
+#   2. docker 模式：通过 Docker socket 自动采集容器 stdout 日志
+#
+# 启动：
+#   传统模式：docker compose --profile file up -d
+#   Docker模式：docker compose --profile docker up -d
+#
+# 通过 YDSZ_LOG_SOURCE 环境变量控制 logc 行为：
+#   file   - 读取宿主机挂载目录（默认，零迁移成本）
+#   docker - 通过 /var/run/docker.sock 自动发现容器
+
+version: "3.8"
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
+services:
+  # ========== logs 服务端 ==========
+  logs:
+    build:
+      context: ../..
+      dockerfile: logs/Dockerfile
+    container_name: ydsz-trace-logs
+    environment:
+      YDSZ_ADMIN_USER: ${YDSZ_ADMIN_USER:-admin}
+      YDSZ_ADMIN_PASSWORD: ${YDSZ_ADMIN_PASSWORD:-ydsz_trace_admin}
+      YDSZ_DB_PATH: /app/data/ydsz_trace.db
+      YDSZ_WEB_ROOT: /app/web/dist
+      TZ: Asia/Shanghai
+    ports:
+      - "2021:2021"
+    volumes:
+      - logs-data:/app/data
+      - logs-temp:/app/temp/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2021/health"]
+      interval: 30s
+      timeout: 3s
+      start_period: 10s
+      retries: 3
+
+  # ========== file 模式 logc ==========
+  # 挂载宿主机日志目录，按路径读取（传统部署或过渡阶段）
+  logc-file:
+    build:
+      context: ../..
+      dockerfile: logc/Dockerfile
+    profiles: ["file"]
+    container_name: ydsz-trace-logc-file
+    environment:
+      YDSZ_LOG_SOURCE: file
+      YDSZ_LOG_SERVER: logs:2021
+      YDSZ_CLIENT_KEY: ${YDSZ_CLIENT_KEY:-ydsz_trace_key}
+      YDSZ_LOG_ROOT_DIR: /var/log/app
+      YDSZ_CORS_ORIGINS: ${YDSZ_CORS_ORIGINS:-http://localhost:*}
+      TZ: Asia/Shanghai
+    ports:
+      - "2020:2020"
+    volumes:
+      # 只读挂载应用日志目录
+      - /var/log/app:/var/log/app:ro
+      - logc-temp:/app/temp/logc
+    depends_on:
+      logs:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ========== docker 模式 logc ==========
+  # 挂载 Docker socket，自动发现并采集容器日志
+  logc-docker:
+    build:
+      context: ../..
+      dockerfile: logc/Dockerfile
+    profiles: ["docker"]
+    container_name: ydsz-trace-logc-docker
+    environment:
+      YDSZ_LOG_SOURCE: docker
+      YDSZ_LOG_SERVER: logs:2021
+      YDSZ_CLIENT_KEY: ${YDSZ_CLIENT_KEY:-ydsz_trace_key}
+      YDSZ_DISCOVERY_LABEL: ${YDSZ_DISCOVERY_LABEL:-ydsz-trace/collect=true}
+      YDSZ_APP_NAME_KEY: ${YDSZ_APP_NAME_KEY:-ydsz-trace/app-name}
+      YDSZ_CORS_ORIGINS: ${YDSZ_CORS_ORIGINS:-http://localhost:*}
+      TZ: Asia/Shanghai
+    ports:
+      - "2020:2020"
+    volumes:
+      # 只读挂载 Docker socket
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - logc-temp:/app/temp/logc
+    depends_on:
+      logs:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ========== 业务应用示例（docker 模式自动采集） ==========
+  sample-app:
+    image: nginx:alpine
+    profiles: ["docker"]
+    container_name: ydsz-sample-app
+    labels:
+      ydsz-trace/collect: "true"
+      ydsz-trace/app-name: "示例应用"
+    logging: *default-logging
+    ports:
+      - "8080:80"
+    restart: unless-stopped
+
+volumes:
+  logs-data:
+  logs-temp:
+  logc-temp:

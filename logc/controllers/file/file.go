@@ -37,6 +37,11 @@ type FileReq struct {
 	Level     string `json:"level"`
 	StartTime string `json:"startTime"`
 	EndTime   string `json:"endTime"`
+	// MaxLines 单节点返回行上限（0 表示不限制，用于日志检索分页场景）。
+	MaxLines int `json:"maxLines"`
+	// Query 可选布尔查询表达式（field:value AND/OR/NOT，隐式 AND）。
+	// 与 Key 并用时取交集。空表示不使用布尔查询。
+	Query string `json:"query"`
 }
 
 // TailReq 实时日志跟踪请求体。
@@ -127,8 +132,8 @@ func Query(c *gin.Context) {
 		StartTime:    fileReq.StartTime,
 		EndTime:      fileReq.EndTime,
 		ContextLines: fileReq.Line,
+		Query:        fileReq.Query,
 	}
-
 	written, err := s.Read(c.Request.Context(), fileReq.Path, scanCfg, &buf)
 	if err != nil {
 		log.Printf("Source.Read 失败: %v", err)
@@ -278,6 +283,12 @@ func Search(c *gin.Context) {
 		return
 	}
 
+	if len(fileReq.Query) > 1024 {
+		log.Printf("Query 参数过长: %d 字符", len(fileReq.Query))
+		c.Status(400)
+		return
+	}
+
 	var buf bytes.Buffer
 	scanCfg := source.ScanConfig{
 		Key:          safeKey,
@@ -286,6 +297,7 @@ func Search(c *gin.Context) {
 		StartTime:    fileReq.StartTime,
 		EndTime:      fileReq.EndTime,
 		ContextLines: fileReq.Line,
+		Query:        fileReq.Query,
 	}
 	if _, err := s.Read(c.Request.Context(), fileReq.Path, scanCfg, &buf); err != nil {
 		log.Printf("Source.Read 失败: %v", err)
@@ -299,6 +311,10 @@ func Search(c *gin.Context) {
 		line := scanner.Text()
 		if line != "" {
 			lines = append(lines, line)
+		}
+		// 早停：达到 MaxLines 上限后不再继续扫描，降低内存与网络开销。
+		if fileReq.MaxLines > 0 && len(lines) >= fileReq.MaxLines {
+			break
 		}
 	}
 

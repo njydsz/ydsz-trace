@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"ydsz-trace/logs/routers"
+	"ydsz-trace/logs/controllers/alert"
 	"ydsz-trace/logs/controllers/task"
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/config"
@@ -105,6 +106,11 @@ func main() {
 	cronTask := task.InitTask(cfg)
 	cronTask.Start()
 	defer cronTask.Stop()
+
+	// 后台告警评估调度：按 interval_sec 每分钟扫描 eval 启用的规则。
+	alertScheduler := alert.NewScheduler(5)
+	alertScheduler.Start()
+	defer alertScheduler.Stop()
 
 	// 启动时清理残留临时文件（日志查询产生的中间文件，超过 2 小时自动删除）。
 	temppath := cfg.StringOr("temppath", "./temp/logs/")

@@ -1,0 +1,36 @@
+# logc DaemonSet RBAC：需要 pods/list/watch 和 pods/log 权限
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ydsz-trace
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ydsz-trace-logc
+  namespace: ydsz-trace
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: ydsz-trace-logc
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: ydsz-trace-logc
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: ydsz-trace-logc
+subjects:
+  - kind: ServiceAccount
+    name: ydsz-trace-logc
+    namespace: ydsz-trace

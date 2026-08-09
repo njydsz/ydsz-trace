@@ -32,6 +32,7 @@ type StreamReq struct {
 	Level     string `json:"level"`
 	StartTime string `json:"startTime"`
 	EndTime   string `json:"endTime"`
+	Query     string `json:"query"`
 }
 
 // Stream 多客户端并发搜索的 SSE 进度推送端点。
@@ -60,8 +61,8 @@ func Stream(c *gin.Context) {
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 
-	if req.Item == 0 || req.Key == "" || req.Date == "" {
-		sseError(c, "item/key/date 不能为空")
+	if req.Item == 0 || (req.Key == "" && req.Query == "") || req.Date == "" {
+		sseError(c, "item/query+key 不能同时为空，且 date 必填")
 		return
 	}
 
@@ -107,7 +108,7 @@ func Stream(c *gin.Context) {
 
 			err := postToLogc(server, path, req.Key, req.Line,
 				fmt.Sprintf("./temp/stream/%d.zip", client.Id),
-				req.Regex, req.Level, req.StartTime, req.EndTime)
+				req.Regex, req.Level, req.StartTime, req.EndTime, req.Query)
 
 			mu.Lock()
 			status := "ok"

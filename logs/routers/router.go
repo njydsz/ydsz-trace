@@ -1,12 +1,13 @@
 // Package routers 定义 logs 服务端的 HTTP 路由。
 //
 // 中间件链（按序）：
+//
 //	gin.Logger → gin.Recovery → 配置注入 → 会话中间件 → CORS → metrics → 鉴权中间件
 //
 // 路由分组：
-//	- 公开：/, /health, /ready, /metrics, /admin/login, /admin/exit, /client/register
-//	- 需鉴权：/client/*, /item/*, /logs/*
-//	- SPA 回退：未命中 API 的 GET 请求回退到 index.html
+//   - 公开：/, /health, /ready, /metrics, /admin/login, /admin/exit, /client/register
+//   - 需鉴权：/client/*, /item/*, /logs/*
+//   - SPA 回退：未命中 API 的 GET 请求回退到 index.html
 package routers
 
 import (
@@ -18,6 +19,7 @@ import (
 	"ydsz-trace/logs/controllers/admin"
 	"ydsz-trace/logs/controllers/client"
 	"ydsz-trace/logs/controllers/item"
+	"ydsz-trace/logs/controllers/alert"
 	"ydsz-trace/logs/controllers/logs"
 	"ydsz-trace/pkg/config"
 	"ydsz-trace/pkg/metrics"
@@ -104,8 +106,25 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 		auth.GET("/logs/queryItems", logs.QueryItem)
 		auth.POST("/logs/stream", logs.Stream)
 		auth.POST("/logs/tail", logs.Tail)
-	}
 
+		// 检索任务持久化：列表 / 详情 / 重试 / 删除
+		auth.GET("/logs/tasks/:taskNo", logs.QueryTask)
+		auth.GET("/logs/tasks", logs.ListTasks)
+		auth.POST("/logs/tasks/:taskNo/retry", logs.RetryTask)
+		auth.DELETE("/logs/tasks/:taskNo", logs.DeleteTask)
+
+		// 告警 webhook
+		auth.POST("/logs/alerts/rules", alert.AddRule)
+		auth.GET("/logs/alerts/rules", alert.ListRules)
+		auth.GET("/logs/alerts/rules/:id", alert.GetRule)
+		auth.PUT("/logs/alerts/rules/:id", alert.UpdateRule)
+		auth.DELETE("/logs/alerts/rules/:id", alert.DeleteRule)
+		auth.POST("/logs/alerts/rules/toggle", alert.ToggleRule)
+		auth.POST("/logs/alerts/rules/test", alert.TestFire)
+		auth.GET("/logs/alerts/events", alert.ListEvents)
+		auth.DELETE("/logs/alerts/events/:id", alert.DeleteEvent)
+		auth.GET("/logs/alerts/quota", alert.Quota)
+	}
 
 	// SPA 回退：未命中 API 的 GET/HEAD 请求回退到 index.html。
 	r.NoRoute(admin.ServeStatic)

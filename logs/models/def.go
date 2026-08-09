@@ -116,6 +116,74 @@ CREATE TABLE IF NOT EXISTS t_item (
     FOREIGN KEY (client_id) REFERENCES t_client(id)
 );
 CREATE INDEX IF NOT EXISTS idx_t_item_client_id ON t_item(client_id);
+
+CREATE TABLE IF NOT EXISTS t_task (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_no       TEXT    NOT NULL UNIQUE,
+    user_name     TEXT    DEFAULT '',
+    client_id     INTEGER NOT NULL,
+    item_id       INTEGER NOT NULL,
+    item_name     TEXT    NOT NULL,
+    log_date      TEXT    NOT NULL,
+    key_word      TEXT    DEFAULT '',
+    regex         INTEGER DEFAULT 0,
+    level         TEXT    DEFAULT '',
+    start_time    TEXT    DEFAULT '',
+    end_time      TEXT    DEFAULT '',
+    query_expr    TEXT    DEFAULT '',
+    line_count    INTEGER DEFAULT 0,
+    max_lines     INTEGER DEFAULT 0,
+    status        TEXT    DEFAULT 'pending',
+    node_total    INTEGER DEFAULT 0,
+    node_done     INTEGER DEFAULT 0,
+    match_count   INTEGER DEFAULT 0,
+    error_msg     TEXT    DEFAULT '',
+    zip_path      TEXT    DEFAULT '',
+    created_time  TEXT    DEFAULT (datetime('now', 'localtime')),
+    started_time  TEXT    DEFAULT '',
+    finished_time TEXT    DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_t_task_status ON t_task(status);
+CREATE INDEX IF NOT EXISTS idx_t_task_created ON t_task(created_time);
+
+-- 告警规则：按 item + 关键词/正则匹配的阈值告警，命中即 webhook 推送
+CREATE TABLE IF NOT EXISTS t_alert_rule (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    name           TEXT    NOT NULL,
+    item_id        INTEGER NOT NULL,
+    client_id      INTEGER NOT NULL DEFAULT 0,         -- 0 表示所有客户端
+    key_word       TEXT    DEFAULT '',
+    regex          INTEGER DEFAULT 0,                  -- 0 = 包含匹配，1 = 正则
+    level          TEXT    DEFAULT '',
+    threshold      INTEGER DEFAULT 1,                  -- 命中 >= threshold 才触发
+    interval_sec   INTEGER DEFAULT 300,                -- 评估间隔（秒），同时用作周期去重窗口
+    webhook_url    TEXT    NOT NULL,
+    enabled        INTEGER DEFAULT 1,
+    last_fired     TEXT    DEFAULT '',
+    created_by     TEXT    DEFAULT '',
+    created_time   TEXT    DEFAULT (datetime('now', 'localtime')),
+    updated_time   TEXT    DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (item_id) REFERENCES t_item(id)
+);
+CREATE INDEX IF NOT EXISTS idx_alert_rule_item ON t_alert_rule(item_id);
+CREATE INDEX IF NOT EXISTS idx_alert_rule_enabled ON t_alert_rule(enabled);
+
+-- 告警投递记录：每次触发 webhook 写一条，便于追溯与排错
+CREATE TABLE IF NOT EXISTS t_alert_event (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_id      INTEGER NOT NULL,
+    rule_name    TEXT    DEFAULT '',
+    webhook_url  TEXT    DEFAULT '',
+    status       TEXT    DEFAULT 'ok',                -- ok / fail
+    http_code    INTEGER DEFAULT 0,
+    match_count  INTEGER DEFAULT 0,
+    sample_text  TEXT    DEFAULT '',
+    error_msg    TEXT    DEFAULT '',
+    fired_time   TEXT    DEFAULT (datetime('now', 'localtime')),
+    FOREIGN KEY (rule_id) REFERENCES t_alert_rule(id)
+);
+CREATE INDEX IF NOT EXISTS idx_alert_event_rule ON t_alert_event(rule_id);
+CREATE INDEX IF NOT EXISTS idx_alert_event_time ON t_alert_event(fired_time);
 `
 
 // InitDB 初始化 SQLite 数据库连接。
