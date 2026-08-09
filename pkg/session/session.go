@@ -167,14 +167,14 @@ type Manager struct {
 	backend  Backend
 }
 
-// Session 单次请求内的会话值容器；dirty / destroyed 标志供中间件在请求结束时 flush。
+// Session 单次请求内的会话值容器；token 唯一标识会话，values 为本次请求的快照。
+//
+// Set/Delete 修改 values 后立即调用后端 Save，保证多副本下下个请求能读到最新值。
 type Session struct {
-	mu        sync.RWMutex
-	token     string
-	values    map[string]interface{}
-	dirty     bool
-	destroyed bool
-	mgr       *Manager
+	mu     sync.RWMutex
+	token  string
+	values map[string]interface{}
+	mgr    *Manager
 }
 
 // NewManager 创建默认进程内存后端的会话管理器。
@@ -228,7 +228,7 @@ func (m *Manager) MaxAge() time.Duration {
 	return m.maxAge
 }
 
-// SetMaxAge 设置会话有效期（默认 24h）。生产部署建议 >= 2h 且 <= 7d。
+// SetMaxAge 设置会话有效期（默认 24h）。生产建议 >= 2h 且 <= 7d。
 func (m *Manager) SetMaxAge(d time.Duration) {
 	if d <= 0 {
 		d = maxAge
@@ -253,8 +253,8 @@ func (m *Manager) Close() error {
 // 流程：
 //  1. 从 Cookie 读取 token
 //  2. 通过 Backend.Load 查找会话值（未命中 / 过期时创建新 token + 设置 Cookie）
-//  3. 将 *Session 与 *Manager 注入 context
-//  4. 请求结束后：dirty 时 Save 一份；destroyed 时 Remove 并清 Cookie
+//  3. 将 *Session 注入 context
+//  4. c.Next() 后不再批量 flush：Set/Delete 已即时 Save、Destroy 即时 Remove
 func (m *Manager) Middleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		token, values, created := m.resolveSession(c)
@@ -269,9 +269,6 @@ func (m *Manager) Middleware() gin.HandlerFunc {
 			m.setSessionCookie(c, token, int(m.maxAge.Seconds()))
 		}
 		c.Next()
-
-		// 请求结束：刷新到后端。
-		m.flushSession(c, s)
 	}
 }
 
@@ -283,29 +280,10 @@ func (m *Manager) resolveSession(c *gin.Context) (token string, values map[strin
 		if v, err := m.backend.Load(c.Request.Context(), token); err == nil && v != nil {
 			return token, v, false
 		}
-		// token 失效或不存在 → 创建新的
 	}
 
 	token = generateToken()
 	return token, make(map[string]interface{}), true
-}
-
-// flushSession 把本次请求对会话的修改回写到后端。
-func (m *Manager) flushSession(c *gin.Context, s *Session) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.destroyed {
-		if s.token != "" {
-			_ = m.backend.Remove(context.Background(), s.token)
-		}
-		return
-	}
-	if !s.dirty {
-		return
-	}
-	values := copyValues(s.values)
-	_ = m.backend.Save(context.Background(), s.token, values, int(m.maxAge.Seconds()))
 }
 
 // ========== 公开便捷函数 ==========
@@ -336,51 +314,77 @@ func GetString(c *gin.Context, key string) string {
 	return ""
 }
 
-// Set 写入键值到当前会话；请求结束统一持久化。
+// Set 写入键值到当前会话，并立即写入后端。
+//
+// 立即写入保证多副本共享时下个请求能读到当前值；单-key 会话不需要额外的请求末尾批量 flush。
 func Set(c *gin.Context, key string, value interface{}) {
 	s := Get(c)
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.values[key] = value
-	s.dirty = true
+	vals := s.snapshotLocked()
+	s.mu.Unlock()
+	_ = s.mgr.backend.Save(context.Background(), s.token, vals, int(s.mgr.maxAge.Seconds()))
 }
 
-// Delete 移除会话中的 key。
+// Delete 移除会话中的 key 并立即同步到后端。
 func Delete(c *gin.Context, key string) {
 	s := Get(c)
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	previousLen := len(s.values)
 	delete(s.values, key)
-	s.dirty = true
+	if len(s.values) == previousLen {
+		s.mu.Unlock()
+		return
+	}
+	vals := s.snapshotLocked()
+	s.mu.Unlock()
+	_ = s.mgr.backend.Save(context.Background(), s.token, vals, int(s.mgr.maxAge.Seconds()))
 }
 
-// Destroy 销毁当前会话：标记 destroyed，请求结束后从后端移除并清 Cookie。
+// Destroy 销毁当前会话：从后端移除 key、清 Cookie；下个同 token 请求将生成全新会话。
 func Destroy(c *gin.Context) {
 	s := Get(c)
 	mgr := GetManager(c)
-	if s == nil {
-		// fallback: 清 cookie
-		if mgr != nil {
-			mgr.setSessionCookie(c, "", -1)
-		} else {
-			http.SetCookie(c.Writer, &http.Cookie{
-				Name: cookieName, Value: "", Path: "/", MaxAge: -1,
-				HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
-			})
-		}
-		return
+
+	var token string
+	if s != nil {
+		s.mu.Lock()
+		token = s.token
+		s.mu.Unlock()
 	}
-	s.mu.Lock()
-	s.destroyed = true
-	s.values = make(map[string]interface{})
-	s.mu.Unlock()
-	mgr.setSessionCookie(c, "", -1)
+	if token == "" {
+		if v, err := c.Cookie(cookieName); err == nil {
+			token = v
+		}
+	}
+	if token != "" {
+		backend := func() Backend {
+			if mgr != nil {
+				mgr.mu.RLock()
+				defer mgr.mu.RUnlock()
+				return mgr.backend
+			}
+			return nil
+		}()
+		if backend != nil {
+			_ = backend.Remove(context.Background(), token)
+		}
+	}
+
+	if mgr != nil {
+		mgr.setSessionCookie(c, "", -1)
+	} else {
+		http.SetCookie(c.Writer, &http.Cookie{
+			Name: cookieName, Value: "", Path: "/", MaxAge: -1,
+			HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
+		})
+	}
 }
 
 // GetManager 从当前上下文取出 Manager；未命中返回 nil。
@@ -402,6 +406,15 @@ func generateToken() string {
 		return time.Now().Format("20060102150405.000000000")
 	}
 	return hex.EncodeToString(buf)
+}
+
+// snapshotLocked 在已持有写锁时拷贝当前 values。
+func (s *Session) snapshotLocked() map[string]interface{} {
+	dst := make(map[string]interface{}, len(s.values))
+	for k, v := range s.values {
+		dst[k] = v
+	}
+	return dst
 }
 
 // setSessionCookie 设置会话 Cookie（MaxAge > 0 设置；= -1 删除）。

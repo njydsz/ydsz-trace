@@ -175,12 +175,25 @@ func ServeStatic(c *gin.Context) {
 
 // Login 用户登录：校验账号密码并在会话中设置 username。
 //
+// GET 请求：返回 200，用于前端 SPA 登录页面渲染或探测登录状态（在会话中已有 username 时返回用户名）。
+// POST 请求：验证账号密码，成功则设置会话并返回用户名。
+//
 // 安全特性：
 //   - 密码加盐哈希比对（pkg/auth 模块）
 //   - 支持明文密码平滑迁移：首次登录成功自动哈希
 //   - 单 IP 速率限制，防御暴力破解（默认 60 秒内最多 5 次失败，超出封禁 300 秒）
 func Login(c *gin.Context) {
 	cfg := c.MustGet("cfg").(*config.Config)
+
+	// GET /admin/login：已登录则返回用户名，未登录也返回 200 供前端渲染
+	if c.Request.Method == http.MethodGet {
+		if userName := session.GetString(c, "username"); userName != "" {
+			api.Success(c, "用户已登录", gin.H{"username": userName})
+			return
+		}
+		api.Success(c, "未登录", nil)
+		return
+	}
 
 	// 先获取 session，判断用户是否已经登录
 	userName := session.GetString(c, "username")
@@ -272,4 +285,3 @@ func Exit(c *gin.Context) {
 	session.Destroy(c)
 	api.Success(c, "退出成功", nil)
 }
-
