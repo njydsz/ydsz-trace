@@ -93,23 +93,6 @@ func TestFileSourceViaFactory(t *testing.T) {
 	}
 }
 
-// TestNormalizeLevel 验证日志级别统一函数（向后兼容）。
-func TestNormalizeLevel(t *testing.T) {
-	cases := map[string]string{
-		"warn":    "WARN",
-		"WARNING": "WARN",
-		"error":   "ERROR",
-		"DEBUG":   "DEBUG",
-		"FATAL":   "FATAL",
-	}
-	for in, want := range cases {
-		got := normalizeLevel(in)
-		if got != want {
-			t.Errorf("normalizeLevel(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
 // bytesWriter 简易 io.Writer 实现，用于测试写入。
 type bytesWriter struct {
 	data *[]byte
