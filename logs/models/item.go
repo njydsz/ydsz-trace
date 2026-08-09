@@ -68,6 +68,22 @@ func ChangeItemStatus(id int64, now string) (int64, error) {
 	return num, nil
 }
 
+// ChangeItemStatusByIDAndStatus 按 id 设置项目日志状态为指定值。
+func ChangeItemStatusByIDAndStatus(id int64, status int, now string) (int64, error) {
+	statusStr := "0"
+	if status == 1 {
+		statusStr = "1"
+	}
+	res, err := DB.Exec(`UPDATE t_item SET status = ?, updated_time = ? WHERE id = ?`,
+		statusStr, now, id)
+	if err != nil {
+		log.Printf("update item status err : %v", err)
+		return 0, err
+	}
+	num, _ := res.RowsAffected()
+	return num, nil
+}
+
 // ReadItem 按 id 查询单个项目日志项。
 func ReadItem(id int64) (item TItem) {
 	err := DB.Get(&item, `SELECT * FROM t_item WHERE id = ?`, id)

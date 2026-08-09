@@ -81,6 +81,22 @@ func ChangeClientStatus(id int64, now string) (int64, error) {
 	return num, nil
 }
 
+// ChangeClientStatusByIDAndStatus 按 id 设置客户端启用/禁用状态为指定值。
+func ChangeClientStatusByIDAndStatus(id int64, status int, now string) (int64, error) {
+	statusStr := "0"
+	if status == 1 {
+		statusStr = "1"
+	}
+	res, err := DB.Exec(`UPDATE t_client SET status = ?, updated_time = ? WHERE id = ?`,
+		statusStr, now, id)
+	if err != nil {
+		log.Printf("update client status err : %v", err)
+		return 0, err
+	}
+	num, _ := res.RowsAffected()
+	return num, nil
+}
+
 // ReadClient 按 id 查询单个客户端。
 func ReadClient(id int64) (client TClient) {
 	err := DB.Get(&client, `SELECT * FROM t_client WHERE id = ?`, id)

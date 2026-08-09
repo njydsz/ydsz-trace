@@ -18,6 +18,17 @@ func nowStr() string {
 	return time.Now().Format("2006-01-02 15:04:05")
 }
 
+// idReq 通用 id 请求体（用于删除/状态切换）。
+type idReq struct {
+	ID int64 `json:"id" binding:"required"`
+}
+
+// statusReq 状态切换请求体。
+type statusReq struct {
+	ID     int64 `json:"id" binding:"required"`
+	Status int   `json:"status" binding:"required"`
+}
+
 // Add 新增项目日志项。
 func Add(c *gin.Context) {
 	var item models.TItem
@@ -42,8 +53,12 @@ func Add(c *gin.Context) {
 
 // Delete 按 id 删除项目日志项。
 func Delete(c *gin.Context) {
-	id, _ := strconv.ParseInt(c.Query("id"), 10, 64)
-	models.DeleteItem(id)
+	var req idReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.Fail(c, api.CodeBadRequest, "请求参数错误: id 不能为空")
+		return
+	}
+	models.DeleteItem(req.ID)
 	api.Success(c, "删除项目日志成功", nil)
 }
 
@@ -74,8 +89,12 @@ func Update(c *gin.Context) {
 
 // ChangeItemStatus 切换项目启用/禁用状态（0 ↔ 1）。
 func ChangeItemStatus(c *gin.Context) {
-	id, _ := strconv.ParseInt(c.Query("id"), 10, 64)
-	models.ChangeItemStatus(id, nowStr())
+	var req statusReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.Fail(c, api.CodeBadRequest, "请求参数错误: id 和 status 不能为空")
+		return
+	}
+	models.ChangeItemStatusByIDAndStatus(req.ID, req.Status, nowStr())
 	api.Success(c, "更新项目日志成功", nil)
 }
 

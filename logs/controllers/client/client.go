@@ -14,6 +14,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// idReq 通用 id 请求体（用于删除/状态切换）。
+type idReq struct {
+	ID int64 `json:"id" binding:"required"`
+}
+
+// statusReq 状态切换请求体。
+type statusReq struct {
+	ID     int64 `json:"id" binding:"required"`
+	Status int   `json:"status" binding:"required"`
+
 // RegisterReq 客户端注册请求体。
 type RegisterReq struct {
 	// VKey 预共享密钥
@@ -50,8 +60,12 @@ func Add(c *gin.Context) {
 
 // Delete 按 id 删除客户端。
 func Delete(c *gin.Context) {
-	id, _ := strconv.ParseInt(c.Query("id"), 10, 64)
-	models.DeleteClient(id)
+	var req idReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.Fail(c, api.CodeBadRequest, "请求参数错误: id 不能为空")
+		return
+	}
+	models.DeleteClient(req.ID)
 	api.Success(c, "删除客户端成功", nil)
 }
 
@@ -109,8 +123,12 @@ func Register(c *gin.Context) {
 
 // ChangeClientStatus 切换客户端启用/禁用状态（0 ↔ 1）。
 func ChangeClientStatus(c *gin.Context) {
-	id, _ := strconv.ParseInt(c.Query("id"), 10, 64)
-	models.ChangeClientStatus(id, nowStr())
+	var req statusReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.Fail(c, api.CodeBadRequest, "请求参数错误: id 和 status 不能为空")
+		return
+	}
+	models.ChangeClientStatusByIDAndStatus(req.ID, req.Status, nowStr())
 	api.Success(c, "更新客户端成功", nil)
 }
 
