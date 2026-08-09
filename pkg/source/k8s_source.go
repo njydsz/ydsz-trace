@@ -434,4 +434,15 @@ func init() {
 	if os.Getenv("YDSZ_SOURCE_DEBUG") == "1" {
 		log.SetFlags(log.Ltime | log.Lshortfile)
 	}
+	// 注册 K8sSource 工厂。
+	RegisterSource(SourceTypeK8s, func(cfg FactoryConfig) (Source, error) {
+		kcfg := K8sConfig{
+			NodeName:      getOpt(cfg.Options, "node_name", os.Getenv("YDSZ_NODE_NAME")),
+			Namespace:     getOpt(cfg.Options, "namespace", ""),
+			DiscoveryAnno: getOpt(cfg.Options, "discovery_anno", "ydsz-trace/collect"),
+			AppGroupKey:   getOpt(cfg.Options, "app_group_key", "ydsz-trace/app-group"),
+			AppNameKey:    getOpt(cfg.Options, "app_name_key", "ydsz-trace/app-name"),
+		}
+		return NewK8sSource(kcfg)
+	})
 }

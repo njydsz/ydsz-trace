@@ -1,200 +1,161 @@
-// Package metrics 提供 Prometheus 风格的运行时指标暴露。
+// Package metrics 提供 Prometheus 指标暴露。
 //
-// 当前实现为纯文本文本格式（Prometheus exposition format），
-// 可直接由 Prometheus server 抓取；后续可替换为 prometheus/client_grafana 原生 SDK。
+// 底层使用 github.com/prometheus/client_golang，提供 Counter/Gauge/Histogram/Summary，
+// 可由 /metrics 通过 promhttp.Handler 抓取。全局单例 Global() 自动注册到 prometheus.Registry，
+// 暴露：
+//
+//   - ydsz_queries_total / ydsz_queries_success / ydsz_queries_failed（counter）
+//   - ydsz_query_duration_seconds（histogram, seconds）
+//   - ydsz_clients_total / ydsz_clients_online（gauge）
+//   - ydsz_http_requests_total（counter, 按 method+code 分）
+//   - ydsz_http_request_duration_seconds（histogram, seconds）
+//   - Go runtime 指标（promhttp handler 自动附带）
 package metrics
 
 import (
-	"fmt"
 	"net/http"
-	"runtime"
-	"sync"
+	"strconv"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// Collector 指标收集器。
+const namespace = "ydsz"
+
+// Collector 指标收集器（全局单例，自动注册）。
 type Collector struct {
-	mu sync.RWMutex
+	reg *prometheus.Registry
 
-	// 应用启动时间
-	startTime time.Time
+	queryTotal    prometheus.Counter
+	querySuccess  prometheus.Counter
+	queryFailed   prometheus.Counter
+	queryDuration prometheus.Histogram
 
-	// 查询计数
-	queryTotal   int64
-	querySuccess int64
-	queryFailure int64
+	clientTotal  prometheus.Gauge
+	clientOnline prometheus.Gauge
 
-	// 查询耗时累计（毫秒）
-	queryDurationMs int64
-
-	// 客户端管理
-	clientTotal  int64
-	clientOnline int64
-
-	// HTTP 请求计数
-	httpRequestsTotal   int64
-	httpRequests4xx     int64
-	httpRequests5xx     int64
-	httpRequestDuration int64
+	httpRequests *prometheus.CounterVec
+	httpDuration prometheus.Histogram
 }
 
-// globalCollector 全局唯一收集器实例。
-var globalCollector = &Collector{startTime: time.Now()}
+var globalCollector *Collector
 
-// Global 返回全局 Collector 单例。
-func Global() *Collector {
-	return globalCollector
+// ensureGlobal 惰性初始化全局单例，并基于独立的 Registry（避免 default registry 自带 Go collector 冲突）。
+func ensureGlobal() *Collector {
+	if globalCollector != nil {
+		return globalCollector
+	}
+	reg := prometheus.NewRegistry()
+	// 显式附带 Go runtime 指标（对应原实现 ydsz_go_goroutines / ydsz_go_mem_alloc_bytes 等）
+	reg.MustRegister(collectors.NewGoCollector())
+	reg.MustRegister(collectors.NewProcessCollector(collectors.ProcessCollectorOpts{Namespace: namespace}))
+
+	queryDurationBuckets := prometheus.DefBuckets
+	httpDurationBuckets := []float64{0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
+
+	c := &Collector{
+		reg: reg,
+
+		queryTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace, Name: "queries_total", Help: "查询总次数",
+		}),
+		querySuccess: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace, Name: "queries_success", Help: "成功查询次数",
+		}),
+		queryFailed: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace, Name: "queries_failed", Help: "失败查询次数",
+		}),
+		queryDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: namespace, Name: "query_duration_seconds",
+			Help:    "查询耗时分布（秒）",
+			Buckets: queryDurationBuckets,
+		}),
+
+		clientTotal: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace, Name: "clients_total", Help: "注册客户端总数",
+		}),
+		clientOnline: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: namespace, Name: "clients_online", Help: "在线客户端数",
+		}),
+
+		httpRequests: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: namespace, Name: "http_requests_total", Help: "HTTP 请求总数",
+		}, []string{"method", "code"}),
+		httpDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Namespace: namespace, Name: "http_request_duration_seconds",
+			Help:    "HTTP 请求耗时分布（秒）",
+			Buckets: httpDurationBuckets,
+		}),
+	}
+	reg.MustRegister(
+		c.queryTotal, c.querySuccess, c.queryFailed, c.queryDuration,
+		c.clientTotal, c.clientOnline, c.httpRequests, c.httpDuration,
+	)
+	globalCollector = c
+	return c
 }
 
-// QueryStarted 记录一次查询开始。
-func (c *Collector) QueryStarted() {
-	c.mu.Lock()
-	c.queryTotal++
-	c.mu.Unlock()
-}
+// Global 返回全局 Collector 单例（惰性初始化）。
+func Global() *Collector { return ensureGlobal() }
 
-// QuerySucceeded 记录一次查询成功，duration 为耗时。
+// QueryStarted 查询总次数 +1。
+func (c *Collector) QueryStarted() { c.queryTotal.Inc() }
+
+// QuerySucceeded 记录成功查询及耗时。
 func (c *Collector) QuerySucceeded(duration time.Duration) {
-	c.mu.Lock()
-	c.querySuccess++
-	c.queryDurationMs += duration.Milliseconds()
-	c.mu.Unlock()
+	c.querySuccess.Inc()
+	c.queryDuration.Observe(duration.Seconds())
 }
 
-// QueryFailed 记录一次查询失败。
+// QueryFailed 记录失败查询及耗时。
 func (c *Collector) QueryFailed(duration time.Duration) {
-	c.mu.Lock()
-	c.queryFailure++
-	c.queryDurationMs += duration.Milliseconds()
-	c.mu.Unlock()
+	c.queryFailed.Inc()
+	c.queryDuration.Observe(duration.Seconds())
 }
 
-// UpdateClientStats 更新客户端统计数据。
+// UpdateClientStats 更新客户端统计（总数与在线数）。
 func (c *Collector) UpdateClientStats(total, online int64) {
-	c.mu.Lock()
-	c.clientTotal = total
-	c.clientOnline = online
-	c.mu.Unlock()
+	c.clientTotal.Set(float64(total))
+	c.clientOnline.Set(float64(online))
 }
 
-// HTTPRequestRecorded 记录一次 HTTP 请求。
+// HTTPRequestRecorded 记录一次 HTTP 请求（状态码 + 耗时）。
+//
+// 为兼容旧调用方保留该签名；method 维度由中间件内部记录时补齐。
 func (c *Collector) HTTPRequestRecorded(statusCode int, duration time.Duration) {
-	c.mu.Lock()
-	c.httpRequestsTotal++
-	c.httpRequestDuration += duration.Milliseconds()
-	if statusCode >= 400 && statusCode < 500 {
-		c.httpRequests4xx++
-	} else if statusCode >= 500 {
-		c.httpRequests5xx++
-	}
-	c.mu.Unlock()
+	code := strconv.Itoa(statusCode)
+	c.httpRequests.WithLabelValues("--", code).Inc()
+	c.httpDuration.Observe(duration.Seconds())
 }
 
-// Handler 返回 /metrics HTTP handler，暴露 Prometheus 格式指标。
-func (c *Collector) Handler() gin.HandlerFunc {
-	return func(ctx *gin.Context) {
-		c.mu.RLock()
-		uptime := time.Since(c.startTime).Seconds()
-		queryTotal := c.queryTotal
-		querySuccess := c.querySuccess
-		queryFailure := c.queryFailure
-		queryDuration := c.queryDurationMs
-		clientTotal := c.clientTotal
-		clientOnline := c.clientOnline
-		httpTotal := c.httpRequestsTotal
-		http4xx := c.httpRequests4xx
-		http5xx := c.httpRequests5xx
-		httpDuration := c.httpRequestDuration
-		c.mu.RUnlock()
-
-		// 计算平均耗时
-		var avgQueryMs, avgHTTPMs float64
-		if queryTotal > 0 {
-			avgQueryMs = float64(queryDuration) / float64(queryTotal)
-		}
-		if httpTotal > 0 {
-			avgHTTPMs = float64(httpDuration) / float64(httpTotal)
-		}
-
-		// Go runtime 指标
-		var memStats runtime.MemStats
-		runtime.ReadMemStats(&memStats)
-
-		// 构造 Prometheus exposition format 输出
-		var b string
-		b += "# HELP ydsz_uptime_seconds 应用运行时长（秒）\n"
-		b += "# TYPE ydsz_uptime_seconds counter\n"
-		b += fmt.Sprintf("ydsz_uptime_seconds %.2f\n", uptime)
-
-		b += "\n# HELP ydsz_queries_total 查询总次数\n"
-		b += "# TYPE ydsz_queries_total counter\n"
-		b += fmt.Sprintf("ydsz_queries_total %d\n", queryTotal)
-
-		b += "\n# HELP ydsz_queries_success 成功查询次数\n"
-		b += "# TYPE ydsz_queries_success counter\n"
-		b += fmt.Sprintf("ydsz_queries_success %d\n", querySuccess)
-
-		b += "\n# HELP ydsz_queries_failed 失败查询次数\n"
-		b += "# TYPE ydsz_queries_failed counter\n"
-		b += fmt.Sprintf("ydsz_queries_failed %d\n", queryFailure)
-
-		b += "\n# HELP ydsz_query_duration_ms 查询平均耗时（毫秒）\n"
-		b += "# TYPE ydsz_query_duration_ms gauge\n"
-		b += fmt.Sprintf("ydsz_query_duration_ms %.2f\n", avgQueryMs)
-
-		b += "\n# HELP ydsz_clients_total 注册客户端总数\n"
-		b += "# TYPE ydsz_clients_total gauge\n"
-		b += fmt.Sprintf("ydsz_clients_total %d\n", clientTotal)
-
-		b += "\n# HELP ydsz_clients_online 在线客户端数\n"
-		b += "# TYPE ydsz_clients_online gauge\n"
-		b += fmt.Sprintf("ydsz_clients_online %d\n", clientOnline)
-
-		b += "\n# HELP ydsz_http_requests_total HTTP 请求总数\n"
-		b += "# TYPE ydsz_http_requests_total counter\n"
-		b += fmt.Sprintf("ydsz_http_requests_total %d\n", httpTotal)
-
-		b += "\n# HELP ydsz_http_requests_4xx HTTP 4xx 错误数\n"
-		b += "# TYPE ydsz_http_requests_4xx counter\n"
-		b += fmt.Sprintf("ydsz_http_requests_4xx %d\n", http4xx)
-
-		b += "\n# HELP ydsz_http_requests_5xx HTTP 5xx 错误数\n"
-		b += "# TYPE ydsz_http_requests_5xx counter\n"
-		b += fmt.Sprintf("ydsz_http_requests_5xx %d\n", http5xx)
-
-		b += "\n# HELP ydsz_http_request_duration_ms HTTP 请求平均耗时（毫秒）\n"
-		b += "# TYPE ydsz_http_request_duration_ms gauge\n"
-		b += fmt.Sprintf("ydsz_http_request_duration_ms %.2f\n", avgHTTPMs)
-
-		b += "\n# HELP ydsz_go_goroutines 当前 goroutine 数量\n"
-		b += "# TYPE ydsz_go_goroutines gauge\n"
-		b += fmt.Sprintf("ydsz_go_goroutines %d\n", runtime.NumGoroutine())
-
-		b += "\n# HELP ydsz_go_mem_alloc_bytes 当前堆分配字节数\n"
-		b += "# TYPE ydsz_go_mem_alloc_bytes gauge\n"
-		b += fmt.Sprintf("ydsz_go_mem_alloc_bytes %d\n", memStats.Alloc)
-
-		b += "\n# HELP ydsz_go_mem_sys_bytes 从系统获取的内存字节数\n"
-		b += "# TYPE ydsz_go_mem_sys_bytes gauge\n"
-		b += fmt.Sprintf("ydsz_go_mem_sys_bytes %d\n", memStats.Sys)
-
-		b += "\n# HELP ydsz_go_gc_total GC 执行总次数\n"
-		b += "# TYPE ydsz_go_gc_total counter\n"
-		b += fmt.Sprintf("ydsz_go_gc_total %d\n", memStats.NumGC)
-
-		ctx.Header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		ctx.String(http.StatusOK, b)
-	}
+// HTTPRequestRecordedWithMethod 内部使用，记录含 method 的请求计数。
+func (c *Collector) HTTPRequestRecordedWithMethod(method string, statusCode int, duration time.Duration) {
+	code := strconv.Itoa(statusCode)
+	c.httpRequests.WithLabelValues(method, code).Inc()
+	c.httpDuration.Observe(duration.Seconds())
 }
 
-// HTTPMetricsMiddleware 返回 Gin 中间件，自动记录每个请求的状态码与耗时。
+// Handler 返回 /metrics HTTP handler。
+func (c *Collector) Handler() http.Handler {
+	return promhttp.HandlerFor(c.reg, promhttp.HandlerOpts{})
+}
+
+// GinHandler 是 Gin 中间件-friendly 的适配器。
+func (c *Collector) GinHandler() gin.HandlerFunc {
+	h := promhttp.HandlerFor(c.reg, promhttp.HandlerOpts{})
+	return func(ctx *gin.Context) { h.ServeHTTP(ctx.Writer, ctx.Request) }
+}
+
+// HTTPMetricsMiddleware 返回 Gin 中间件，按方法+状态码统计请求。
 func HTTPMetricsMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
+	c := Global()
+	return func(ctx *gin.Context) {
 		start := time.Now()
-		c.Next()
+		ctx.Next()
 		duration := time.Since(start)
-		Global().HTTPRequestRecorded(c.Writer.Status(), duration)
+		c.HTTPRequestRecordedWithMethod(ctx.Request.Method, ctx.Writer.Status(), duration)
 	}
 }

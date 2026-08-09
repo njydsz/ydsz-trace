@@ -372,4 +372,12 @@ func init() {
 	if os.Getenv("YDSZ_SOURCE_DEBUG") == "1" {
 		log.SetFlags(log.Ltime | log.Lshortfile)
 	}
+	// 注册 FileSource 工厂，让 CreateSource 按需构造。
+	RegisterSource(SourceTypeFile, func(cfg FactoryConfig) (Source, error) {
+		opts := []FileSourceOption{}
+		if v, ok := cfg.Options["root_dir"]; ok {
+			opts = append(opts, WithRootDir(v))
+		}
+		return NewFileSource(opts...), nil
+	})
 }

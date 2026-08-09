@@ -264,7 +264,27 @@ func Login(c *gin.Context) {
 	}
 
 	session.Set(c, "username", user.Username)
-	api.Success(c, "登录成功", gin.H{"username": uname})
+	role := determineRoleForUser(uname, cfg)
+	auth.SetRoleToSession(c, role)
+	auth.SetTenantToSession(c, defaultTenant(cfg))
+	api.Success(c, "登录成功", gin.H{"username": uname, "role": role.String()})
+}
+
+// determineRoleForUser 根据配置返回用户角色；单管理员部署默认 admin，
+// 多账号场景可通过配置文件 / 数据库扩展映射。
+func determineRoleForUser(uname string, cfg *config.Config) auth.Role {
+	// 默认 admin 账号持 admin 角色
+	admin := getAdminUser(cfg)
+	if uname == admin {
+		return auth.RoleAdmin
+	}
+	// 非 admin 账号默认 operator / 可由配置扩展
+	return auth.RoleOperator
+}
+
+// defaultTenant 返回默认租户标识（预留多租户扩展口）。
+func defaultTenant(_ *config.Config) string {
+	return "default"
 }
 
 // verifyPassword 根据存储的密码格式选择合适的验证方式。

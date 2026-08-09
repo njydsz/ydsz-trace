@@ -1,63 +1,72 @@
 package metrics
 
 import (
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
+
+func init() { gin.SetMode(gin.TestMode) }
 
 func TestGlobal(t *testing.T) {
 	c := Global()
 	if c == nil {
 		t.Fatal("Global() returned nil")
 	}
-	// 单例
 	if Global() != c {
 		t.Error("Global() should return same instance")
 	}
 }
 
 func TestQueryCounters(t *testing.T) {
-	collector := &Collector{}
-	collector.QueryStarted()
-	collector.QuerySucceeded(100)
-	collector.QueryFailed(50)
+	c := ensureFreshCollector(t)
 
-	if collector.queryTotal != 1 {
-		t.Errorf("queryTotal got %d want 1", collector.queryTotal)
+	before := testutil.ToFloat64(c.queryTotal)
+	c.QueryStarted()
+	if got := testutil.ToFloat64(c.queryTotal); got != before+1 {
+		t.Errorf("queryTotal got %v want %v", got, before+1)
 	}
-	if collector.querySuccess != 1 {
-		t.Errorf("querySuccess got %d want 1", collector.querySuccess)
+
+	c.QuerySucceeded(5 * time.Millisecond)
+	if got := testutil.ToFloat64(c.querySuccess); got < 1 {
+		t.Errorf("querySuccess got %v want >=1", got)
 	}
-	if collector.queryFailure != 1 {
-		t.Errorf("queryFailure got %d want 1", collector.queryFailure)
+
+	c.QueryFailed(2 * time.Millisecond)
+	if got := testutil.ToFloat64(c.queryFailed); got < 1 {
+		t.Errorf("queryFailed got %v want >=1", got)
 	}
 }
 
 func TestUpdateClientStats(t *testing.T) {
-	collector := &Collector{}
-	collector.UpdateClientStats(10, 7)
-	if collector.clientTotal != 10 {
-		t.Errorf("clientTotal got %d want 10", collector.clientTotal)
+	c := ensureFreshCollector(t)
+
+	c.UpdateClientStats(10, 7)
+	if got := testutil.ToFloat64(c.clientTotal); got != 10 {
+		t.Errorf("clientTotal got %v want 10", got)
 	}
-	if collector.clientOnline != 7 {
-		t.Errorf("clientOnline got %d want 7", collector.clientOnline)
+	if got := testutil.ToFloat64(c.clientOnline); got != 7 {
+		t.Errorf("clientOnline got %v want 7", got)
 	}
 }
 
 func TestHandler_Endpoint(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	handler := Global().Handler()
+	c := Global()
+	handler := c.Handler()
 
+	// 先打一条请求，使得 CounterVec / Histogram 产生样本
+	c.QueryStarted()
+	c.QuerySucceeded(5 * time.Millisecond)
+	c.HTTPRequestRecordedWithMethod("GET", 200, 10*time.Millisecond)
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request, _ = http.NewRequest("GET", "/metrics", nil)
-
-	handler(c)
+	handler.ServeHTTP(w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
@@ -70,26 +79,54 @@ func TestHandler_Endpoint(t *testing.T) {
 		t.Errorf("content-type got %q want text/plain", ct)
 	}
 
-	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "ydsz_uptime_seconds") {
-		t.Errorf("body should contain uptime metric, got: %s", string(body))
+	body := w.Body.String()
+	for _, metric := range []string{
+		namespace + "_queries_total",
+		namespace + "_clients_total",
+		namespace + "_http_requests_total",
+	} {
+		if !strings.Contains(body, metric) {
+			t.Errorf("body should contain %q\n%s", metric, body)
+		}
 	}
-	if !strings.Contains(string(body), "ydsz_queries_total") {
-		t.Errorf("body should contain queries_total metric")
+	// Go runtime collector should contribute
+	if !strings.Contains(body, "go_gc") {
+		t.Errorf("body should contain Go runtime gc metrics")
+	}
+}
+
+func TestHandler_GinAdapter(t *testing.T) {
+	c := Global()
+	handler := c.GinHandler()
+
+	w := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(w)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	handler(ctx)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("gin adapter status got %d want %d", w.Code, http.StatusOK)
 	}
 }
 
 func TestHTTPMetricsMiddleware(t *testing.T) {
-	gin.SetMode(gin.TestMode)
+	_ = Global() // ensure singleton initialized
 	middleware := HTTPMetricsMiddleware()
 
 	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request, _ = http.NewRequest("GET", "/test", nil)
+	ctx, _ := gin.CreateTestContext(w)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/test", nil)
 
-	middleware(c)
+	middleware(ctx)
 
-	if w.Code != http.StatusOK && w.Code != 0 {
+	if w.Code != http.StatusOK {
 		t.Errorf("unexpected status code: %d", w.Code)
 	}
+}
+
+// ensureFreshCollector 让指标从初始状态开始，便于断言增量。
+func ensureFreshCollector(t *testing.T) *Collector {
+	t.Helper()
+	globalCollector = nil
+	return Global()
 }

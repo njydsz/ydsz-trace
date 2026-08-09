@@ -155,6 +155,22 @@
           >
             下载 zip
           </el-button>
+          <el-button
+            v-if="lastSearchMeta"
+            :icon="VideoPlay"
+            size="small"
+            @click="gotoTail"
+          >
+            定位到 Tail
+          </el-button>
+          <el-button
+            v-if="lastSearchMeta && form.key"
+            :icon="Share"
+            size="small"
+            @click="gotoTrace"
+          >
+            追踪链路
+          </el-button>
         </div>
       </div>
       <el-table :data="rows" stripe size="small" max-height="480" style="width: 100%">
@@ -190,7 +206,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Search, Refresh, Download, Link } from '@element-plus/icons-vue'
+import { Search, Refresh, Download, Link, VideoPlay, Share } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { queryLogClients, queryItemsByClient, queryLogs, searchLogs } from '@/api/logs'
 import { queryAllItems } from '@/api/item'
@@ -488,6 +504,30 @@ async function fetchPage() {
   } finally {
     searching.value = false
   }
+}
+
+function gotoTail() {
+  if (!lastSearchMeta.value) return
+  const meta = lastSearchMeta.value
+  const q = new URLSearchParams()
+  if (meta.client && meta.client !== 0) q.set('client', String(meta.client))
+  if (meta.item) q.set('item', String(meta.item))
+  if (meta.date) q.set('date', meta.date)
+  if (meta.key) q.set('key', meta.key)
+  if (meta.level) q.set('level', meta.level)
+  if (meta.regex) q.set('regex', '1')
+  router.push('/logs/tail?' + q.toString())
+}
+
+function gotoTrace() {
+  if (!form.key) return
+  const q = new URLSearchParams()
+  q.set('traceId', form.key.trim())
+  if (form.date) q.set('date', form.date)
+  if (form.item) q.set('item', String(form.item))
+  if (form.client && form.client !== 0) q.set('client', String(form.client))
+  if (form.regex) q.set('regex', '1')
+  router.push('/trace?' + q.toString())
 }
 
 async function onDownloadZip() {

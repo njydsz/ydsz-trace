@@ -607,4 +607,15 @@ func init() {
 	if os.Getenv("YDSZ_SOURCE_DEBUG") == "1" {
 		log.SetFlags(log.Ltime | log.Lshortfile)
 	}
+	// 注册 DockerSource 工厂。
+	RegisterSource(SourceTypeDocker, func(cfg FactoryConfig) (Source, error) {
+		dcfg := DockerConfig{
+			SocketPath:      getOpt(cfg.Options, "socket", "/var/run/docker.sock"),
+			ContainerLabel:  getOpt(cfg.Options, "container_label", "ydsz-trace/collect=true"),
+			AppGroupKey:     getOpt(cfg.Options, "app_group_key", "ydsz-trace/app-group"),
+			AppGroupNameKey: getOpt(cfg.Options, "app_name_key", "ydsz-trace/app-name"),
+			UseWindowsPipe:  os.Getenv("OS") == "Windows_NT",
+		}
+		return NewDockerSource(dcfg)
+	})
 }

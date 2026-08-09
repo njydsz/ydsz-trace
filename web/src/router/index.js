@@ -14,6 +14,7 @@ import LogSearch from '@/views/LogSearch.vue'
 import LogTail from '@/views/LogTail.vue'
 import Alerts from '@/views/Alerts.vue'
 import TaskList from '@/views/TaskList.vue'
+import TraceView from '@/views/TraceView.vue'
 
 const routes = [
   // 公开路由：登录页。
@@ -31,6 +32,7 @@ const routes = [
       { path: 'tail', name: 'tail', component: LogTail, meta: { title: '实时追踪' } },
       { path: 'tasks', name: 'tasks', component: TaskList, meta: { title: '检索任务' } },
       { path: 'alerts', name: 'alerts', component: Alerts, meta: { title: '告警' } },
+      { path: 'trace', name: 'trace', component: TraceView, meta: { title: 'Trace 聚合' } },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/dashboard' },

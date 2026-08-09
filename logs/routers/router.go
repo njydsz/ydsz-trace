@@ -21,6 +21,7 @@ import (
 	"ydsz-trace/logs/controllers/item"
 	"ydsz-trace/logs/controllers/alert"
 	"ydsz-trace/logs/controllers/logs"
+	pkgauth "ydsz-trace/pkg/auth"
 	"ydsz-trace/pkg/config"
 	"ydsz-trace/pkg/metrics"
 	"ydsz-trace/pkg/session"
@@ -67,7 +68,7 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	r.GET("/", admin.Index)
 	r.GET("/health", admin.Health)
 	r.GET("/ready", admin.Ready)
-	r.GET("/metrics", metrics.Global().Handler())
+	r.GET("/metrics", metrics.Global().GinHandler())
 	r.GET("/admin/login", admin.Login)
 	r.POST("/admin/login", admin.Login)
 	r.GET("/admin/exit", admin.Exit)
@@ -79,51 +80,68 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	// logc 代理注册接口（代理调用，无 session，需放行）
 	r.POST("/client/register", client.Register)
 
-	// 鉴权分组：client / item / logs 需要登录
+	// 鉴权分组：client / item / logs 需要登录 + 按角色分读写
+	// viewer：只读查询（可浏览资源与搜索日志）
+	// operator：写操作（增删改资源、触发检索任务 / 告警配置）
+	// admin：用户/角色管理（预留，当前仅一个管理账号，全部对应到 admin）
 	auth := r.Group("")
 	auth.Use(filterAuth)
 	auth.Use(csrfProtection)
 	{
-		auth.POST("/client/add", client.Add)
-		auth.POST("/client/delete", client.Delete)
-		auth.POST("/client/update", client.Update)
-		auth.POST("/client/changeStatus", client.ChangeClientStatus)
+		// ━━ viewer 级别（只读）━━
 		auth.GET("/client/query", client.Query)
 		auth.GET("/client/queryAll", client.QueryAll)
 		auth.GET("/client/queryPage", client.QueryPage)
-
-		auth.POST("/item/add", item.Add)
-		auth.POST("/item/delete", item.Delete)
-		auth.POST("/item/update", item.Update)
-		auth.POST("/item/changeStatus", item.ChangeItemStatus)
 		auth.GET("/item/query", item.Query)
 		auth.GET("/item/queryAll", item.QueryAll)
 		auth.GET("/item/queryPage", item.QueryPage)
 
-		auth.POST("/logs/query", logs.Query)
-		auth.POST("/logs/search", logs.Search)
 		auth.GET("/logs/queryClients", logs.QueryClient)
 		auth.GET("/logs/queryItems", logs.QueryItem)
-		auth.POST("/logs/stream", logs.Stream)
-		auth.POST("/logs/tail", logs.Tail)
-
-		// 检索任务持久化：列表 / 详情 / 重试 / 删除
 		auth.GET("/logs/tasks/:taskNo", logs.QueryTask)
 		auth.GET("/logs/tasks", logs.ListTasks)
-		auth.POST("/logs/tasks/:taskNo/retry", logs.RetryTask)
-		auth.DELETE("/logs/tasks/:taskNo", logs.DeleteTask)
-
-		// 告警 webhook
-		auth.POST("/logs/alerts/rules", alert.AddRule)
 		auth.GET("/logs/alerts/rules", alert.ListRules)
 		auth.GET("/logs/alerts/rules/:id", alert.GetRule)
-		auth.PUT("/logs/alerts/rules/:id", alert.UpdateRule)
-		auth.DELETE("/logs/alerts/rules/:id", alert.DeleteRule)
-		auth.POST("/logs/alerts/rules/toggle", alert.ToggleRule)
-		auth.POST("/logs/alerts/rules/test", alert.TestFire)
 		auth.GET("/logs/alerts/events", alert.ListEvents)
-		auth.DELETE("/logs/alerts/events/:id", alert.DeleteEvent)
 		auth.GET("/logs/alerts/quota", alert.Quota)
+
+		// ━━ operator 级别（可写资源 + 触发查询）━━
+		op := auth.Group("")
+		op.Use(pkgauth.RequireRole(pkgauth.RoleOperator))
+		{
+			op.POST("/client/add", client.Add)
+			op.POST("/client/delete", client.Delete)
+			op.POST("/client/update", client.Update)
+			op.POST("/client/changeStatus", client.ChangeClientStatus)
+
+			op.POST("/item/add", item.Add)
+			op.POST("/item/delete", item.Delete)
+			op.POST("/item/update", item.Update)
+			op.POST("/item/changeStatus", item.ChangeItemStatus)
+
+			op.POST("/logs/query", logs.Query)
+			op.POST("/logs/search", logs.Search)
+			op.POST("/logs/trace", logs.Trace)
+			op.POST("/logs/stream", logs.Stream)
+			op.POST("/logs/tail", logs.Tail)
+			op.POST("/logs/tasks/:taskNo/retry", logs.RetryTask)
+			op.DELETE("/logs/tasks/:taskNo", logs.DeleteTask)
+
+			op.POST("/logs/alerts/rules", alert.AddRule)
+			op.PUT("/logs/alerts/rules/:id", alert.UpdateRule)
+			op.DELETE("/logs/alerts/rules/:id", alert.DeleteRule)
+			op.POST("/logs/alerts/rules/toggle", alert.ToggleRule)
+			op.POST("/logs/alerts/rules/test", alert.TestFire)
+			op.DELETE("/logs/alerts/events/:id", alert.DeleteEvent)
+		}
+
+		// ━━ admin 级别（用户 / 角色管理，预留）━━
+		admin := auth.Group("")
+		admin.Use(pkgauth.RequireRole(pkgauth.RoleAdmin))
+		{
+			// TODO: 新增用户管理、角色分配接口时登记在此处
+			_ = admin
+		}
 	}
 
 	// SPA 回退：未命中 API 的 GET/HEAD 请求回退到 index.html。

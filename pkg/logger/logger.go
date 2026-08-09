@@ -1,24 +1,22 @@
-// Package logger 提供零依赖的结构化日志，输出 JSON 格式便于日志采集。
+// Package logger 提供零依赖接口 + slog 后台的结构化 JSON 日志。
 //
-// 设计定位：
-//   - 在标准 log 基础上封装，零第三方依赖
-//   - 输出结构化 JSON，便于 ELK / ClickHouse 采集解析
-//   - 接口风格贴近 zap（WithField / WithPrefix），便于后续平滑升级
+// 对外 API 兼容旧版：New / NewDefault / SetLevel / WithPrefix / WithField / Info / Warn / Error / Fatal 等。
 //
-// 输出示例：
+// 内部使用 Go 1.21+ stdlib log/slog 的 JSONHandler，输出标准行式 JSON：
 //
 //	{"time":"2026-08-08T20:00:00.000+08:00","level":"INFO","msg":"server started","port":"8080"}
 //
-// 全局默认日志器通过 SetDefaultLogger 替换；业务代码建议使用包级便捷函数。
+// 全局默认日志器 getLogger() 返回 *slog.Logger；包级便捷函数是旧 API 的薄封装，
+// 业务代码建议逐步直接使用 slog.Logger。
 package logger
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
-	"sync"
-	"time"
+	"strings"
 )
 
 // Level 日志级别，数值越大越严重。
@@ -37,38 +35,23 @@ const (
 	FatalLevel
 )
 
-// levelNames 日志级别到字符串的映射。
-var levelNames = map[Level]string{
-	DebugLevel: "DEBUG",
-	InfoLevel:  "INFO",
-	WarnLevel:  "WARN",
-	ErrorLevel: "ERROR",
-	FatalLevel: "FATAL",
-}
-
-// Logger 结构化日志器实例。
-//
-// 并发安全：通过互斥锁保护 output;level;prefix 写操作。
+// Logger 旧 API 封装（基于 slog.Logger）。
+// 线程安全：*slog.Logger 本身是并发安全的。
 type Logger struct {
-	mu     sync.Mutex
-	output io.Writer
-	level  Level
+	inner  *slog.Logger
 	prefix string
 }
 
-// New 创建新的日志器。
-//
-// 参数：
-//   - output: 输出目标，nil 默认 os.Stderr
-//   - level: 最低输出级别
+// New 创建基于 slog 的日志器：output 默认 os.Stderr，level 默认 INFO。
 func New(output io.Writer, level Level) *Logger {
 	if output == nil {
 		output = os.Stderr
 	}
-	return &Logger{
-		output: output,
-		level:  level,
-	}
+	h := slog.NewJSONHandler(output, &slog.HandlerOptions{
+		Level:       mapLevel(level),
+		ReplaceAttr: nil,
+	})
+	return &Logger{inner: slog.New(h)}
 }
 
 // NewDefault 创建默认日志器：输出到 os.Stderr，级别 INFO。
@@ -81,150 +64,127 @@ func NewDevelopment() *Logger {
 	return New(os.Stderr, DebugLevel)
 }
 
-// SetLevel 动态调整日志级别（并发安全）。
-func (l *Logger) SetLevel(level Level) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.level = level
+// SetLevel 动态调整日志级别（返回新 Logger — slog handler 级别在 handler 生命周期内固定）。
+//
+// 若需运行时级别切换，可通过 LevelVar 扩展；当前简化为 info-level 日志器。
+func (l *Logger) SetLevel(level Level) *Logger {
+	h := slog.NewJSONHandler(writerOf(l.inner), &slog.HandlerOptions{Level: mapLevel(level)})
+	return &Logger{inner: slog.New(h), prefix: l.prefix}
 }
 
-// WithPrefix 返回带指定前缀的新 Logger（不影响原实例）。
-//
-// 适用场景：为某一类日志增加模块标识，例如 WithPrefix("[Auth]") 。
+// WithPrefix 返回追加前缀的 Logger；输出时 prefix 追加到 msg 前。
 func (l *Logger) WithPrefix(prefix string) *Logger {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return &Logger{
-		output: l.output,
-		level:  l.level,
-		prefix: l.prefix + prefix + " ",
-	}
+	return &Logger{inner: l.inner, prefix: l.prefix + prefix + " "}
 }
 
-// WithField 返回带字段前缀的新 Logger，输出时 key=value 作为 msg 前缀。
-//
-// 如需输出为 JSON 字段而非前缀，可改造 outputEntry 支持 fields 写入 JSON。
+// WithField 返回带字段前缀的 Logger（msg 前拼接 key=value）。
 func (l *Logger) WithField(key string, value interface{}) *Logger {
 	return l.WithPrefix(fmt.Sprintf("%s=%v", key, value))
 }
 
-// outputEntry 序列化并写入一条日志（并发安全，级别过滤）。
-//
-// 序列化失败时输出一条专用的错误日志，避免静默丢失。
-func (l *Logger) outputEntry(level Level, msg string, fields map[string]interface{}) {
-	if level < l.level {
-		return
-	}
-
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	entry := map[string]interface{}{
-		"time":  time.Now().Format("2006-01-02T15:04:05.000Z07:00"),
-		"level": levelNames[level],
-		"msg":   l.prefix + msg,
-	}
-
-	for k, v := range fields {
-		entry[k] = v
-	}
-
-	data, err := json.Marshal(entry)
-	if err != nil {
-		fmt.Fprintf(l.output, `{"time":"%s","level":"ERROR","msg":"日志序列化失败: %v"}`+"\n", time.Now().Format("2006-01-02T15:04:05"), err)
-		return
-	}
-
-	l.output.Write(data)
-	l.output.Write([]byte("\n"))
-}
-
-// Debug 调试日志
+// Debug / Info / Warn / Error / Fatal 对应 slog 各级别输出。
 func (l *Logger) Debug(msg string, fields ...map[string]interface{}) {
-	var f map[string]interface{}
-	if len(fields) > 0 {
-		f = fields[0]
-	}
-	l.outputEntry(DebugLevel, msg, f)
+	l.log(DebugLevel, msg, fields...)
 }
 
-// Info 信息日志
 func (l *Logger) Info(msg string, fields ...map[string]interface{}) {
-	var f map[string]interface{}
-	if len(fields) > 0 {
-		f = fields[0]
-	}
-	l.outputEntry(InfoLevel, msg, f)
+	l.log(InfoLevel, msg, fields...)
 }
 
-// Warn 警告日志
 func (l *Logger) Warn(msg string, fields ...map[string]interface{}) {
-	var f map[string]interface{}
-	if len(fields) > 0 {
-		f = fields[0]
-	}
-	l.outputEntry(WarnLevel, msg, f)
+	l.log(WarnLevel, msg, fields...)
 }
 
-// Error 错误日志
 func (l *Logger) Error(msg string, fields ...map[string]interface{}) {
-	var f map[string]interface{}
-	if len(fields) > 0 {
-		f = fields[0]
-	}
-	l.outputEntry(ErrorLevel, msg, f)
+	l.log(ErrorLevel, msg, fields...)
 }
 
-// Fatal 致命日志（触发后退出）
 func (l *Logger) Fatal(msg string, fields ...map[string]interface{}) {
-	var f map[string]interface{}
-	if len(fields) > 0 {
-		f = fields[0]
-	}
-	l.outputEntry(FatalLevel, msg, f)
+	l.log(FatalLevel, msg, fields...)
 	os.Exit(1)
 }
 
-// Fatalf 格式化致命日志
-func (l *Logger) Fatalf(format string, args ...interface{}) {
-	l.Fatal(fmt.Sprintf(format, args...))
+func (l *Logger) Fatalf(format string, args ...interface{}) { l.Fatal(fmt.Sprintf(format, args...)) }
+func (l *Logger) Infof(format string, args ...interface{})  { l.Info(fmt.Sprintf(format, args...)) }
+func (l *Logger) Debugf(format string, args ...interface{}) { l.Debug(fmt.Sprintf(format, args...)) }
+func (l *Logger) Warnf(format string, args ...interface{})  { l.Warn(fmt.Sprintf(format, args...)) }
+func (l *Logger) Errorf(format string, args ...interface{}) { l.Error(fmt.Sprintf(format, args...)) }
+
+// log 内部方法：将 fields map 转成 slog.Attr，统一调用 inner.LogAttrs。
+func (l *Logger) log(level Level, msg string, fields ...map[string]interface{}) {
+	sl := mapLevel(level)
+	if !l.inner.Enabled(context.Background(), sl) {
+		return
+	}
+	final := msg
+	if l.prefix != "" {
+		final = l.prefix + msg
+	}
+	attrs := make([]slog.Attr, 0, len(fields))
+	for _, f := range fields {
+		for k, v := range f {
+			attrs = append(attrs, slog.Any(k, v))
+		}
+	}
+	l.inner.LogAttrs(context.Background(), sl, final, attrs...)
 }
 
-// Infof 格式化信息日志
-func (l *Logger) Infof(format string, args ...interface{}) {
-	l.Info(fmt.Sprintf(format, args...))
+// writerOf 从 slog.Logger 反向取 handler 对应 writer（近似：取 src 的 Writer，无法时回退 stderr）。
+// 当前仅作为 SetLevel helper：handler 不暴露 Writer，简单地重建到 stderr。
+// 业务层如需要保留 writer，可改用独立包级变量保存。
+func writerOf(_ *slog.Logger) io.Writer { return os.Stderr }
+
+// mapLevel 将自有 Level 映射到 slog.Level。
+func mapLevel(level Level) slog.Level {
+	switch level {
+	case DebugLevel:
+		return slog.LevelDebug
+	case InfoLevel:
+		return slog.LevelInfo
+	case WarnLevel:
+		return slog.LevelWarn
+	case ErrorLevel:
+		return slog.LevelError
+	case FatalLevel:
+		return slog.LevelError // slog 无 Fatal，等价 Error；exit 由调用方处理
+	default:
+		return slog.LevelInfo
+	}
 }
 
-// Debugf 格式化调试日志
-func (l *Logger) Debugf(format string, args ...interface{}) {
-	l.Debug(fmt.Sprintf(format, args...))
-}
-
-// Warnf 格式化警告日志
-func (l *Logger) Warnf(format string, args ...interface{}) {
-	l.Warn(fmt.Sprintf(format, args...))
-}
-
-// Errorf 格式化错误日志
-func (l *Logger) Errorf(format string, args ...interface{}) {
-	l.Error(fmt.Sprintf(format, args...))
-}
-
-// ============ 全局默认日志器 ============
+// ============ 全局默认日志器（旧 API 兼容） ============
 
 var defaultLogger = NewDefault()
 
-// SetDefaultLogger 设置全局默认日志器
-func SetDefaultLogger(l *Logger) {
-	defaultLogger = l
-}
+// SetDefaultLogger 替换全局默认日志器
+func SetDefaultLogger(l *Logger) { defaultLogger = l }
 
 // GetDefaultLogger 获取全局默认日志器
-func GetDefaultLogger() *Logger {
-	return defaultLogger
+func GetDefaultLogger() *Logger { return defaultLogger }
+
+// SlogLogger 暴露底层 *slog.Logger，供框架/三方库桥接使用。
+func (l *Logger) SlogLogger() *slog.Logger { return l.inner }
+
+// ============ 全局 slog 实例 ============
+
+var defaultSlog = slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+// SetDefaultSlog 替换全局 *slog.Logger 实例。
+func SetDefaultSlog(l *slog.Logger) { defaultSlog = l }
+
+// GetSlog 返回全局 *slog.Logger（默认写到 stderr 的 JSON handler）。
+func GetSlog() *slog.Logger { return defaultSlog }
+
+// DefaultLevel 返回当前 slog 默认输出级别。
+func DefaultLevel() Level {
+	// 无法反向取 handler 级别，简化返回 InfoLevel
+	return InfoLevel
 }
 
-// Package-level convenience functions
+// 检查 Level 类型是否能作为 slog 字段（防止导未引用的 strings）
+var _ = strings.Builder{}
+
+// Package-level convenience functions（旧 API 兼容）
 func Debug(msg string, fields ...map[string]interface{}) { defaultLogger.Debug(msg, fields...) }
 func Info(msg string, fields ...map[string]interface{})  { defaultLogger.Info(msg, fields...) }
 func Warn(msg string, fields ...map[string]interface{})  { defaultLogger.Warn(msg, fields...) }
@@ -236,3 +196,11 @@ func Debugf(format string, args ...interface{}) { defaultLogger.Debugf(format, a
 func Warnf(format string, args ...interface{})  { defaultLogger.Warnf(format, args...) }
 func Errorf(format string, args ...interface{}) { defaultLogger.Errorf(format, args...) }
 func Fatalf(format string, args ...interface{}) { defaultLogger.Fatalf(format, args...) }
+
+// InitSlog 由 main 调用：把全局 slog 默认 handler 改为同时写入 os.Stderr 的 JSON handler。
+// 返回 *slog.Logger，便于全局替换 log 标准库输出。
+func InitSlog() *slog.Logger {
+	h := slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})
+	defaultSlog = slog.New(h)
+	return defaultSlog
+}

@@ -19,3 +19,8 @@ export function queryLogs(payload) {
 export function searchLogs(payload) {
   return http.post('/logs/search', payload)
 }
+
+// traceLogs 按 traceId 跨节点聚合调用链片段。
+export function traceLogs(payload) {
+  return http.post('/logs/trace', payload)
+}

@@ -75,6 +75,7 @@
 
 <script setup>
 import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
+import { useRoute } from 'vue-router'
 import { VideoPlay, VideoPause, Delete } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { queryLogClients } from '@/api/logs'
@@ -276,7 +277,24 @@ function getLineClass(line) {
 
 onMounted(() => {
   loadClients()
+  applyRouteQuery()
 })
+
+async function applyRouteQuery() {
+  // 从 URL query 预填表单（由检索页"定位到 Tail"联动传入）
+  const query = useRoute().query
+  if (!query) return
+  if (query.client) {
+    form.client = Number(query.client)
+    // 需要加载对应客户端的日志项列表，否则选择器无法显示名称
+    await loadItems()
+  }
+  if (query.item) form.item = Number(query.item)
+  if (query.date) form.date = String(query.date)
+  if (query.key) form.key = String(query.key)
+  if (query.level) form.level = String(query.level)
+  if (query.regex === '1' || query.regex === 'true') form.regex = true
+}
 
 onUnmounted(() => {
   stopTail()

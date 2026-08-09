@@ -1,7 +1,6 @@
 package source
 
 import (
-	"fmt"
 	"os"
 )
 
@@ -34,38 +33,11 @@ type FactoryConfig struct {
 //   - K8sSource: options["node_name"] = "worker-01",
 //     options["namespace"] = "",
 //     options["discovery_anno"] = "ydsz-trace/collect"
+//
+// 实现已改为注册表模式：各 Source 类型在 init() 中通过 RegisterSource 注册，
+// 新类型只需注册自身，无需修改本函数。
 func CreateSource(cfg FactoryConfig) (Source, error) {
-	switch cfg.Type {
-	case SourceTypeFile:
-		opts := []FileSourceOption{}
-		if v, ok := cfg.Options["root_dir"]; ok {
-			opts = append(opts, WithRootDir(v))
-		}
-		return NewFileSource(opts...), nil
-
-	case SourceTypeDocker:
-		dcfg := DockerConfig{
-			SocketPath:       getOpt(cfg.Options, "socket", "/var/run/docker.sock"),
-			ContainerLabel:   getOpt(cfg.Options, "container_label", "ydsz-trace/collect=true"),
-			AppGroupKey:      getOpt(cfg.Options, "app_group_key", "ydsz-trace/app-group"),
-			AppGroupNameKey:  getOpt(cfg.Options, "app_name_key", "ydsz-trace/app-name"),
-			UseWindowsPipe:   os.Getenv("OS") == "Windows_NT",
-		}
-		return NewDockerSource(dcfg)
-
-	case SourceTypeK8s:
-		kcfg := K8sConfig{
-			NodeName:      getOpt(cfg.Options, "node_name", os.Getenv("YDSZ_NODE_NAME")),
-			Namespace:     getOpt(cfg.Options, "namespace", ""),
-			DiscoveryAnno: getOpt(cfg.Options, "discovery_anno", "ydsz-trace/collect"),
-			AppGroupKey:   getOpt(cfg.Options, "app_group_key", "ydsz-trace/app-group"),
-			AppNameKey:    getOpt(cfg.Options, "app_name_key", "ydsz-trace/app-name"),
-		}
-		return NewK8sSource(kcfg)
-
-	default:
-		return nil, fmt.Errorf("不支持的 source 类型: %s", cfg.Type)
-	}
+	return ResolveSource(cfg)
 }
 
 // CreateSourceFromEnv 从环境变量构造 Source。
