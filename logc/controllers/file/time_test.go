@@ -1,6 +1,9 @@
 package file
 
-import "testing"
+import (
+	"regexp"
+	"testing"
+)
 
 func TestNormalizeLevel(t *testing.T) {
 	tests := []struct {
@@ -84,12 +87,34 @@ func TestMatchLogLine(t *testing.T) {
 		{"plain not contains", "INFO something happened", "ERROR", false, "", false},
 		{"level filter match", "INFO something", "", false, "INFO", true},
 		{"level filter no match", "INFO something", "", false, "ERROR", false},
-		{"regex match", "Error: code 500", `code \d+`, true, "", true},
-		{"regex no match", "Error: code abc", `code \d+`, true, "", false},
+		{"empty key no filter", "anything", "", false, "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := matchLogLine(tt.line, tt.key, tt.regex, nil, tt.level)
+			if got != tt.expected {
+				t.Errorf("matchLogLine() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestMatchLogLine_Regex(t *testing.T) {
+	re, err := regexp.Compile(`code \d+`)
+	if err != nil {
+		t.Fatalf("failed to compile regex: %v", err)
+	}
+	tests := []struct {
+		name     string
+		line     string
+		expected bool
+	}{
+		{"regex match", "Error: code 500", true},
+		{"regex no match", "Error: code abc", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := matchLogLine(tt.line, "", true, re, "")
 			if got != tt.expected {
 				t.Errorf("matchLogLine() = %v, want %v", got, tt.expected)
 			}

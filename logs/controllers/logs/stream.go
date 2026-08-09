@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
+	"strings"
 	"sync"
 
 	models "ydsz-trace/logs/models"
@@ -280,9 +280,9 @@ func mergedTailSSE(c *gin.Context, servers []string, path, key string, regex boo
 				if len(data) > 6 && data[:6] == "data: " {
 					content := data[6:]
 					// 去掉末尾换行
-					content = bytes.TrimRight([]byte(content), "\r\n")
+					content = strings.TrimRight(content, "\r\n")
 					if len(content) > 0 {
-						lineCh <- logLine{Server: srv, Line: string(content)}
+						lineCh <- logLine{Server: srv, Line: content}
 					}
 				}
 			}

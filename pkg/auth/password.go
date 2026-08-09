@@ -26,7 +26,7 @@ const hashPrefix = "$sha256$"
 // 返回格式：$sha256$<base64_salt>$<base64_hash>
 func HashPassword(password string) (string, error) {
 	salt := make([]byte, saltSize)
-	if _, err := io.Read(rand.Reader, salt); err != nil {
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
 		return "", fmt.Errorf("生成盐值失败: %w", err)
 	}
 

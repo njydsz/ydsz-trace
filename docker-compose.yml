@@ -29,7 +29,7 @@ services:
     depends_on:
       - logs
     environment:
-      YDSZ_LOGS_SERVER: logs:2021
+      YDSZ_LOG_SERVER: logs:2021
       YDSZ_CLIENT_KEY: ${YDSZ_CLIENT_KEY:-ydsz_trace_key}
       YDSZ_CORS_ORIGINS: ${YDSZ_CORS_ORIGINS:-http://localhost:*}
       TZ: Asia/Shanghai

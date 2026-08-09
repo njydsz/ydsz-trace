@@ -31,10 +31,10 @@ import (
 
 // loginAttempt 单 IP 登录尝试记录。
 type loginAttempt struct {
-	count     int
-	lastFail  time.Time
+	count    int
+	lastFail time.Time
 	blockedAt time.Time
-)
+}
 
 // loginRateLimiter 基于内存的登录速率限制器。
 //
