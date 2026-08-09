@@ -30,6 +30,9 @@
         <el-menu-item index="/tasks">
           <el-icon><List /></el-icon><span>检索任务</span>
         </el-menu-item>
+        <el-menu-item index="/alerts">
+          <el-icon><Bell /></el-icon><span>告警</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -54,7 +57,7 @@
  */
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Monitor, DataLine, Cpu, Document, Search, SwitchButton, VideoCamera, List } from '@element-plus/icons-vue'
+import { Monitor, DataLine, Cpu, Document, Search, SwitchButton, VideoCamera, List, Bell } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { logout } from '@/api/auth'
 import { useAuth } from '@/store/auth'
