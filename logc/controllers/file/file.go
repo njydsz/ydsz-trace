@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -236,6 +237,72 @@ func Tail(c *gin.Context) {
 	}
 
 	tailCleanupOutput() // 回调完成后清理临时输出资源
+}
+
+// searchResponse 在线分页搜索单节点响应。
+//
+// Lines：匹配到的文本行切片（含上下文行，不含空行）；Count：行数。
+type searchResponse struct {
+	Lines []string `json:"lines"`
+	Count int      `json:"count"`
+}
+
+// Search 与 Query 共享 key/regex/level/time 校验与 Source 读取路径，
+// 但以 JSON 行数组形式直接返回（不压缩为 zip），供 logs 服务端 /logs/search 在线分页流程使用。
+//
+// 安全措施：复用 sanitizeKey 校验 key，Path 仍由 Source 实现控制访问范围。
+func Search(c *gin.Context) {
+	s, ok := resolveSource(c)
+	if !ok || s == nil {
+		c.JSON(503, gin.H{"error": "source not initialized"})
+		return
+	}
+
+	var fileReq FileReq
+	data, err := c.GetRawData()
+	if err != nil {
+		log.Printf("读取请求体失败: %v", err)
+		c.Status(400)
+		return
+	}
+	if err := json.Unmarshal(data, &fileReq); err != nil {
+		log.Printf("JSON解析失败: %v", err)
+		c.Status(400)
+		return
+	}
+
+	safeKey, ok := sanitizeKey(fileReq.Key, fileReq.Regex)
+	if !ok {
+		log.Printf("非法key参数: %s (regex=%v)", fileReq.Key, fileReq.Regex)
+		c.Status(400)
+		return
+	}
+
+	var buf bytes.Buffer
+	scanCfg := source.ScanConfig{
+		Key:          safeKey,
+		Regex:        fileReq.Regex,
+		Level:        fileReq.Level,
+		StartTime:    fileReq.StartTime,
+		EndTime:      fileReq.EndTime,
+		ContextLines: fileReq.Line,
+	}
+	if _, err := s.Read(c.Request.Context(), fileReq.Path, scanCfg, &buf); err != nil {
+		log.Printf("Source.Read 失败: %v", err)
+		c.Status(404)
+		return
+	}
+
+	var lines []string
+	scanner := bufio.NewScanner(&buf)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+
+	c.JSON(http.StatusOK, searchResponse{Lines: lines, Count: len(lines)})
 }
 
 // tailCleanupOutput Tail 任务结束后做的清理工作。

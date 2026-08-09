@@ -99,6 +99,7 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 		auth.GET("/item/queryPage", item.QueryPage)
 
 		auth.POST("/logs/query", logs.Query)
+		auth.POST("/logs/search", logs.Search)
 		auth.GET("/logs/queryClients", logs.QueryClient)
 		auth.GET("/logs/queryItems", logs.QueryItem)
 		auth.POST("/logs/stream", logs.Stream)
