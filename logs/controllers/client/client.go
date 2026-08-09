@@ -10,23 +10,10 @@ import (
 	"time"
 
 	models "ydsz-trace/logs/models"
+	"ydsz-trace/pkg/api"
 
 	"github.com/gin-gonic/gin"
 )
-
-// PageResp 分页查询响应体。
-type PageResp struct {
-	Code string      `json:"code"`
-	Msg  string      `json:"msg"`
-	Data models.Page `json:"data"`
-}
-
-// ClientResp 单条客户端操作响应体。
-type ClientResp struct {
-	Code string         `json:"code"`
-	Msg  string         `json:"msg"`
-	Data models.TClient `json:"data"`
-}
 
 // RegisterReq 客户端注册请求体。
 type RegisterReq struct {
@@ -44,12 +31,12 @@ func Add(c *gin.Context) {
 	var client models.TClient
 	req, err := c.GetRawData()
 	if err != nil {
-		c.JSON(http.StatusOK, ClientResp{"400", "请求参数错误", models.TClient{}})
+		api.Fail(c, api.CodeBadRequest, "请求参数错误")
 		return
 	}
 	err = json.Unmarshal(req, &client)
 	if err != nil {
-		c.JSON(http.StatusOK, ClientResp{"400", "请求参数错误", models.TClient{}})
+		api.Fail(c, api.CodeBadRequest, "请求参数错误")
 		return
 	}
 	client.Online = "0"
@@ -59,21 +46,21 @@ func Add(c *gin.Context) {
 	client.UpdatedTime = nowStr()
 	id, err := models.AddClient(&client)
 	log.Printf("ID: %d, ERR: %v\n", id, err)
-	c.JSON(http.StatusOK, ClientResp{"200", "客户端新增成功", models.TClient{}})
+	api.Success(c, "客户端新增成功", gin.H{"id": id})
 }
 
 // Delete 按 id 删除客户端。
 func Delete(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Query("id"), 10, 64)
 	models.DeleteClient(id)
-	c.JSON(http.StatusOK, ClientResp{"200", "删除客户端成功", models.TClient{}})
+	api.Success(c, "删除客户端成功", nil)
 }
 
 // Query 按 id 查询单个客户端详情。
 func Query(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Query("id"), 10, 64)
 	client := models.ReadClient(id)
-	c.JSON(http.StatusOK, ClientResp{"200", "查询客户端成功", client})
+	api.Success(c, "查询客户端成功", client)
 }
 
 // Update 更新客户端全量字段。
@@ -81,17 +68,17 @@ func Update(c *gin.Context) {
 	var client models.TClient
 	req, err := c.GetRawData()
 	if err != nil {
-		c.JSON(http.StatusOK, ClientResp{"400", "请求参数错误", models.TClient{}})
+		api.Fail(c, api.CodeBadRequest, "请求参数错误")
 		return
 	}
 	err = json.Unmarshal(req, &client)
 	if err != nil {
-		c.JSON(http.StatusOK, ClientResp{"400", "请求参数错误", models.TClient{}})
+		api.Fail(c, api.CodeBadRequest, "请求参数错误")
 		return
 	}
 	client.UpdatedTime = nowStr()
 	models.UpdateClient(&client)
-	c.JSON(http.StatusOK, ClientResp{"200", "更新客户端成功", models.TClient{}})
+	api.Success(c, "更新客户端成功", nil)
 }
 
 // Register 接收 logc 自注册请求：校验 ip + port + vkey，通过后置 online=1。
@@ -118,20 +105,24 @@ func Register(c *gin.Context) {
 			}
 		}
 	}
-	c.JSON(http.StatusOK, ClientResp{"200", "客户端上线成功", models.TClient{}})
+	api.Success(c, "客户端上线成功", nil)
 }
 
 // ChangeClientStatus 切换客户端启用/禁用状态（0 ↔ 1）。
 func ChangeClientStatus(c *gin.Context) {
 	id, _ := strconv.ParseInt(c.Query("id"), 10, 64)
 	models.ChangeClientStatus(id, nowStr())
-	c.JSON(http.StatusOK, ClientResp{"200", "更新客户端成功", models.TClient{}})
+	api.Success(c, "更新客户端成功", nil)
 }
 
 // QueryAll 查询全部客户端列表。
 func QueryAll(c *gin.Context) {
-	clients, _ := models.QueryAllClient()
-	c.JSON(http.StatusOK, clients)
+	clients, err := models.QueryAllClient()
+	if err != nil {
+		api.Fail(c, api.CodeServerError, "查询客户端列表失败")
+		return
+	}
+	api.Success(c, "查询客户端列表成功", clients)
 }
 
 // QueryPage 分页查询客户端列表。
@@ -139,5 +130,5 @@ func QueryPage(c *gin.Context) {
 	pageNum, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
 	page := models.QueryPageClient(pageNum, pageSize)
-	c.JSON(http.StatusOK, PageResp{"200", "分页查询客户端成功", page})
+	api.Paginated(c, "分页查询客户端成功", page.List, page.TotalCount, pageNum, pageSize)
 }

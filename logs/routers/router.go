@@ -1,10 +1,10 @@
 // Package routers 定义 logs 服务端的 HTTP 路由。
 //
 // 中间件链（按序）：
-//	gin.Logger → gin.Recovery → 配置注入 → 会话中间件 → CORS → 鉴权中间件
+//	gin.Logger → gin.Recovery → 配置注入 → 会话中间件 → CORS → metrics → 鉴权中间件
 //
 // 路由分组：
-//	- 公开：/, /health, /ready, /admin/login, /admin/exit, /client/register
+//	- 公开：/, /health, /ready, /metrics, /admin/login, /admin/exit, /client/register
 //	- 需鉴权：/client/*, /item/*, /logs/*
 //	- SPA 回退：未命中 API 的 GET 请求回退到 index.html
 package routers
@@ -20,6 +20,7 @@ import (
 	"ydsz-trace/logs/controllers/item"
 	"ydsz-trace/logs/controllers/logs"
 	"ydsz-trace/pkg/config"
+	"ydsz-trace/pkg/metrics"
 	"ydsz-trace/pkg/session"
 
 	"github.com/gin-contrib/cors"
@@ -57,10 +58,14 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 		MaxAge:           12 * time.Hour,
 	}))
 
+	// Prometheus 指标收集中间件（记录请求数/状态码/耗时）
+	r.Use(metrics.HTTPMetricsMiddleware())
+
 	// 健康检查与登录（无需鉴权）
 	r.GET("/", admin.Index)
 	r.GET("/health", admin.Health)
 	r.GET("/ready", admin.Ready)
+	r.GET("/metrics", metrics.Global().Handler())
 	r.GET("/admin/login", admin.Login)
 	r.POST("/admin/login", admin.Login)
 	r.GET("/admin/exit", admin.Exit)
@@ -95,6 +100,8 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 		auth.POST("/logs/query", logs.Query)
 		auth.GET("/logs/queryClients", logs.QueryClient)
 		auth.GET("/logs/queryItems", logs.QueryItem)
+		auth.POST("/logs/stream", logs.Stream)
+		auth.POST("/logs/tail", logs.Tail)
 	}
 
 

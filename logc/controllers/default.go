@@ -1,4 +1,5 @@
-// Package controllers 包含 logc 客户端的公共控制器（健康检查等）。package controllers
+// Package controllers 包含 logc 客户端的公共控制器（健康检查等）。
+package controllers
 
 import (
 	"net/http"

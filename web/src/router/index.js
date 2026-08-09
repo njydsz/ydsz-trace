@@ -11,6 +11,7 @@ import Dashboard from '@/views/Dashboard.vue'
 import Clients from '@/views/Clients.vue'
 import Items from '@/views/Items.vue'
 import LogSearch from '@/views/LogSearch.vue'
+import LogTail from '@/views/LogTail.vue'
 
 const routes = [
   // 公开路由：登录页。
@@ -25,6 +26,7 @@ const routes = [
       { path: 'clients', name: 'clients', component: Clients, meta: { title: '客户端管理' } },
       { path: 'items', name: 'items', component: Items, meta: { title: '日志项管理' } },
       { path: 'logs', name: 'logs', component: LogSearch, meta: { title: '日志检索' } },
+      { path: 'tail', name: 'tail', component: LogTail, meta: { title: '实时追踪' } },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/dashboard' },

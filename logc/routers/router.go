@@ -51,11 +51,12 @@ func SetupRouter(cfg *config.Config) *gin.Engine {
 		MaxAge:           12 * time.Hour,
 	}))
 
-	// 注册路由：健康检查、日志查询、注册心跳。
+	// 注册路由：健康检查、日志查询、实时跟踪、注册心跳。
 	r.GET("/", controllers.Main)
 	r.GET("/health", controllers.Health)
 	r.GET("/ready", controllers.Ready)
 	r.POST("/file/query", file.Query)
+	r.POST("/file/tail", file.Tail)
 	r.POST("/register", register.Register)
 	r.GET("/checkOn", register.CheckOnline)
 

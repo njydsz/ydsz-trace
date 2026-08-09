@@ -1,16 +1,16 @@
 // Package file 提供日志文件搜索与下载能力。
 //
 // 关键安全措施：
-//   - key 参数白名单校验（仅字母/数字/连字符/下划线）
+//   - key 参数白名单校验（仅字母/数字/连字符/下划线，正则模式下放宽至可打印字符）
 //   - path 参数禁止包含 ".."
 //   - 所有文件拼接使用 filepath.Join
+//   - 正则模式下限制正则长度 256，防止 ReDoS
 package file
 
 import (
-	"archive/zip"
 	"bufio"
 	"encoding/json"
-	"io"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"ydsz-trace/pkg/config"
+	"ydsz-trace/pkg/util"
 
 	"github.com/gin-gonic/gin"
 )
@@ -32,16 +33,43 @@ type FileReq struct {
 	Key string `json:"key"`
 	// Line 命中行后追加读取的上下文行数
 	Line int64 `json:"line"`
+	// Regex 是否启用正则匹配模式（默认 false，使用简单字符串包含）
+	Regex bool `json:"regex"`
+	// Level 日志级别过滤（空=不过滤，可选: DEBUG/INFO/WARN/ERROR/FATAL）
+	Level string `json:"level"`
+	// StartTime 时间范围起始（格式 HH:MM:SS 或 HH:MM，空=不限制）
+	StartTime string `json:"startTime"`
+	// EndTime 时间范围结束（格式 HH:MM:SS 或 HH:MM，空=不限制）
+	EndTime string `json:"endTime"`
 }
 
 // safeKeyPattern 合法 key 白名单：字母、数字、连字符、下划线，长度 1-128。
 var safeKeyPattern = regexp.MustCompile(`^[a-zA-Z0-9\-_]{1,128}$`)
 
+// safeRegexPattern 正则模式下允许的字符：可打印 ASCII（不含控制字符），长度 1-256。
+var safeRegexPattern = regexp.MustCompile(`^[[:print:]]{1,256}$`)
+
+// logLevelPattern 常见日志级别匹配模式（行内搜索用）。
+var logLevelPattern = regexp.MustCompile(`(?i)\b(DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL)\b`)
+
 // sanitizeKey 校验 key 参数，防止路径遍历与恶意输入。
 //
+// regex 模式下放宽校验（允许正则元字符），但限制长度防 ReDoS。
 // 返回清洗后的 key 与是否合法。
-func sanitizeKey(key string) (string, bool) {
-	if len(key) == 0 || len(key) > 128 {
+func sanitizeKey(key string, regex bool) (string, bool) {
+	if len(key) == 0 {
+		return "", false
+	}
+	if regex {
+		if len(key) > 256 {
+			return "", false
+		}
+		if !safeRegexPattern.MatchString(key) {
+			return "", false
+		}
+		return key, true
+	}
+	if len(key) > 128 {
 		return "", false
 	}
 	if !safeKeyPattern.MatchString(key) {
@@ -72,9 +100,9 @@ func Query(c *gin.Context) {
 	}
 
 	// 安全校验：清理 key 参数，防止路径遍历
-	safeKey, ok := sanitizeKey(fileReq.Key)
+	safeKey, ok := sanitizeKey(fileReq.Key, fileReq.Regex)
 	if !ok {
-		log.Printf("非法key参数: %s", fileReq.Key)
+		log.Printf("非法key参数: %s (regex=%v)", fileReq.Key, fileReq.Regex)
 		c.Status(400)
 		return
 	}
@@ -86,9 +114,20 @@ func Query(c *gin.Context) {
 		return
 	}
 
-	result := ReadString(fileReq.Path, safeKey, fileReq.Line, cfg.StringOr("temppath", "./temp/logc/"))
+	result := ReadString(ReadConfig{
+		Filename:  fileReq.Path,
+		Key:       safeKey,
+		Line:      fileReq.Line,
+		TempPath:  cfg.StringOr("temppath", "./temp/logc/"),
+		Regex:     fileReq.Regex,
+		Level:     fileReq.Level,
+		StartTime: fileReq.StartTime,
+		EndTime:   fileReq.EndTime,
+	})
 	defer func() {
-		os.Remove(result)
+		if result != "" {
+			os.Remove(result)
+		}
 	}()
 
 	if result == "" {
@@ -99,40 +138,73 @@ func Query(c *gin.Context) {
 	c.File(result)
 }
 
+// ReadConfig 日志搜索配置参数。
+type ReadConfig struct {
+	Filename  string
+	Key       string
+	Line      int64
+	TempPath  string
+	Regex     bool
+	Level     string
+	StartTime string
+	EndTime   string
+}
+
 // ReadString 按关键字搜索日志文件并输出到临时文件，再压缩为 zip 返回路径。
 //
 // 行为：
 //   - 每次命中关键字所在行及其后 line 行写入结果
 //   - 若后续命中在当前上下文窗口内，则扩展窗口
-//   - 结果文件位于 temppath/key.log
+//   - 支持 regex 模式：使用正则匹配替代简单字符串包含
+//   - 支持 level 过滤：仅保留包含指定级别的行
+//   - 支持时间范围：仅保留时间戳在范围内的行
 //
-// 返回 zip 文件路径；失败返回空字符串。
-func ReadString(filename string, key string, line int64, temppath string) (file string) {
+// 返回 zip 文件路径；失败或无匹配返回空字符串。
+func ReadString(cfg ReadConfig) (file string) {
 	startTime := time.Now()
-	defer func(startTime time.Time) {
+	defer func() {
 		log.Printf("共耗时：%s\n", time.Since(startTime))
-	}(startTime)
+	}()
 
-	f, err := os.Open(filename)
+	f, err := os.Open(cfg.Filename)
 	if err != nil {
 		log.Printf("打开文件失败: %v", err)
 		return ""
 	}
 	defer f.Close()
 
+	// 预编译正则表达式（regex 模式下）
+	var re *regexp.Regexp
+	if cfg.Regex {
+		var err error
+		re, err = regexp.Compile(cfg.Key)
+		if err != nil {
+			log.Printf("正则编译失败: %v", err)
+			return ""
+		}
+	}
+
+	// 解析时间范围
+	hasTimeRange := cfg.StartTime != "" || cfg.EndTime != ""
+	var startSeconds, endSeconds int
+	if hasTimeRange {
+		startSeconds = parseTimeToSeconds(cfg.StartTime)
+		endSeconds = parseTimeToSeconds(cfg.EndTime)
+	}
+
 	r := bufio.NewReader(f)
-	var lineBegin int64 = 0
-	var lineFirst int64 = 0
-	var lineOver int64 = 0
+	var lineBegin int64
+	var lineFirst int64
+	var lineOver int64
 
 	// 确保临时目录存在
-	if err := os.MkdirAll(temppath, 0755); err != nil {
+	if err := os.MkdirAll(cfg.TempPath, 0755); err != nil {
 		log.Printf("创建临时目录失败: %v", err)
 		return ""
 	}
 
 	// 安全：使用 filepath.Join 拼接路径
-	safeFilename := filepath.Join(temppath, key+".log")
+	safeFilename := filepath.Join(cfg.TempPath, cfg.Key+".log")
 	dstFile, err := os.OpenFile(safeFilename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		log.Printf("创建临时文件失败: %v", err)
@@ -141,56 +213,380 @@ func ReadString(filename string, key string, line int64, temppath string) (file 
 
 	bufWriter := bufio.NewWriter(dstFile)
 
-	// 首次遍历记录出现行号
 	for {
 		str, err := r.ReadString('\n')
 		lineBegin++
-		if err != nil {
+		if err != nil && str == "" {
 			break
 		}
-		if strings.Contains(str, key) {
-			if lineFirst == 0 && lineOver == 0 {
-				lineFirst = lineBegin
-				lineOver = lineFirst + line
-				log.Printf("lineFirst:%d\n", lineFirst)
-				log.Printf("lineBegin:%d\n", lineBegin)
-				log.Printf("lineOver:%d\n", lineOver)
+
+		// 关键字匹配
+		matched := false
+		if cfg.Regex && re != nil {
+			matched = re.MatchString(str)
+		} else if cfg.Key != "" {
+			matched = strings.Contains(str, cfg.Key)
+		}
+
+		if !matched {
+			// 上下文窗口内仍写入
+			if lineBegin < lineOver {
+				bufWriter.WriteString(str)
+			}
+			if lineBegin == lineOver {
+				bufWriter.WriteString(str)
+				bufWriter.WriteString("\n")
+			}
+			if err != nil {
+				break
+			}
+			continue
+		}
+
+		// 日志级别过滤
+		if cfg.Level != "" {
+			levelFound := logLevelPattern.FindString(str)
+			if !strings.EqualFold(levelFound, normalizeLevel(cfg.Level)) {
+				// 级别不匹配，但仍检查上下文窗口
+				if lineBegin < lineOver {
+					bufWriter.WriteString(str)
+				}
+				if lineBegin == lineOver {
+					bufWriter.WriteString(str)
+					bufWriter.WriteString("\n")
+				}
+				if err != nil {
+					break
+				}
+				continue
 			}
 		}
-		if lineBegin < lineOver {
-			bufWriter.WriteString(str)
-		}
-		if lineBegin == lineOver {
-			bufWriter.WriteString(str)
-			bufWriter.WriteString("\n")
-		}
-		if lineOver > 0 && lineBegin > lineOver {
-			if strings.Contains(str, key) {
-				if lineFirst != 0 && lineOver != 0 {
-					lineFirst = lineBegin
-					lineOver = lineFirst + line
-					log.Printf("lineFirst:%d\n", lineFirst)
-					log.Printf("lineBegin:%d\n", lineBegin)
-					log.Printf("lineOver:%d\n", lineOver)
+
+		// 时间范围过滤
+		if hasTimeRange {
+			lineSeconds := extractTimeFromLogLine(str)
+			if lineSeconds >= 0 {
+				if cfg.StartTime != "" && lineSeconds < startSeconds {
+					if lineBegin < lineOver {
+						bufWriter.WriteString(str)
+					}
+					if lineBegin == lineOver {
+						bufWriter.WriteString(str)
+						bufWriter.WriteString("\n")
+					}
+					if err != nil {
+						break
+					}
+					continue
+				}
+				if cfg.EndTime != "" && lineSeconds > endSeconds {
+					if lineBegin < lineOver {
+						bufWriter.WriteString(str)
+					}
+					if lineBegin == lineOver {
+						bufWriter.WriteString(str)
+						bufWriter.WriteString("\n")
+					}
+					if err != nil {
+						break
+					}
+					continue
 				}
 			}
 		}
+
+		// 命中：更新上下文窗口
+		if lineFirst == 0 && lineOver == 0 {
+			lineFirst = lineBegin
+			lineOver = lineFirst + cfg.Line
+		} else if lineBegin > lineOver {
+			// 扩展窗口
+			lineFirst = lineBegin
+			lineOver = lineFirst + cfg.Line
+		}
+
+		bufWriter.WriteString(str)
+		if lineBegin == lineOver {
+			bufWriter.WriteString("\n")
+		}
+
+		if err != nil {
+			break
+		}
 	}
+
 	bufWriter.Flush()
 	dstFile.Close()
 
 	log.Printf("查找耗时：%s\n", time.Since(startTime))
 
-	// 压缩
-	startTimeThree := time.Now()
+	// 压缩（复用 pkg/util.Zip 统一实现）
 	ip := GetLocalIPv4()
-	dst := filepath.Join(temppath, ip+".zip")
-	if err := Zip(dst, safeFilename); err != nil {
+	dst := filepath.Join(cfg.TempPath, ip+".zip")
+	if err := util.Zip(dst, safeFilename); err != nil {
 		log.Printf("压缩失败: %v", err)
 		return ""
 	}
-	log.Printf("压缩耗时：%s\n", time.Since(startTimeThree))
 	return dst
+}
+
+// normalizeLevel 统一日志级别大小写与别名。
+func normalizeLevel(level string) string {
+	switch strings.ToUpper(level) {
+	case "WARN", "WARNING":
+		return "WARN"
+	case "DEBUG":
+		return "DEBUG"
+	case "INFO":
+		return "INFO"
+	case "ERROR":
+		return "ERROR"
+	case "FATAL":
+		return "FATAL"
+	default:
+		return strings.ToUpper(level)
+	}
+}
+
+// parseTimeToSeconds 将 HH:MM:SS 或 HH:MM 格式转为当日秒数，解析失败返回 -1。
+func parseTimeToSeconds(s string) int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return -1
+	}
+	parts := strings.Split(s, ":")
+	if len(parts) < 2 || len(parts) > 3 {
+		return -1
+	}
+	h, err1 := parsePart(parts[0])
+	m, err2 := parsePart(parts[1])
+	if err1 != nil || err2 != nil || h > 23 || m > 59 {
+		return -1
+	}
+	total := h*3600 + m*60
+	if len(parts) == 3 {
+		sec, err := parsePart(parts[2])
+		if err != nil || sec > 59 {
+			return -1
+		}
+		total += sec
+	}
+	return total
+}
+
+// parsePart 解析单个时间字段。
+func parsePart(s string) (int, error) {
+	var n int
+	_, err := fmt.Sscanf(s, "%d", &n)
+	return n, err
+}
+
+// extractTimeFromLogLine 尝试从日志行首提取时间戳并返回当日秒数。
+//
+// 支持的格式：
+//   - "2006-01-02 15:04:05" / "2006-01-02 15:04"
+//   - "15:04:05" / "15:04"
+//   - "2006/01/02 15:04:05"
+// 无法提取时返回 -1。
+func extractTimeFromLogLine(line string) int {
+	line = strings.TrimSpace(line)
+	if len(line) < 8 {
+		return -1
+	}
+
+	// 尝试常见格式
+	loc := time.Local
+	formats := []string{
+		"2006-01-02 15:04:05",
+		"2006-01-02 15:04",
+		"2006/01/02 15:04:05",
+		"2006/01/02 15:04",
+	}
+
+	for _, f := range formats {
+		if len(line) >= len(f) {
+			t, err := time.ParseInLocation(f, line[:len(f)], loc)
+			if err == nil {
+				return t.Hour()*3600 + t.Minute()*60 + t.Second()
+			}
+		}
+	}
+
+	// 仅时间 "15:04:05" / "15:04"
+	shortFormats := []string{
+		"15:04:05",
+		"15:04",
+	}
+	for _, f := range shortFormats {
+		if len(line) >= len(f) {
+			t, err := time.ParseInLocation(f, line[:len(f)], loc)
+			if err == nil {
+				return t.Hour()*3600 + t.Minute()*60 + t.Second()
+			}
+		}
+	}
+
+	return -1
+}
+
+// TailReq 实时日志跟踪请求体。
+type TailReq struct {
+	// Path 日志文件的绝对路径
+	Path string `json:"path"`
+	// Key 搜索关键字
+	Key string `json:"key"`
+	// Regex 是否使用正则匹配
+	Regex bool `json:"regex"`
+	// Level 日志级别过滤
+	Level string `json:"level"`
+	// FollowDuration 跟踪持续时间（秒），0 表示由客户端断开后结束
+	FollowDuration int64 `json:"followDuration"`
+}
+
+// Tail 实时日志跟踪端点：读取文件末尾，并在文件增长时持续推送新匹配行。
+//
+// 行为：
+//   - 跳转到文件末尾（仅跟踪新增内容）
+//   - 通过轮询监听文件变化（每 500ms）
+//   - 匹配 Key/Regex/Level 过滤后通过 SSE 推送给客户端
+func Tail(c *gin.Context) {
+	var tailReq TailReq
+	data, err := c.GetRawData()
+	if err != nil {
+		log.Printf("读取请求体失败: %v", err)
+		c.Status(400)
+		return
+	}
+	if err := json.Unmarshal(data, &tailReq); err != nil {
+		log.Printf("JSON解析失败: %v", err)
+		c.Status(400)
+		return
+	}
+
+	// 安全校验
+	if strings.Contains(tailReq.Path, "..") {
+		log.Printf("非法path参数(包含..): %s", tailReq.Path)
+		c.Status(400)
+		return
+	}
+
+	// 验证 key
+	safeKey, ok := sanitizeKey(tailReq.Key, tailReq.Regex)
+	if !ok {
+		log.Printf("非法key参数: %s", tailReq.Key)
+		c.Status(400)
+		return
+	}
+
+	// 设置 SSE 响应头
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no") // 禁用 Nginx 缓冲
+
+	// 打开文件
+	f, err := os.Open(tailReq.Path)
+	if err != nil {
+		log.Printf("打开文件失败: %v", err)
+		c.SSEvent("error", fmt.Sprintf("打开文件失败: %v", err))
+		c.Status(404)
+		return
+	}
+	defer f.Close()
+
+	// 预编译正则
+	var re *regexp.Regexp
+	if tailReq.Regex {
+		re, err = regexp.Compile(safeKey)
+		if err != nil {
+			c.SSEvent("error", "正则编译失败")
+			c.Status(400)
+			return
+		}
+	}
+
+	// 跳转到文件末尾（仅跟踪新增内容）
+	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+		log.Printf("Seek文件末尾失败: %v", err)
+	}
+
+	// 通知客户端已连接
+	c.SSEvent("connected", "tracking started")
+	c.Writer.Flush()
+
+	// 轮询跟踪
+	bufReader := bufio.NewReader(f)
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	var deadline time.Time
+	if tailReq.FollowDuration > 0 {
+		deadline = time.Now().Add(time.Duration(tailReq.FollowDuration) * time.Second)
+	}
+
+	for {
+		select {
+		case <-c.Request.Context().Done():
+			// 客户端断开
+			return
+		case <-ticker.C:
+			// 检查超时
+			if !deadline.IsZero() && time.Now().After(deadline) {
+				c.SSEvent("done", "tracking timeout")
+				c.Writer.Flush()
+				return
+			}
+
+			// 读取新增内容
+			for {
+				line, err := bufReader.ReadString('\n')
+				if err != nil {
+					if err != io.EOF {
+						log.Printf("读取日志行失败: %v", err)
+					}
+					break
+				}
+
+				line = strings.TrimRight(line, "\r\n")
+				if line == "" {
+					continue
+				}
+
+				// 过滤匹配
+				if !matchLogLine(line, safeKey, tailReq.Regex, re, tailReq.Level) {
+					continue
+				}
+
+				// 推送匹配行
+				c.SSEvent("line", line)
+				c.Writer.Flush()
+			}
+		}
+	}
+}
+
+// matchLogLine 判断日志行是否匹配过滤条件。
+func matchLogLine(line, key string, regex bool, re *regexp.Regexp, level string) bool {
+	// 关键字匹配
+	if regex && re != nil {
+		if !re.MatchString(line) {
+			return false
+		}
+	} else if key != "" {
+		if !strings.Contains(line, key) {
+			return false
+		}
+	}
+
+	// 级别过滤
+	if level != "" {
+		levelFound := logLevelPattern.FindString(line)
+		if !strings.EqualFold(levelFound, normalizeLevel(level)) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // GetLocalIPv4 返回本机第一个非 loopback 的 IPv4 地址。
@@ -218,113 +614,4 @@ func GetLocalIPv4() (ip string) {
 	return "unknown"
 }
 
-// Zip 将 src 文件/目录压缩为 dst zip 文件；压缩成功后删除 src。
-//
-// 注意：与 pkg/util.Zip 重复，建议后续收敛到统一实现。
-func Zip(dst, src string) (err error) {
-	fw, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer fw.Close()
-
-	zw := zip.NewWriter(fw)
-	defer func() {
-		if err := zw.Close(); err != nil {
-			log.Printf("关闭zip writer失败: %v", err)
-		}
-		// 压缩成功后删除原文件
-		os.Remove(src)
-	}()
-
-	return filepath.Walk(src, func(path string, fi os.FileInfo, errBack error) (err error) {
-		if errBack != nil {
-			return errBack
-		}
-
-		fh, err := zip.FileInfoHeader(fi)
-		if err != nil {
-			return err
-		}
-
-		fh.Name = strings.TrimPrefix(path, string(filepath.Separator))
-
-		if fi.IsDir() {
-			fh.Name += "/"
-		}
-
-		w, err := zw.CreateHeader(fh)
-		if err != nil {
-			return err
-		}
-
-		if !fh.Mode().IsRegular() {
-			return nil
-		}
-
-		fr, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer fr.Close()
-
-		n, err := io.Copy(w, fr)
-		if err != nil {
-			return err
-		}
-		log.Printf("成功压缩文件：%s, 共写入了 %d 个字符的数据\n", path, n)
-		return nil
-	})
-}
-
-// UnZip 将 src zip 解压到 dst 目录。
-//
-// 注意：当前实现缺少 zip slip 路径穿越校验，与 pkg/util.UnZip 存在安全差异。
-//       生产使用推荐统一为 pkg/util.UnZip。
-func UnZip(dst, src string) (err error) {
-	zr, err := zip.OpenReader(src)
-	if err != nil {
-		return err
-	}
-	defer zr.Close()
-
-	if dst != "" {
-		if err := os.MkdirAll(dst, 0755); err != nil {
-			return err
-		}
-	}
-
-	for _, file := range zr.File {
-		path := filepath.Join(dst, file.Name)
-
-		if file.FileInfo().IsDir() {
-			if err := os.MkdirAll(path, file.Mode()); err != nil {
-				return err
-			}
-			continue
-		}
-
-		fr, err := file.Open()
-		if err != nil {
-			return err
-		}
-
-		fw, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_TRUNC, file.Mode())
-		if err != nil {
-			fr.Close()
-			return err
-		}
-
-		n, err := io.Copy(fw, fr)
-		if err != nil {
-			fw.Close()
-			fr.Close()
-			return err
-		}
-		log.Printf("成功解压 %s，共写入了 %d 个字符的数据\n", path, n)
-
-		fw.Close()
-		fr.Close()
-	}
-	return nil
-}
+// Zip / UnZip 已统一迁移至 pkg/util 包，本文件不再保留重复实现。

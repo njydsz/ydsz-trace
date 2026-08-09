@@ -35,10 +35,12 @@ const (
 //
 // 并发安全：通过 sessionsMu 保护 map 读写。
 type Manager struct {
-	mu       sync.RWMutex
-	sessions map[string]*Session
-	cookie   string
-	maxAge   time.Duration
+	mu        sync.RWMutex
+	sessions  map[string]*Session
+	cookie    string
+	maxAge    time.Duration
+	secure    bool          // Cookie Secure 属性（仅 HTTPS 传输）
+	sameSite  http.SameSite // Cookie SameSite 属性（Lax/Strict/None）
 }
 
 // Session 单个用户的会话数据。
@@ -49,12 +51,32 @@ type Session struct {
 }
 
 // NewManager 创建默认配置的会话管理器（cookie=YDSZ_SESSION，有效期 24h）。
+//
+// 默认值：secure=true, sameSite=Lax。开发模式可调用 SetInsecureDevMode 关闭 Secure。
 func NewManager() *Manager {
 	return &Manager{
 		sessions: make(map[string]*Session),
 		cookie:   cookieName,
 		maxAge:   maxAge,
+		secure:   true,
+		sameSite: http.SameSiteLaxMode,
 	}
+}
+
+// SetInsecureDevMode 关闭 Cookie Secure 属性（仅用于开发/调试环境）。
+//
+// 警告：生产环境必须使用 HTTPS，保持 Secure=true。
+func (m *Manager) SetInsecureDevMode() {
+	m.secure = false
+}
+
+// SetSameSite 设置 Cookie SameSite 属性。
+//
+// 可选值：Strict、Lax、None（None 要求 Secure=true）。
+func (m *Manager) SetSameSite(mode http.SameSite) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sameSite = mode
 }
 
 // Middleware 返回 Gin 中间件，为每个请求绑定会话。
@@ -96,6 +118,8 @@ func (m *Manager) Middleware() gin.HandlerFunc {
 				Path:     "/",
 				MaxAge:   int(m.maxAge.Seconds()),
 				HttpOnly: true,
+				Secure:   m.secure,
+				SameSite: m.sameSite,
 			})
 		}
 		m.mu.Unlock()
@@ -162,16 +186,33 @@ func Destroy(c *gin.Context) {
 			if m, ok := v.(*Manager); ok {
 				m.mu.Lock()
 				delete(m.sessions, token)
+				// 读取当前安全设置用于清除 Cookie
+				secure := m.secure
+				sameSite := m.sameSite
 				m.mu.Unlock()
+
+				http.SetCookie(c.Writer, &http.Cookie{
+					Name:     cookieName,
+					Value:    "",
+					Path:     "/",
+					MaxAge:   -1,
+					HttpOnly: true,
+					Secure:   secure,
+					SameSite: sameSite,
+				})
+				return
 			}
 		}
 	}
+	// fallback: Manager 不可达时使用默认值清除
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     cookieName,
 		Value:    "",
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
 	})
 }
 

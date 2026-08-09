@@ -24,6 +24,9 @@
         <el-menu-item index="/logs">
           <el-icon><Search /></el-icon><span>日志检索</span>
         </el-menu-item>
+        <el-menu-item index="/tail">
+          <el-icon><VideoCamera /></el-icon><span>实时追踪</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -48,7 +51,7 @@
  */
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Monitor, DataLine, Cpu, Document, Search, SwitchButton } from '@element-plus/icons-vue'
+import { Monitor, DataLine, Cpu, Document, Search, SwitchButton, VideoCamera } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { logout } from '@/api/auth'
 import { useAuth } from '@/store/auth'

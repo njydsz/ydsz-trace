@@ -12,6 +12,7 @@ import (
 
 	"ydsz-trace/logs/models"
 	"ydsz-trace/pkg/config"
+	"ydsz-trace/pkg/metrics"
 	"ydsz-trace/pkg/util"
 
 	"github.com/robfig/cron/v3"
@@ -34,6 +35,9 @@ func checkOnlineTask() {
 		log.Printf("query all client err: %v", err)
 		return
 	}
+
+	total := int64(len(clients))
+	online := int64(0)
 
 	httpClient := util.NewClientWithTimeout(10 * time.Second)
 	for _, client := range clients {
@@ -65,11 +69,16 @@ func checkOnlineTask() {
 		if "200" == r.Code {
 			log.Printf("check logc Online status resp code: %v", r.Code)
 			updateOnline(client.Id, "1")
+			online++
 		} else {
 			log.Printf("check logc Online status resp code: %v", r.Code)
 			updateOnline(client.Id, "0")
 		}
 	}
+
+	// 更新 metrics 中的客户端统计数据
+	metrics.Global().UpdateClientStats(total, online)
+	log.Printf("客户端统计更新完成: total=%d, online=%d\n", total, online)
 }
 
 // updateOnline 写入客户端在线状态（1=在线，0=离线）。
