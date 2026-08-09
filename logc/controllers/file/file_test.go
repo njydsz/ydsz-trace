@@ -3,8 +3,9 @@ package file
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+
+	"ydsz-trace/pkg/source"
 )
 
 func TestSanitizeKey_ValidPlain(t *testing.T) {
@@ -32,20 +33,17 @@ func TestSanitizeKey_ValidPlain(t *testing.T) {
 }
 
 func TestSanitizeKey_RegexMode(t *testing.T) {
-	// 正则模式下允许正则元字符
 	ok, valid := sanitizeKey(`\d{3}-\w+`, true)
 	if !valid {
 		t.Errorf("regex mode should accept regex chars, got valid=%v", valid)
 	}
 	_ = ok
 
-	// 正则模式下仍拒绝空字符串
 	_, valid = sanitizeKey("", true)
 	if valid {
 		t.Error("regex mode should reject empty key")
 	}
 
-	// 正则模式下仍拒绝过长输入
 	longKey := make([]byte, 300)
 	for i := range longKey {
 		longKey[i] = 'a'
@@ -56,23 +54,8 @@ func TestSanitizeKey_RegexMode(t *testing.T) {
 	}
 }
 
-func TestReadConfig_Defaults(t *testing.T) {
-	cfg := ReadConfig{
-		Filename: "/var/log/test.log",
-		Key:      "error",
-		Line:     10,
-		TempPath: "/tmp",
-	}
-	if cfg.Regex {
-		t.Error("Regex should default to false")
-	}
-	if cfg.Level != "" {
-		t.Error("Level should default to empty")
-	}
-}
-
-func TestReadString_SearchInFile(t *testing.T) {
-	// 创建临时日志文件
+// TestFileSourceViaFactory 验证通过 Factory 创建的 FileSource 能正常读取日志。
+func TestFileSourceViaFactory(t *testing.T) {
 	dir := t.TempDir()
 	logFile := filepath.Join(dir, "test.log")
 	content := `2024-01-02 10:00:00 INFO application started
@@ -85,21 +68,67 @@ func TestReadString_SearchInFile(t *testing.T) {
 		t.Fatalf("写入日志文件失败: %v", err)
 	}
 
-	tempPath := filepath.Join(dir, "output")
-	result := ReadString(ReadConfig{
-		Filename: logFile,
-		Key:      "ERROR",
-		Line:     2,
-		TempPath: tempPath,
+	s, err := source.CreateSource(source.FactoryConfig{
+		Type:    source.SourceTypeFile,
+		Options: map[string]string{"root_dir": dir},
 	})
-
-	// 结果应为 zip 文件
-	if result == "" {
-		t.Fatal("期望返回 zip 路径，但为空")
+	if err != nil {
+		t.Fatalf("创建 FileSource 失败: %v", err)
 	}
-	defer os.Remove(result)
 
-	if !filepath.IsAbs(result) && !strings.HasPrefix(result, tempPath) && !strings.HasPrefix(result, "."+string(filepath.Separator)+tempPath) {
-		t.Errorf("结果路径应在 tempPath 下: got %q", result)
+	var buf []byte
+	bufWriter := &bytesWriter{data: &buf}
+	written, err := s.Read(t.Context(), logFile, source.ScanConfig{
+		Key:          "ERROR",
+		ContextLines: 2,
+	}, bufWriter)
+	if err != nil {
+		t.Fatalf("Read 失败: %v", err)
 	}
+	if written == 0 {
+		t.Fatal("期望写入非零字节")
+	}
+	if !contains(string(buf), "ERROR") {
+		t.Errorf("输出应包含 ERROR，got: %s", string(buf))
+	}
+}
+
+// TestNormalizeLevel 验证日志级别统一函数（向后兼容）。
+func TestNormalizeLevel(t *testing.T) {
+	cases := map[string]string{
+		"warn":    "WARN",
+		"WARNING": "WARN",
+		"error":   "ERROR",
+		"DEBUG":   "DEBUG",
+		"FATAL":   "FATAL",
+	}
+	for in, want := range cases {
+		got := normalizeLevel(in)
+		if got != want {
+			t.Errorf("normalizeLevel(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// bytesWriter 简易 io.Writer 实现，用于测试写入。
+type bytesWriter struct {
+	data *[]byte
+}
+
+func (w *bytesWriter) Write(p []byte) (int, error) {
+	*w.data = append(*w.data, p...)
+	return len(p), nil
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || indexOf(s, substr) >= 0)
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
 }
