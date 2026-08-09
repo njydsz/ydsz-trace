@@ -316,7 +316,7 @@ function saveHistory() {
 }
 
 function applyHistory(idx) {
-  if (idx == null || idx < 0 || idx >= searchHistory.value.length) return
+  if (idx === null || idx < 0 || idx >= searchHistory.value.length) return
   const h = searchHistory.value[idx]
   form.item = h.item
   form.client = h.client

@@ -251,20 +251,6 @@ async function loadQuota() {
   }
 }
 
-async function loadMeta() {
-  // 简化：复用 items 列表（前端已有静态缓存 ApiClients/Items 接口）
-  // 实际生产环境建议同时加载客户端列表
-  itemsLoading.value = true
-  try {
-    const { data } = await listRules({ pageNo: 1, pageSize: 1 }) // 占位，实际取 item 全列表
-    if (data && data.code === 0) {
-      // 仅获取 item 列表占位
-    }
-  } finally {
-    itemsLoading.value = false
-  }
-}
-
 function ruleSummary(r) {
   const parts = []
   if (r.keyWord) parts.push(r.regex ? `[正则] ${r.keyWord}` : r.keyWord)
