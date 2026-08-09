@@ -23,10 +23,12 @@ import (
 	"ydsz-trace/logs/controllers/task"
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/config"
+	"ydsz-trace/pkg/ratelimit"
 	"ydsz-trace/pkg/session"
 	"ydsz-trace/pkg/util"
 
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 )
 
 // defaultWeakPasswords 已知弱口令 / 出厂默认密码的生产环境黑名单。
@@ -121,7 +123,7 @@ func main() {
 
 	// 构建 Gin 路由并启动 HTTP 服务。
 	port := cfg.StringOr("httpport", "2021")
-	sessionMgr := session.NewManager()
+	sessionMgr, redisClient := buildSessionManager(cfg)
 	handler := routers.SetupRouter(cfg, sessionMgr)
 
 	gin.SetMode(gin.ReleaseMode)
@@ -132,7 +134,7 @@ func main() {
 	}
 
 	// 后台监听退出信号，触发优雅关闭。
-	go gracefulShutdown(srv)
+	go gracefulShutdown(srv, sessionMgr, redisClient)
 
 	log.Printf("logs 启动成功，监听端口 %s\n", port)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -141,7 +143,7 @@ func main() {
 }
 
 // gracefulShutdown 监听 SIGTERM/SIGINT，10 秒内优雅关闭 HTTP 服务。
-func gracefulShutdown(srv *http.Server) {
+func gracefulShutdown(srv *http.Server, sessionMgr *session.Manager, redisClient *redis.Client) {
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
@@ -156,5 +158,43 @@ func gracefulShutdown(srv *http.Server) {
 	} else {
 		log.Println("HTTP服务已优雅关闭")
 	}
+	if sessionMgr != nil {
+		_ = sessionMgr.Close()
+	}
+	if redisClient != nil {
+		_ = redisClient.Close()
+	}
 	os.Exit(0)
+}
+
+// buildSessionManager 根据配置创建会话管理器：检测到 redisenv / YDSZ_REDIS_ADDR 时使用 Redis，
+// 否则回落到进程内存后端（单副本默认零依赖）。
+func buildSessionManager(cfg *config.Config) (*session.Manager, *redis.Client) {
+	addr := getEnv("YDSZ_REDIS_ADDR", cfg.StringOr("redisaddr", ""))
+	if addr == "" {
+		log.Println("[session] 使用进程内存后端（单副本模式）")
+		return session.NewManager(), nil
+	}
+
+	password := getEnv("YDSZ_REDIS_PASSWORD", cfg.StringOr("redispwd", ""))
+	db := cfg.Int("redisdb", 0)
+
+	client := redis.NewClient(&redis.Options{
+		Addr:     addr,
+		Password: password,
+		DB:       db,
+	})
+
+	// 验证连通性
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := client.Ping(ctx).Err(); err != nil {
+		log.Printf("[session] Redis 连接失败 (%v)，回落到内存后端", err)
+		client.Close()
+		return session.NewManager(), nil
+	}
+
+	log.Printf("[session] 使用 Redis 后端（addr=%s, db=%d）", addr, db)
+	ratelimit.SetDefault(ratelimit.NewRedisLimiter(client, ratelimit.DefaultWindow, ratelimit.DefaultMaxFail, ratelimit.DefaultBlockFor))
+	return session.NewRedisManager(addr, password, db), client
 }

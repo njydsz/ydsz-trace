@@ -16,12 +16,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"ydsz-trace/pkg/api"
 	"ydsz-trace/pkg/auth"
 	"ydsz-trace/pkg/config"
+	"ydsz-trace/pkg/ratelimit"
 	"ydsz-trace/pkg/session"
 
 	"github.com/gin-gonic/gin"
@@ -29,99 +29,8 @@ import (
 
 // ========== 登录速率限制 ==========
 
-// loginAttempt 单 IP 登录尝试记录。
-type loginAttempt struct {
-	count    int
-	lastFail time.Time
-	blockedAt time.Time
-}
-
-// loginRateLimiter 基于内存的登录速率限制器。
-//
-// 规则：单 IP 每 60 秒最多 5 次失败；超出后封禁 300 秒。
-// 基于进程内存实现，多副本部署时需替换为 Redis 版本。
-type loginRateLimiter struct {
-	mu       sync.Mutex
-	attempts map[string]*loginAttempt
-	window   time.Duration // 统计窗口
-	maxFail  int           // 窗口内最大失败次数
-	blockFor time.Duration // 封禁时长
-}
-
-// defaultLimiter 全局默认速率限制器。
-var defaultLimiter = newRateLimiter(60*time.Second, 5, 300*time.Second)
-
-func newRateLimiter(window time.Duration, maxFail int, blockFor time.Duration) *loginRateLimiter {
-	return &loginRateLimiter{
-		attempts: make(map[string]*loginAttempt),
-		window:   window,
-		maxFail:  maxFail,
-		blockFor: blockFor,
-	}
-}
-
-// Allow 检查是否允许该 IP 的登录尝试。
-//
-// 返回：(是否允许, 剩余封禁秒数)
-func (l *loginRateLimiter) Allow(ip string) (bool, int) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	attempt, ok := l.attempts[ip]
-	if !ok {
-		return true, 0
-	}
-
-	// 检查封禁期
-	if !attempt.blockedAt.IsZero() {
-		elapsed := time.Since(attempt.blockedAt)
-		if elapsed < l.blockFor {
-			remaining := int((l.blockFor - elapsed).Seconds())
-			return false, remaining
-		}
-		// 封禁过期，重置记录
-		delete(l.attempts, ip)
-		return true, 0
-	}
-
-	// 窗口外的失败不计入
-	if time.Since(attempt.lastFail) > l.window {
-		attempt.count = 0
-		return true, 0
-	}
-
-	return attempt.count < l.maxFail, 0
-}
-
-// RecordFailure 记录一次失败尝试。
-func (l *loginRateLimiter) RecordFailure(ip string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	attempt, ok := l.attempts[ip]
-	if !ok {
-		l.attempts[ip] = &loginAttempt{
-			count:    1,
-			lastFail: time.Now(),
-		}
-		return
-	}
-
-	attempt.count++
-	attempt.lastFail = time.Now()
-
-	// 超出阈值则封禁
-	if attempt.count >= l.maxFail {
-		attempt.blockedAt = time.Now()
-	}
-}
-
-// RecordSuccess 登录成功后清除该 IP 的记录。
-func (l *loginRateLimiter) RecordSuccess(ip string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	delete(l.attempts, ip)
-}
+// 默认速率限制器在 pkg/ratelimit 包中初始化（进程内存版）。
+// 多副本部署时，应在 main 中调用 ratelimit.SetDefault 切换为 Redis 版本。
 
 // extractClientIP 从 gin 上下文中提取客户端真实 IP。
 func extractClientIP(c *gin.Context) string {
@@ -282,7 +191,7 @@ func Login(c *gin.Context) {
 
 	// 速率限制检查
 	clientIP := extractClientIP(c)
-	allowed, remainSec := defaultLimiter.Allow(clientIP)
+	allowed, remainSec := ratelimit.Default.Allow(clientIP)
 	if !allowed {
 		api.Error(c, http.StatusTooManyRequests, fmt.Sprintf("登录尝试过于频繁，请 %d 秒后再试", remainSec))
 		return
@@ -293,13 +202,13 @@ func Login(c *gin.Context) {
 	data, err := c.GetRawData()
 	if err != nil {
 		api.Fail(c, api.CodeBadRequest, "请求参数错误")
-		defaultLimiter.RecordFailure(clientIP)
+		ratelimit.Default.RecordFailure(clientIP)
 		return
 	}
 	err = json.Unmarshal(data, &user)
 	if err != nil {
 		api.Fail(c, api.CodeBadRequest, "请求参数错误")
-		defaultLimiter.RecordFailure(clientIP)
+		ratelimit.Default.RecordFailure(clientIP)
 		return
 	}
 
@@ -309,7 +218,7 @@ func Login(c *gin.Context) {
 
 	// 校验用户名
 	if uname != user.Username {
-		defaultLimiter.RecordFailure(clientIP)
+		ratelimit.Default.RecordFailure(clientIP)
 		// 使用与密码错误相同的提示，防止用户名枚举
 		api.Fail(c, api.CodeUnauthorized, "用户名或密码错误")
 		return
@@ -318,13 +227,13 @@ func Login(c *gin.Context) {
 	// 密码校验：根据存储格式选择验证方式
 	valid, err := verifyPassword(user.Password, upwd)
 	if err != nil || !valid {
-		defaultLimiter.RecordFailure(clientIP)
+		ratelimit.Default.RecordFailure(clientIP)
 		api.Fail(c, api.CodeUnauthorized, "用户名或密码错误")
 		return
 	}
 
 	// 登录成功，清除失败计数
-	defaultLimiter.RecordSuccess(clientIP)
+	ratelimit.Default.RecordSuccess(clientIP)
 
 	// 平滑迁移：如果存储的是旧版 SHA-256 哈希，升级到 Argon2id
 	if auth.NeedsRehash(upwd) {

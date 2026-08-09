@@ -370,7 +370,7 @@ func Destroy(c *gin.Context) {
 			mgr.setSessionCookie(c, "", -1)
 		} else {
 			http.SetCookie(c.Writer, &http.Cookie{
-				Name:     cookieName, Value: "", Path: "/", MaxAge: -1,
+				Name: cookieName, Value: "", Path: "/", MaxAge: -1,
 				HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode,
 			})
 		}
