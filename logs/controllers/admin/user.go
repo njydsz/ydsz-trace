@@ -326,9 +326,16 @@ func Login(c *gin.Context) {
 	// 登录成功，清除失败计数
 	defaultLimiter.RecordSuccess(clientIP)
 
+	// 平滑迁移：如果存储的是旧版 SHA-256 哈希，升级到 Argon2id
+	if auth.NeedsRehash(upwd) {
+		if hashed, err := auth.HashPassword(user.Password); err == nil {
+			log.Printf("[security] 用户 %s 使用 SHA-256 哈希登录成功，已生成 Argon2id 哈希：%s（请更新至配置/环境变量）", uname, hashed)
+		}
+	}
+
 	// 平滑迁移：如果存储的仍是明文密码，首次成功登录时自动哈希
 	if !auth.IsHashedPassword(upwd) {
-		if hashed, err := auth.HashPassword(upwd); err == nil {
+		if hashed, err := auth.HashPassword(user.Password); err == nil {
 			// 记录日志：后续需手动更新环境变量/配置文件为哈希值
 			log.Printf("[security] 用户 %s 使用明文密码登录成功，已生成哈希：%s（请更新至配置）", uname, hashed)
 		}

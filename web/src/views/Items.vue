@@ -186,7 +186,8 @@ async function save() {
 }
 
 async function toggleStatus(row) {
-  await changeItemStatus(row.id)
+  const newStatus = row.status === '1' ? 0 : 1
+  await changeItemStatus(row.id, newStatus)
   ElMessage.success('状态已更新')
   load()
 }

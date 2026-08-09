@@ -26,12 +26,12 @@ export function updateClient(payload) {
   return http.post('/client/update', payload)
 }
 
-// deleteClient 按 id 删除客户端。
+// deleteClient 按 id 删除客户端（POST + JSON body，配合 CSRF 防护）。
 export function deleteClient(id) {
-  return http.get('/client/delete', { params: { id } })
+  return http.post('/client/delete', { id })
 }
 
-// changeClientStatus 切换客户端启用/禁用。
-export function changeClientStatus(id) {
-  return http.get('/client/changeStatus', { params: { id } })
+// changeClientStatus 设置客户端启用/禁用状态（POST + JSON body：{ id, status }）。
+export function changeClientStatus(id, status) {
+  return http.post('/client/changeStatus', { id, status })
 }

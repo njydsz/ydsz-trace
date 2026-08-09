@@ -62,13 +62,27 @@ test-verbose:
 		cd $$m && $(GO) test -v -race ./... 2>/dev/null; cd ..; \
 	done
 
-# Lint
-lint:
+# Lint — require golangci-lint (auto-install if missing)
+lint: lint-install
 	@for m in $(PKG); do \
-		echo "=== Vetting $$m ==="; \
-		cd $$m && $(GO) vet ./... 2>&1 || true; cd ..; \
+		echo "=== Linting $$m ==="; \
+		cd $$m && golangci-lint run --config ../.golangci.yml ./...; cd ..; \
 	done
 
+# golangci-lint auto-install (v1.62)
+lint-install:
+	@command -v golangci-lint >/dev/null 2>&1 || \
+		(echo "Installing golangci-lint v1.62..." && \
+			go install github.com/golangci/golangci-lint/v6/golangci-lint@v1.62.0 2>/dev/null || \
+			(echo "Trying curl install..." && \
+				curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | \
+				sh -s -- -b $(GOPATH)/bin v1.62.0))
+
+# Ci — lint + test + build (golangci-lint + race detection)
+ci: lint test build
+	@echo "CI pipeline complete"
+
+# Format
 fmt:
 	@for m in $(PKG); do \
 		echo "=== Formatting $$m ==="; \
@@ -111,7 +125,3 @@ clean:
 	@for m in $(PKG); do \
 		cd $$m && $(GO) clean 2>/dev/null; cd ..; \
 	done
-
-# CI target (lint + test + build)
-ci: lint test build
-	@echo "CI pipeline complete"

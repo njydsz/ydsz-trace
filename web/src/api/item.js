@@ -26,12 +26,12 @@ export function updateItem(payload) {
   return http.post('/item/update', payload)
 }
 
-// deleteItem 按 id 删除项目日志。
+// deleteItem 按 id 删除项目日志（POST + JSON body，配合 CSRF 防护）。
 export function deleteItem(id) {
-  return http.get('/item/delete', { params: { id } })
+  return http.post('/item/delete', { id })
 }
 
-// changeItemStatus 切换项目日志启用/禁用。
-export function changeItemStatus(id) {
-  return http.get('/item/changeStatus', { params: { id } })
+// changeItemStatus 设置项目日志启用/禁用状态（POST + JSON body：{ id, status }）。
+export function changeItemStatus(id, status) {
+  return http.post('/item/changeStatus', { id, status })
 }

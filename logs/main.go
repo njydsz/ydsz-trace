@@ -28,6 +28,41 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// defaultWeakPasswords 已知弱口令 / 出厂默认密码的生产环境黑名单。
+// 生产模式下若检测到匹配，服务将拒绝启动并要求管理员配置强密码。
+var defaultWeakPasswords = map[string]bool{
+	"change_me_production": true, // 代码内置默认（app.conf）
+	"ydsz_trace_admin":     true, // docker-compose.yml 示例默认
+	"admin":                true,
+	"admin123":             true,
+	"password":             true,
+	"password123":          true,
+	"123456":               true,
+	"12345678":             true,
+	"qwerty":               true,
+}
+
+// enforceProductionSecurity 生产模式下强制校验：拒绝弱口令 + 未哈希密码启动。
+//
+// 仅在 runmode != "dev" 时生效，开发模式跳过以保留零配置体验。
+// 发现安全问题时直接 log.Fatalf 拒绝启动，避免带病上线。
+func enforceProductionSecurity(cfg *config.Config) {
+	runmode := cfg.StringOr("runmode", "dev")
+	if runmode == "dev" {
+		return
+	}
+
+	adminPassword := os.Getenv("YDSZ_ADMIN_PASSWORD")
+	if adminPassword == "" {
+		adminPassword = cfg.StringOr("password", "change_me_production")
+	}
+
+	if defaultWeakPasswords[adminPassword] {
+		log.Fatalf("[security] 拒绝启动：生产模式检测到弱口令/出厂默认密码。\n" +
+			"请通过 YDSZ_ADMIN_PASSWORD 环境变量注入强密码（建议 16 位以上随机字符）。")
+	}
+}
+
 // getEnv 获取环境变量；未设置时返回 fallback。
 func getEnv(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
@@ -43,6 +78,9 @@ func main() {
 		log.Printf("加载配置失败: %v，使用内置默认值", err)
 		cfg = config.NewDefault()
 	}
+
+	// 生产模式安全前置校验：拒绝弱口令启动
+	enforceProductionSecurity(cfg)
 
 	// SQLite 数据库文件路径：环境变量优先，其次配置文件。
 	sqlitePath := getEnv("YDSZ_DB_PATH", cfg.StringOr("dbpath", "./data/ydsz_trace.db"))

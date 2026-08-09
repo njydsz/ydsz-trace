@@ -84,7 +84,10 @@ const items = ref([])
 const itemsLoading = ref(false)
 const streaming = ref(false)
 const lines = ref([])
-const eventSource = ref(null)
+
+// 持有当前 SSE 连接的 reader 与 abortCtrl，用于停止时彻底关闭流
+let currentReader = null
+let currentAbort = null
 let msgCount = 0
 
 const form = reactive({
@@ -133,20 +136,16 @@ function startTail() {
   stopTail()
   streaming.value = true
   lines.value = []
+  msgCount = 0
 
-  const params = new URLSearchParams({
-    client: form.client,
-    item: form.item,
-    date: form.date,
-    key: form.key || '',
-    regex: form.regex ? 'true' : 'false',
-    level: form.level || '',
-  })
+  // AbortController 用于在停止/卸载时主动断开 fetch 连接
+  const abort = new AbortController()
+  currentAbort = abort
 
-  // 使用 fetch + ReadableStream 实现 SSE
-  fetch(`/api/logs/tail?${params}`, {
+  // 使用 fetch + ReadableStream 实现 SSE（后端路由: POST /logs/tail）
+  fetch('/logs/tail', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
     body: JSON.stringify({
       client: Number(form.client),
       item: Number(form.item),
@@ -155,21 +154,25 @@ function startTail() {
       regex: form.regex,
       level: form.level,
     }),
+    signal: abort.signal,
   }).then(response => {
     if (!response.ok) {
-      ElMessage.error('连接失败')
+      ElMessage.error('连接失败: HTTP ' + response.status)
       streaming.value = false
       return
     }
     const reader = response.body.getReader()
+    currentReader = reader
     const decoder = new TextDecoder()
     let buffer = ''
-    msgCount = 0
 
     function readChunk() {
       reader.read().then(({ done, value }) => {
-        if (done || !streaming.value) {
+        if (done) {
           streaming.value = false
+          return
+        }
+        if (!streaming.value) {
           return
         }
         buffer += decoder.decode(value, { stream: true })
@@ -181,6 +184,10 @@ function startTail() {
         }
         readChunk()
       }).catch(err => {
+        if (err.name === 'AbortError') {
+          // 用户主动停止，无需提示
+          return
+        }
         if (streaming.value) {
           ElMessage.error('流读取失败: ' + err.message)
         }
@@ -189,6 +196,9 @@ function startTail() {
     }
     readChunk()
   }).catch(err => {
+    if (err.name === 'AbortError') {
+      return
+    }
     ElMessage.error('连接失败: ' + err.message)
     streaming.value = false
   })
@@ -238,9 +248,14 @@ function handleEvent({ event, data }) {
 
 function stopTail() {
   streaming.value = false
-  if (eventSource.value) {
-    eventSource.value.close()
-    eventSource.value = null
+  // 主动中止 fetch 连接 + 取消 reader，避免流资源泄漏
+  if (currentReader) {
+    currentReader.cancel().catch(() => {})
+    currentReader = null
+  }
+  if (currentAbort) {
+    currentAbort.abort()
+    currentAbort = null
   }
 }
 

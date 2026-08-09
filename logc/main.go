@@ -55,6 +55,11 @@ func main() {
 		server = config.EnvOrConfig("YDSZ_LOG_SERVER", cfg.String("logs"), "127.0.0.1:2021")
 	}
 
+	// 弱密钥告警：提示管理员必要时通过 YDSZ_CLIENT_KEY 替换
+	if vkey == "123456" || vkey == "ydsz_trace_key" {
+		log.Printf("[security] 警告：logc 使用默认预共享密钥（%v），建议通过 YDSZ_CLIENT_KEY 环境变量配置强密钥", vkey)
+	}
+
 	log.Printf("logc register -server=%v -vkey=%v\n", server, vkey)
 	register.RegisterLocalIp(server, vkey)
 

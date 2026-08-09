@@ -80,6 +80,7 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	// 鉴权分组：client / item / logs 需要登录
 	auth := r.Group("")
 	auth.Use(filterAuth)
+	auth.Use(csrfProtection)
 	{
 		auth.POST("/client/add", client.Add)
 		auth.POST("/client/delete", client.Delete)
@@ -118,6 +119,26 @@ func getCORSOrigins() []string {
 		return []string{"http://localhost:*", "http://127.0.0.1:*"}
 	}
 	return strings.Split(origins, ",")
+}
+
+// csrfProtection 防护中间件：拒绝缺少 X-Requested-With 头的非安全方法请求。
+// 浏览器 CORS 策略禁止跨域页面发送自定义头，因此第三方站点无法伪造 POST/DELETE。
+func csrfProtection(c *gin.Context) {
+	method := c.Request.Method
+	if method == "GET" || method == "HEAD" || method == "OPTIONS" {
+		c.Next()
+		return
+	}
+	if c.GetHeader("X-Requested-With") == "" {
+		c.JSON(http.StatusForbidden, map[string]interface{}{
+			"code": "403",
+			"msg":  "CSRF 校验失败：缺少 X-Requested-With 请求头",
+			"data": nil,
+		})
+		c.Abort()
+		return
+	}
+	c.Next()
 }
 
 // filterAuth 鉴权中间件：未登录返回 401 并 abort。

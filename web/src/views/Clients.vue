@@ -10,7 +10,12 @@
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="ip" label="IP" />
         <el-table-column prop="port" label="端口" width="90" />
-        <el-table-column prop="vkey" label="密钥" width="120" />
+        <el-table-column label="密钥" width="140">
+          <template #default="{ row }">
+            <span v-if="row.vkey">{{ maskSecret(row.vkey) }}</span>
+            <span v-else class="text-gray-400">未设置</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="info" label="备注" show-overflow-tooltip />
         <el-table-column label="在线状态" width="110">
           <template #default="{ row }">
@@ -100,6 +105,12 @@ const page = ref(1)
 const limit = ref(10)
 const loading = ref(false)
 
+// maskSecret 将密钥脱敏为 6 位星号（仅回显是否已设置，不暴露明文）。
+function maskSecret(vkey) {
+  if (!vkey) return ''
+  return '******'
+}
+
 const dialogVisible = ref(false)
 const isEdit = ref(false)
 const saving = ref(false)
@@ -170,7 +181,8 @@ async function save() {
 }
 
 async function toggleStatus(row) {
-  await changeClientStatus(row.id)
+  const newStatus = row.status === '1' ? 0 : 1
+  await changeClientStatus(row.id, newStatus)
   ElMessage.success('状态已更新')
   load()
 }

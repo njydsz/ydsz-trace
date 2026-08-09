@@ -1,0 +1,50 @@
+run:
+  timeout: 5m
+  go: "1.26"
+
+linters:
+  enable:
+    - gofmt
+    - govet
+    - errcheck
+    - staticcheck
+    - gosec
+    - revive
+    - ineffassign
+    - unused
+    - misspell
+    - gosimple
+    - gocyclo
+  disable:
+    - gochecknoglobals # 允许全局变量（项目有故意使用的全局单例）
+
+linters-settings:
+  gocyclo:
+    min-complexity: 15
+  gocritic:
+    disabled-checks:
+      - ifElseChain
+  gosec:
+    excludes:
+      - G104 # errcheck 已覆盖，不重复检查未处理错误
+  revive:
+    rules:
+      - name: exported
+      - name: package-comments
+        disabled: true
+      - name: var-naming
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 50
+  max-same-issues: 5
+  exclude-rules:
+    # 测试文件中允许较长的函数
+    - path: _test\.go
+      linters:
+        - gocyclo
+        - funlen
+    # main.go 允许 init 全局
+    - path: main\.go
+      linters:
+        - gochecknoglobals

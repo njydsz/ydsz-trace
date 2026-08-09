@@ -23,6 +23,7 @@ type idReq struct {
 type statusReq struct {
 	ID     int64 `json:"id" binding:"required"`
 	Status int   `json:"status" binding:"required"`
+}
 
 // RegisterReq 客户端注册请求体。
 type RegisterReq struct {
