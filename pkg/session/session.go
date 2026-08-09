@@ -23,8 +23,8 @@ import (
 const (
 	// cookieName 会话 token 的 Cookie 键名
 	cookieName = "YDSZ_SESSION"
-// maxAge 默认会话有效期
-maxAge = 24 * time.Hour
+	// maxAge 默认会话有效期
+	maxAge = 24 * time.Hour
 	// contextKey gin context 中存储 Session 的键名
 	contextKey = "session"
 	// mgrKey gin context 中存储 Manager 的键名
