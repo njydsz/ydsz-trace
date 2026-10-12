@@ -271,27 +271,27 @@ func mergedTailSSE(c *gin.Context, servers []string, path, key string, regex boo
 			}
 			defer resp.Body.Close()
 
-		reader := bufio.NewReader(resp.Body)
-		for {
-			data, err := reader.ReadString('\n')
-			if err != nil {
-				break
-			}
-			// 解析 SSE data
-			if len(data) > 6 && data[:6] == "data: " {
-				content := data[6:]
-				// 去掉末尾换行
-				content = strings.TrimRight(content, "\r\n")
-				if len(content) > 0 {
-					// P0-3 修复：使用 select 监听 ctx.Done()，防止客户端断开后 goroutine 永阻塞在 channel 发送上
-					select {
-					case lineCh <- logLine{Server: srv, Line: content}:
-					case <-c.Request.Context().Done():
-						return
+			reader := bufio.NewReader(resp.Body)
+			for {
+				data, err := reader.ReadString('\n')
+				if err != nil {
+					break
+				}
+				// 解析 SSE data
+				if len(data) > 6 && data[:6] == "data: " {
+					content := data[6:]
+					// 去掉末尾换行
+					content = strings.TrimRight(content, "\r\n")
+					if len(content) > 0 {
+						// P0-3 修复：使用 select 监听 ctx.Done()，防止客户端断开后 goroutine 永阻塞在 channel 发送上
+						select {
+						case lineCh <- logLine{Server: srv, Line: content}:
+						case <-c.Request.Context().Done():
+							return
+						}
 					}
 				}
 			}
-		}
 			doneCh <- srv
 		}(server)
 	}
