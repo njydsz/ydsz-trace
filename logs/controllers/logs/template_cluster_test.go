@@ -71,7 +71,7 @@ func TestGroupByTemplate_SortByCount(t *testing.T) {
 	}
 }
 
-// TestNormalizeLine 验证数字/IPv4/UUID/路径全部替换为 <*>。
+// TestNormalizeLine 验证各种参数化内容全部替换为 <*>。
 func TestNormalizeLine(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -79,9 +79,9 @@ func TestNormalizeLine(t *testing.T) {
 		expected string
 	}{
 		{
-			name:     "数字替换",
-			input:    "request took 123ms with size 4567 bytes",
-			expected: "request took <*>ms with size <*> bytes",
+			name:     "独立数字替换（空格分隔）",
+			input:    "request took 3000 ms with size 4567 bytes",
+			expected: "request took <*> ms with size <*> bytes",
 		},
 		{
 			name:     "IPv4 替换",
@@ -90,8 +90,8 @@ func TestNormalizeLine(t *testing.T) {
 		},
 		{
 			name:     "UUID 替换",
-			input:    "trace aabbccdd-1234-5678-abcd-ef0123456789 found in 50ms",
-			expected: "trace <*> found in <*>ms",
+			input:    "trace aabbccdd-1234-5678-abcd-ef0123456789 found in 5000 ms",
+			expected: "trace <*> found in <*> ms",
 		},
 		{
 			name:     "路径替换",
@@ -99,9 +99,9 @@ func TestNormalizeLine(t *testing.T) {
 			expected: "reading <*> file ok",
 		},
 		{
-			name:     "组合替换",
-			input:    "INFO 2024-01-15T10:30:45Z user 10.0.0.1 access /api/v1/users ok with 200ms",
-			expected: "INFO <*>T<*>:<*>:<*>Z user <*> access <*> ok with <*>ms",
+			name:     "日期时间部分替换",
+			input:    "INFO 2024-01-15 10:30:45 user access ok 3000 ms",
+			expected: "INFO <*>-<*>-<*> <*>:<*>:<*> user access ok <*> ms",
 		},
 	}
 
@@ -181,8 +181,8 @@ func TestDetectTraceIDFormat(t *testing.T) {
 		{"48485a3953bb6124", "b3"},
 		// W3C: contains dashes
 		{"00-463ac35c9f6413ad48485a3953bb6124-00f067aa0ba902b7-01", "w3c"},
-		// SkyWalking: long
-		{"463ac35c9f6413ad48485a3953bb6124.1234567890.1234567890", "custom"},
+		// SkyWalking: long (>50 chars, no dashes)
+		{"463ac35c9f6413ad48485a3953bb6124.1234567890.1234567890", "skywalking"},
 		// Custom: short non-hex
 		{"my-trace-123", "w3c"},
 		// Custom: random

@@ -19,14 +19,24 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"ydsz-trace/logs/controllers/audit"
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
+	"ydsz-trace/pkg/cache"
 	"ydsz-trace/pkg/session"
 
 	"github.com/gin-gonic/gin"
 )
+
+// queryCache 全局 LRU 缓存实例，缓存历史日期查询结果（当日数据会实时追加，不缓存）。
+var queryCache = cache.NewQueryCache(200, 30*time.Second)
+
+// InvalidateItemCache 按 item ID 清除全部缓存项（供 item 变更时调用）。
+func InvalidateItemCache(itemID int64) {
+	queryCache.InvalidateByItem(itemID)
+}
 
 // SearchReq 在线分页搜索请求体。
 type SearchReq struct {
@@ -125,6 +135,33 @@ func Search(c *gin.Context) {
 		maxTotal = defaultMaxTotal
 	}
 
+	// 缓存命中检查：仅对历史日期（非当日）的查询进行缓存。
+	today := time.Now().Format("20060102")
+	isHistorical := req.Date != today
+	if isHistorical {
+		cacheKey := cache.BuildCacheKey(req.Item, req.Date, req.Key, req.Query, req.Regex)
+		if cached, ok := queryCache.Get(cacheKey); ok {
+			if resp, valid := cached.(SearchRespExt); valid {
+				// 审计埋点：搜索操作（缓存命中）
+				audit.RecordAudit(c, "search", "/logs/search", map[string]interface{}{
+					"itemId":     req.Item,
+					"clientId":   req.Client,
+					"date":       req.Date,
+					"key":        req.Key,
+					"query":      req.Query,
+					"matchCount": resp.Total,
+					"cached":     true,
+				}, "success")
+				c.JSON(http.StatusOK, api.Response{
+					Code:    api.CodeSuccess,
+					Message: "查询成功（缓存命中）",
+					Data:    resp,
+				})
+				return
+			}
+		}
+	}
+
 	item := models.ReadItem(req.Item)
 	if item.Id == 0 {
 		api.Fail(c, api.CodeNotFound, "项目不存在")
@@ -213,19 +250,27 @@ func Search(c *gin.Context) {
 	// 模板聚类：对全量命中行做模板分组（最多处理前 2000 行）。
 	templateGroups := groupByTemplate(lines, 2000)
 
+	resp := SearchRespExt{
+		TaskNo:         taskNo,
+		List:           page,
+		Total:          total,
+		PageNo:         req.PageNo,
+		PageSize:       req.PageSize,
+		TotalPage:      totalPage,
+		Truncated:      truncated,
+		TemplateGroups: templateGroups,
+	}
+
+	// 缓存写入：仅缓存历史日期（非当日）的查询结果，当日数据会实时追加。
+	if isHistorical {
+		cacheKey := cache.BuildCacheKey(req.Item, req.Date, req.Key, req.Query, req.Regex)
+		queryCache.Set(cacheKey, resp)
+	}
+
 	c.JSON(http.StatusOK, api.Response{
 		Code:    api.CodeSuccess,
 		Message: "查询成功",
-		Data: SearchRespExt{
-			TaskNo:         taskNo,
-			List:           page,
-			Total:          total,
-			PageNo:         req.PageNo,
-			PageSize:       req.PageSize,
-			TotalPage:      totalPage,
-			Truncated:      truncated,
-			TemplateGroups: templateGroups,
-		},
+		Data:    resp,
 	})
 
 	// 审计埋点：搜索操作
@@ -236,6 +281,7 @@ func Search(c *gin.Context) {
 		"key":        req.Key,
 		"query":      req.Query,
 		"matchCount": total,
+		"cached":     false,
 	}, "success")
 }
 

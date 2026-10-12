@@ -21,6 +21,7 @@ import (
 	"ydsz-trace/logs/controllers/item"
 	"ydsz-trace/logs/controllers/alert"
 	"ydsz-trace/logs/controllers/logs"
+	"ydsz-trace/logs/controllers/migration"
 	"ydsz-trace/pkg/api"
 	pkgauth "ydsz-trace/pkg/auth"
 	"ydsz-trace/pkg/config"
@@ -162,6 +163,10 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 			adm.GET("/stats/patterns", admin.StatsPatterns)
 			adm.GET("/stats/anomalies", admin.StatsAnomalyEvents)
 			adm.GET("/stats/baseline", admin.StatsBaseline)
+
+			// 迁移工具：v1 -> v2 schema 就绪确认（仅 admin）
+			adm.POST("/migration/run", migration.Run)
+			adm.GET("/migration/status", migration.StatusHandler)
 		}
 	}
 

@@ -2,9 +2,33 @@
 package models
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
+
+// initTestDB 为统计测试创建独立的临时数据库。
+func initTestDB(t *testing.T) {
+	t.Helper()
+	if DB != nil {
+		if err := DB.Ping(); err == nil {
+			return // 已有有效的 DB 连接
+		}
+	}
+	tmpDir, err := os.MkdirTemp("", "stats_test_*")
+	if err != nil {
+		t.Fatalf("创建临时目录失败: %v", err)
+	}
+	dbPath := filepath.Join(tmpDir, "test_stats.db")
+	if err := InitDB(&SQLiteConfig{FilePath: dbPath}); err != nil {
+		t.Fatalf("初始化测试数据库失败: %v", err)
+	}
+	t.Cleanup(func() {
+		if DB != nil { _ = DB.Close() }
+		os.RemoveAll(tmpDir)
+	})
+}
 
 // TestTimeBucket_5minAlign 验证 5 分钟对齐逻辑。
 func TestTimeBucket_5minAlign(t *testing.T) {
@@ -51,11 +75,9 @@ func TestTemplateHash_Deterministic(t *testing.T) {
 	}
 }
 
-// TestRecordPatternHit_Upsert 验证同 bucket 累加（需要 DB 初始化）。
+// TestRecordPatternHit_Upsert 验证同 bucket 累加。
 func TestRecordPatternHit_Upsert(t *testing.T) {
-	if DB == nil {
-		t.Skip("DB 未初始化，跳过集成测试")
-	}
+	initTestDB(t)
 
 	hash := "test_absolut_hash"
 	ts := time.Now().Format("2006-01-02 15:04:05")
@@ -87,9 +109,7 @@ func TestRecordPatternHit_Upsert(t *testing.T) {
 
 // TestTopPatterns_Order 验证降序排列。
 func TestTopPatterns_Order(t *testing.T) {
-	if DB == nil {
-		t.Skip("DB 未初始化，跳过集成测试")
-	}
+	initTestDB(t)
 
 	// 准备测试数据
 	now := time.Now().Format("2006-01-02 15:04:05")

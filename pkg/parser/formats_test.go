@@ -51,7 +51,7 @@ func TestFormat_SpringBoot(t *testing.T) {
 // TestFormat_Nginx 验证 Nginx 组合日志正确抽取。
 func TestFormat_Nginx(t *testing.T) {
 	line := `192.168.1.1 - - [15/Jan/2024:10:23:45 +0800] "GET /api/users HTTP/1.1" 200 1234 "https://example.com" "Mozilla/5.0"`
-	_, name, matched := MatchFormat(line)
+	fields, name, matched := MatchFormat(line)
 
 	if !matched {
 		t.Fatal("expected Nginx format to match")
@@ -59,13 +59,17 @@ func TestFormat_Nginx(t *testing.T) {
 	if name != "nginx" {
 		t.Errorf("expected format name 'nginx', got '%s'", name)
 	}
-	// ExtractFields 也应通用抽取
-	f := ExtractFields(line)
-	if f["ip"] != "192.168.1.1" && f["ip"] != "" {
-		t.Logf("ip extraction: %q", f["ip"])
+	if fields == nil {
+		t.Fatal("expected fields from Nginx format match")
 	}
-	if f["statusCode"] != "200" {
-		t.Errorf("expected statusCode=200, got %q", f["statusCode"])
+	if fields["statusCode"] != "200" {
+		t.Errorf("expected statusCode=200, got %q", fields["statusCode"])
+	}
+	if fields["method"] != "GET" {
+		t.Errorf("expected method=GET, got %q", fields["method"])
+	}
+	if fields["ip"] != "192.168.1.1" {
+		t.Errorf("expected ip=192.168.1.1, got %q", fields["ip"])
 	}
 }
 
@@ -116,17 +120,24 @@ func TestFormat_ISO8601Timestamp(t *testing.T) {
 
 // TestFormat_LevelExtraction 验证日志级别提取。
 func TestFormat_LevelExtraction(t *testing.T) {
-	levels := []string{"DEBUG", "INFO", "WARN", "WARNING", "ERROR", "FATAL", "TRACE"}
-	for _, lvl := range levels {
-		line := lvl + " something happened"
+	tests := []struct {
+		input    string
+		expected string
+	}{
+		{"DEBUG something happened", "DEBUG"},
+		{"INFO something happened", "INFO"},
+		{"WARN something happened", "WARN"},
+		{"WARNING something happened", "WARN"}, // WARNING normalizes to WARN
+		{"ERROR something happened", "ERROR"},
+		{"FATAL something happened", "FATAL"},
+		{"TRACE something happened", "TRACE"},
+	}
+	for _, tt := range tests {
+		line := tt.input
 		f := ExtractFields(line)
 		got := strings.ToUpper(f["level"])
-		if got != "WARN" && lvl == "WARNING" {
-			// WARNING normalizes to WARN
-			continue
-		}
-		if got != lvl {
-			t.Errorf("expected level=%s, got %q", lvl, got)
+		if got != tt.expected {
+			t.Errorf("input %q: expected level=%s, got %q", tt.input, tt.expected, got)
 		}
 	}
 }

@@ -31,14 +31,22 @@ func TestDedupeWindow_Cooldown(t *testing.T) {
 func TestDedupeWindow_Expire(t *testing.T) {
 	d := &dedupeWindow{windows: make(map[int64]time.Time)}
 
-	// 使用极短的冷却期（0 秒）
-	if !d.ShouldFire(1, 0) {
-		t.Error("冷却期为 0 时应始终触发")
+	// 设置 5 秒前的触发时间
+	d.mu.Lock()
+	d.windows[1] = time.Now().Add(-5 * time.Second)
+	d.mu.Unlock()
+
+	// 冷却期 3 秒，5 秒前触发过，应再次触发
+	if !d.ShouldFire(1, 3) {
+		t.Error("冷却期已过，应再次触发")
 	}
 
-	// 冷却期 0 秒，立即再调应触发
-	if !d.ShouldFire(1, 0) {
-		t.Error("0 秒冷却期应立即再次触发")
+	// 冷却期 10 秒，5 秒前触发过，不应触发
+	d.mu.Lock()
+	d.windows[2] = time.Now().Add(-5 * time.Second)
+	d.mu.Unlock()
+	if d.ShouldFire(2, 10) {
+		t.Error("冷却期内，应抑制触发")
 	}
 }
 

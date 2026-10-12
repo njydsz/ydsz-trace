@@ -6,8 +6,32 @@
     </div>
 
     <el-card shadow="never">
+      <el-input
+        v-model="searchText"
+        placeholder="搜索名称、日志路径、前缀"
+        :debounce="200"
+        clearable
+        :prefix-icon="Search"
+        class="mb-3"
+        style="max-width: 360px"
+      />
+
+      <div v-if="selectedRows.length > 0" class="mb-3">
+        <el-button type="danger" :icon="Delete" @click="handleBatchDelete">删除所选</el-button>
+        <span class="ml-3 text-gray-500">已选 {{ selectedRows.length }} 项</span>
+      </div>
+
       <el-skeleton :rows="6" animated v-if="loading && list.length === 0" />
-      <el-table v-if="!(loading && list.length === 0)" :data="list" v-loading="loading" stripe border>
+      <el-table
+        v-if="!(loading && list.length === 0)"
+        :data="filteredList"
+        v-loading="loading"
+        stripe
+        border
+        @selection-change="handleSelectionChange"
+        ref="tableRef"
+      >
+        <el-table-column type="selection" width="50" />
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="itemName" label="名称" />
         <el-table-column prop="itemDesc" label="描述" show-overflow-tooltip />
@@ -76,10 +100,10 @@
   </div>
 </template>
 
-/** 日志项管理页：按客户端分组管理日志项，增删改查、启用/禁用切换。绑定所属客户端必填。 */
+/** 日志项管理页：按客户端分组管理日志项，增删改查、启用/禁用切换。搜索过滤、批量删除。绑定所属客户端必填。 */
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
-import { Plus, Edit, Delete, Switch } from '@element-plus/icons-vue'
+import { ref, reactive, onMounted, computed } from 'vue'
+import { Plus, Edit, Delete, Switch, Search } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { queryItems, addItem, updateItem, deleteItem, changeItemStatus } from '@/api/item'
 import { queryAllClients } from '@/api/client'
@@ -91,23 +115,49 @@ const total = ref(0)
 const page = ref(1)
 const limit = ref(10)
 const loading = ref(false)
-const dialogVisible = ref(false)
-const isEdit = ref(false)
-const saving = ref(false)
-const statusOn = ref('1')
-const form = reactive({
-  id: 0,
-  clientId: null,
-  itemName: '',
-  itemDesc: '',
-  logPath: '',
-  logPrefix: '',
-  logSuffix: '',
-  status: '1',
-})
+const searchText = ref('')
+const selectedRows = ref([])
+const tableRef = ref(null)
 
 function clientName(id) {
   return clientMap.value[id] || id
+}
+
+// filterItems 按关键词过滤日志项列表，覆盖 itemName + logPath + logPrefix 字段。
+function filterItems(items, keyword) {
+  const kw = keyword.trim().toLowerCase()
+  if (!kw) return items
+  return items.filter(
+    (item) =>
+      (item.itemName || '').toLowerCase().includes(kw) ||
+      (item.logPath || '').toLowerCase().includes(kw) ||
+      (item.logPrefix || '').toLowerCase().includes(kw)
+  )
+}
+
+const filteredList = computed(() => filterItems(list.value, searchText.value))
+
+function handleSelectionChange(selection) {
+  selectedRows.value = selection
+}
+
+async function handleBatchDelete() {
+  const ids = selectedRows.value.map((r) => r.id)
+  try {
+    await ElMessageBox.confirm(`确认删除所选 ${ids.length} 个日志项？`, '提示', { type: 'warning' })
+  } catch {
+    return
+  }
+  loading.value = true
+  try {
+    await Promise.all(ids.map((id) => deleteItem(id)))
+    ElMessage.success(`已删除 ${ids.length} 个日志项`)
+    await load()
+    selectedRows.value = []
+    tableRef.value?.clearSelection()
+  } finally {
+    loading.value = false
+  }
 }
 
 async function loadClients() {

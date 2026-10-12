@@ -6,11 +6,39 @@
     </div>
 
     <el-card shadow="never">
+      <el-input
+        v-model="searchText"
+        placeholder="搜索名称、IP、端口、来源"
+        :debounce="200"
+        clearable
+        :prefix-icon="Search"
+        class="mb-3"
+        style="max-width: 360px"
+      />
+
+      <div v-if="selectedRows.length > 0" class="mb-3">
+        <el-button type="success" :icon="Check" @click="handleBatchEnable">启用所选</el-button>
+        <el-button type="warning" :icon="Close" @click="handleBatchDisable">禁用所选</el-button>
+        <el-button type="danger" :icon="Delete" @click="handleBatchDelete">删除所选</el-button>
+        <span class="ml-3 text-gray-500">已选 {{ selectedRows.length }} 项</span>
+      </div>
+
       <el-skeleton :rows="6" animated v-if="loading && list.length === 0" />
-      <el-table v-if="!(loading && list.length === 0)" :data="list" v-loading="loading" stripe border>
+      <el-table
+        v-if="!(loading && list.length === 0)"
+        :data="filteredList"
+        v-loading="loading"
+        stripe
+        border
+        @selection-change="handleSelectionChange"
+        ref="tableRef"
+      >
+        <el-table-column type="selection" width="50" />
         <el-table-column prop="id" label="ID" width="80" />
+        <el-table-column prop="name" label="名称" />
         <el-table-column prop="ip" label="IP" />
         <el-table-column prop="port" label="端口" width="90" />
+        <el-table-column prop="source" label="来源" width="120" />
         <el-table-column label="密钥" width="140">
           <template #default="{ row }">
             <span v-if="row.vkey">{{ maskSecret(row.vkey) }}</span>
@@ -87,10 +115,10 @@
   </div>
 </template>
 
-/** 客户端管理页：列表展示、增删改查、启用/禁用切换。删除前弹确认框。 */
+/** 客户端管理页：列表展示、增删改查、启用/禁用切换。搜索过滤、批量操作。删除前弹确认框。 */
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
-import { Plus, Edit, Delete, Switch } from '@element-plus/icons-vue'
+import { ref, reactive, onMounted, computed } from 'vue'
+import { Plus, Edit, Delete, Switch, Search, Check, Close } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   queryClients,
@@ -105,11 +133,83 @@ const total = ref(0)
 const page = ref(1)
 const limit = ref(10)
 const loading = ref(false)
+const searchText = ref('')
+const selectedRows = ref([])
+const tableRef = ref(null)
 
 // maskSecret 将密钥脱敏为 6 位星号（仅回显是否已设置，不暴露明文）。
 function maskSecret(vkey) {
   if (!vkey) return ''
   return '******'
+}
+
+// filterClients 按关键词过滤客户端列表，覆盖 name + ip + port + source 四个字段。
+function filterClients(clients, keyword) {
+  const kw = keyword.trim().toLowerCase()
+  if (!kw) return clients
+  return clients.filter(
+    (c) =>
+      (c.name || '').toLowerCase().includes(kw) ||
+      (c.ip || '').toLowerCase().includes(kw) ||
+      String(c.port || '').includes(kw) ||
+      (c.source || '').toLowerCase().includes(kw)
+  )
+}
+
+const filteredList = computed(() => filterClients(list.value, searchText.value))
+
+function handleSelectionChange(selection) {
+  selectedRows.value = selection
+}
+
+async function handleBatchEnable() {
+  const ids = selectedRows.value.map((r) => r.id)
+  loading.value = true
+  try {
+    await Promise.all(ids.map((id) => changeClientStatus(id, 1)))
+    ElMessage.success(`已启用 ${ids.length} 个客户端`)
+    searchText.value = ''
+    await load()
+    selectedRows.value = []
+    tableRef.value?.clearSelection()
+  } finally {
+    loading.value = false
+  }
+}
+
+async function handleBatchDisable() {
+  const ids = selectedRows.value.map((r) => r.id)
+  loading.value = true
+  try {
+    await Promise.all(ids.map((id) => changeClientStatus(id, 0)))
+    ElMessage.success(`已禁用 ${ids.length} 个客户端`)
+    searchText.value = ''
+    await load()
+    selectedRows.value = []
+    tableRef.value?.clearSelection()
+  } finally {
+    loading.value = false
+  }
+}
+
+async function handleBatchDelete() {
+  const ids = selectedRows.value.map((r) => r.id)
+  try {
+    await ElMessageBox.confirm(`确认删除所选 ${ids.length} 个客户端？`, '提示', { type: 'warning' })
+  } catch {
+    return
+  }
+  loading.value = true
+  try {
+    await Promise.all(ids.map((id) => deleteClient(id)))
+    ElMessage.success(`已删除 ${ids.length} 个客户端`)
+    searchText.value = ''
+    await load()
+    selectedRows.value = []
+    tableRef.value?.clearSelection()
+  } finally {
+    loading.value = false
+  }
 }
 
 const dialogVisible = ref(false)

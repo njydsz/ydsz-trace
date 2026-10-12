@@ -13,7 +13,7 @@ import (
 type knownTemplate struct {
 	id       int64
 	tokens   []string
-	paramIdx []int // 参数位的位置
+	paramIdx []int
 	count    atomic.Int64
 }
 
@@ -59,10 +59,10 @@ func isParamToken(token string) bool {
 	if token == "" {
 		return false
 	}
-	// 纯数字
 	allDigit := true
 	hexOnly := true
-	for _, c :=range token {
+	for i := 0; i < len(token); i++ {
+		c := token[i]
 		if c < '0' || c > '9' {
 			allDigit = false
 		}
@@ -73,26 +73,27 @@ func isParamToken(token string) bool {
 	if allDigit {
 		return true
 	}
-	// UUID 格式（含 - 分隔）
 	if isUUID(token) {
 		return true
 	}
-	// IPv4 或 IPv6
 	if isIP(token) {
 		return true
 	}
-	// 文件路径（以 / 或 \ 开头）
-	if strings.HasPrefix(token, "/") || strings.HasPrefix(token, "\\") || strings.HasPrefix(token, "C:") || strings.HasPrefix(token, "D:") {
+	if strings.HasPrefix(token, "/") || strings.HasPrefix(token, "\\") {
 		return true
 	}
-	// 十六进制值（如 0x 开头或纯十六进制长串）
+	if len(token) >= 2 && token[0] == 'C' && token[1] == ':' {
+		return true
+	}
+	if len(token) >= 2 && token[0] == 'D' && token[1] == ':' {
+		return true
+	}
 	if strings.HasPrefix(strings.ToLower(token), "0x") {
 		return true
 	}
 	if hexOnly && utf8.RuneCountInString(token) >= 8 {
 		return true
 	}
-	// 主机名:port 格式
 	if strings.Count(token, ":") >= 1 {
 		parts := strings.Split(token, ":")
 		allNumericParts := true
@@ -100,8 +101,8 @@ func isParamToken(token string) bool {
 			if p == "" {
 				continue
 			}
-			for _, c := range p {
-				if c < '0' || c > '9' {
+			for i := 0; i < len(p); i++ {
+				if p[i] < '0' || p[i] > '9' {
 					allNumericParts = false
 					break
 				}
@@ -117,33 +118,29 @@ func isParamToken(token string) bool {
 	return false
 }
 
-// isUUID 检查是否为 UUID 格式。
+// isUUID 检查是否为 UUID 格式（8-4-4-4-12）。
 func isUUID(s string) bool {
-	// 8-4-4-4-12 格式
 	parts := strings.Split(s, "-")
-	if len(parts) == 5 {
-		lens := []int{8, 4, 4, 4, 12}
-		ok := true
-		for i, part := range parts {
-			if utf8.RuneCountInString(part) != lens[i] {
-				ok = false
-				break
-			}
-			for _, c := range part {
-				if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-					ok = false
-					break
-				}
+	if len(parts) != 5 {
+		return false
+	}
+	lens := []int{8, 4, 4, 4, 12}
+	for i, part := range parts {
+		if utf8.RuneCountInString(part) != lens[i] {
+			return false
+		}
+		for j := 0; j < len(part); j++ {
+			c := part[j]
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				return false
 			}
 		}
-		return ok
 	}
-	return false
+	return true
 }
 
 // isIP 检查是否为 IPv4 或 IPv6 地址。
 func isIP(s string) bool {
-	// 简化检查：IPv4 包含 3 个点，IPv6 包含冒号
 	if strings.Count(s, ".") == 3 {
 		parts := strings.Split(s, ".")
 		ok := true
@@ -152,8 +149,8 @@ func isIP(s string) bool {
 				ok = false
 				break
 			}
-			for _, c := range p {
-				if c < '0' || c > '9' {
+			for i := 0; i < len(p); i++ {
+				if p[i] < '0' || p[i] > '9' {
 					ok = false
 					break
 				}
@@ -162,9 +159,9 @@ func isIP(s string) bool {
 		return ok
 	}
 	if strings.Contains(s, ":") && len(s) >= 7 {
-		// IPv6 简化检查
 		ok := true
-		for _, c := range s {
+		for i := 0; i < len(s); i++ {
+			c := s[i]
 			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F') || c == ':') {
 				ok = false
 				break
@@ -190,45 +187,34 @@ func preprocess(tokens []string) []string {
 		return tokens
 	}
 	start := 0
-	// 跳过日期: yyyy-MM-dd 或 yyyy/MM/dd
 	if len(tokens) > 0 && isDateLike(tokens[start]) {
 		start++
-		// 可能接着时间 HH:mm:ss[.SSS]
 		if start < len(tokens) && isTimeLike(tokens[start]) {
 			start++
 		}
-		// 可能接着时区 Z 或 +0800
 		if start < len(tokens) && (tokens[start] == "Z" || strings.HasPrefix(tokens[start], "+") || strings.HasPrefix(tokens[start], "-")) {
 			start++
 		}
 	}
-	// 跳过 8 位时间戳 ISO8601 格式 2024-01-01T00:00:00.000000000Z
 	if start < len(tokens) && isISOTimestamp(tokens[start]) {
 		start++
 	}
-	// 跳过日志级别
 	if start < len(tokens) && isLevelToken(tokens[start]) {
 		start++
 	}
-	// 跳过 线程名 [xxx] 或 (xxx)
-	if start < len(tokens && isThreadToken(tokens[start]) {
+	if start < len(tokens) && isThreadToken(tokens[start]) {
 		start++
 	}
 	return tokens[start:]
 }
 
-// isDateLike 判断是否为日期格式。
+// isDateLike 判断是否为日期格式 yyyy-MM-dd 或 yyyy/MM/dd。
 func isDateLike(s string) bool {
-	// 2024-01-15 或 2024/01/15
-	if (strings.Count(s, "-") == 2 || strings.Count(s, "/") == 2) && len(s) >= 10 {
-		return true
-	}
-	return false
+	return (strings.Count(s, "-") == 2 || strings.Count(s, "/") == 2) && len(s) >= 10
 }
 
-// isTimeLike 判断是否为时间格式。
+// isTimeLike 判断是否为时间格式 HH:mm:ss.SSS。
 func isTimeLike(s string) bool {
-	// 10:23:45.123
 	return strings.Count(s, ":") >= 2 && len(s) >= 8
 }
 
@@ -243,15 +229,14 @@ func isLevelToken(s string) bool {
 	case "DEBUG", "INFO", "WARN", "WARNING", "ERROR", "FATAL", "TRACE":
 		return true
 	}
-	// 可能带冒号或DOT或结束符
 	trimmed := strings.TrimRight(s, ":.l]")
-	if isLevelToken(trimmed) {
-		return true
+	if trimmed != s {
+		return isLevelToken(trimmed)
 	}
 	return false
 }
 
-// isThreadToken 判断是否为线程名。
+// isThreadToken 判断是否为线程名 [xxx] 或 (xxx)。
 func isThreadToken(s string) bool {
 	return (strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]")) ||
 		(strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")"))
@@ -274,7 +259,7 @@ func (d *Drain) findNode(tokens []string) *trieNode {
 	return node
 }
 
-// jaccardSimilarity 计算两个 token 序列的 Jaccard 相似度。
+// jaccardSimilarity 计算两个 token 序列的 Jaccard 相似度（位置敏感）。
 func jaccardSimilarity(a, b []string) float64 {
 	if len(a) == 0 && len(b) == 0 {
 		return 1.0
@@ -282,7 +267,6 @@ func jaccardSimilarity(a, b []string) float64 {
 	if len(a) == 0 || len(b) == 0 {
 		return 0.0
 	}
-	// 位置敏感：只在相同位置不同时视为不匹配
 	minLen := len(a)
 	if len(b) < minLen {
 		minLen = len(b)
@@ -303,7 +287,7 @@ func jaccardSimilarity(a, b []string) float64 {
 	return float64(match) / float64(maxLen)
 }
 
-// cosineSimilarity 计算 token 级别的余弦相似度（加权匹配）。
+// cosineSimilarity 计算 token 级别的余弦相似度。
 func cosineSimilarity(a, b []string) float64 {
 	if len(a) == 0 && len(b) == 0 {
 		return 1.0
@@ -311,7 +295,6 @@ func cosineSimilarity(a, b []string) float64 {
 	if len(a) == 0 || len(b) == 0 {
 		return 0.0
 	}
-	// 使用位置精确匹配
 	match := 0
 	minLen := len(a)
 	if len(b) < minLen {
@@ -322,16 +305,14 @@ func cosineSimilarity(a, b []string) float64 {
 			match++
 		}
 	}
-	// 余弦相似度
 	return float64(match) / (math.Sqrt(float64(len(a))) * math.Sqrt(float64(len(b))))
 }
 
 // matchBestTemplate 在模板组中寻找最佳匹配模板。
 func (d *Drain) matchBestTemplate(tokens []string, candidates []*knownTemplate) (*knownTemplate, float64) {
-	best := (*knownTemplate)(nil)
+	var best *knownTemplate
 	bestScore := 0.0
 	for _, tmpl := range candidates {
-		// 用加权方式结合 cosine 和 jaccard
 		cosine := cosineSimilarity(tokens, tmpl.tokens)
 		jaccard := jaccardSimilarity(tokens, tmpl.tokens)
 		score := 0.6*cosine + 0.4*jaccard
@@ -343,19 +324,7 @@ func (d *Drain) matchBestTemplate(tokens []string, candidates []*knownTemplate) 
 	return best, bestScore
 }
 
-// extractParams 从 tokens 中提取参数值。
-func extractParams(tokens []string) []string {
-	var params []string
-	for _, tok := range tokens {
-		if isParamToken(tok) {
-			params = append(params, tok)
-		}
-	}
-	return params
-}
-
 // mergeTemplate 将新 token 序列合并到已有模板（公共前缀合并策略）。
-// 返回新的模板 token 序列和参数位置。
 func mergeTemplate(existing, incoming []string) ([]string, []int) {
 	minLen := len(existing)
 	if len(incoming) < minLen {
@@ -375,14 +344,12 @@ func mergeTemplate(existing, incoming []string) ([]string, []int) {
 			in = incoming[i]
 		}
 		if i >= len(existing) {
-			// 新序列比旧序列长，这个位置直接从incoming来
 			if isParamToken(in) {
 				result[i] = "<*>"
 			} else {
 				result[i] = in
 			}
 		} else if i >= len(incoming) {
-			// 旧序列比新序列长
 			if isParamToken(ex) {
 				result[i] = "<*>"
 			} else {
@@ -391,7 +358,6 @@ func mergeTemplate(existing, incoming []string) ([]string, []int) {
 		} else if ex == in {
 			result[i] = ex
 		} else {
-			// 不同位置 → 参数位
 			result[i] = "<*>"
 		}
 	}
@@ -404,58 +370,31 @@ func mergeTemplate(existing, incoming []string) ([]string, []int) {
 	return result, paramIdx
 }
 
-// templateString 将模板 token 序列拼接为模板字符串。
-func templateString(tokens []string) string {
-	return strings.Join(tokens, " ")
+// extractParams 从 tokens 中提取参数值。
+func extractParams(tokens []string) []string {
+	var params []string
+	for _, tok := range tokens {
+		if isParamToken(tok) {
+			params = append(params, tok)
+		}
+	}
+	return params
 }
 
-// ProcessLine 处理单行日志，返回匹配/创建的模板和提取的参数。
-// 这是 Drain 算法的核心入口。
-func (d *Drain) ProcessLine(line string) (templateStr string, params []string) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	tokens := d.tokenize(line)
-	if len(tokens) == 0 {
-		return line, nil
+// extractParamsAt 根据参数位置从 tokens 中提取参数值。
+func extractParamsAt(tokens []string, idx []int) []string {
+	params := make([]string, 0, len(idx))
+	for _, i := range idx {
+		if i < len(tokens) {
+			params = append(params, tokens[i])
+		}
 	}
+	return params
+}
 
-	// 预处理：去除固定前缀
-	content := preprocess(tokens)
-	if len(content) == 0 {
-		content = tokens
-	}
-
-	// 获取 token 数前缀（第一个 token 作为初始引导）
-	prefix := content
-	if len(prefix) > 4 {
-		prefix = prefix[:4]
-	}
-	node := d.findNode(prefix)
-
-	if len(node.templates) == 0 {
-		// 没有候选模板，直接创建
-		tmpl := d.createTemplate(content)
-		node.templates = append(node.templates, tmpl)
-		return templateStrImpl(tmpl), extractParams(content)
-	}
-
-	// 匹配最佳模板
-	best, score := d.matchBestTemplate(content, node.templates)
-	if best == nil || score < d.simThresh {
-		// 没有达到阈值，创建新模板
-		tmpl := d.createTemplate(content)
-		node.templates = append(node.templates, tmpl)
-		return templateStrImpl(tmpl), extractParams(content)
-	}
-
-	// 匹配成功，合并到最佳模板
-	mergedTokens, paramIdx := mergeTemplate(best.tokens, content)
-	best.tokens = mergedTokens
-	best.paramIdx = paramIdx
-	best.count.Add(1)
-	params = extractParamsAt(content, paramIdx)
-	return templateStrImpl(best), params
+// templateStrImpl 从模板提取模板字符串。
+func templateStrImpl(tmpl *knownTemplate) string {
+	return strings.Join(tmpl.tokens, " ")
 }
 
 // createTemplate 创建新的已知模板。
@@ -480,25 +419,74 @@ func (d *Drain) createTemplate(tokens []string) *knownTemplate {
 	return tmpl
 }
 
-// templateStrImpl 从模板提取模板字符串。
-func templateStrImpl(tmpl *knownTemplate) string {
-	return strings.Join(tmpl.tokens, " ")
-}
+// ProcessLine 处理单行日志，返回匹配/创建的模板和提取的参数。
+func (d *Drain) ProcessLine(line string) (templateStr string, params []string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 
-// extractParamsAt 根据参数位置从 tokens 中提取参数值。
-func extractParamsAt(tokens []string, idx []int) []string {
-	params := make([]string, 0, len(idx))
-	for _, i := range idx {
-		if i < len(tokens) {
-			params = append(params, tokens[i])
-		}
+	tokens := d.tokenize(line)
+	if len(tokens) == 0 {
+		return line, nil
 	}
-	return sortParams(params)
+
+	content := preprocess(tokens)
+	if len(content) == 0 {
+		content = tokens
+	}
+
+	prefix := content
+	if len(prefix) > 4 {
+		prefix = prefix[:4]
+	}
+	node := d.findNode(prefix)
+
+	if len(node.templates) == 0 {
+		tmpl := d.createTemplate(content)
+		node.templates = append(node.templates, tmpl)
+		return templateStrImpl(tmpl), extractParams(content)
+	}
+
+	best, score := d.matchBestTemplate(content, node.templates)
+	if best == nil || score < d.simThresh {
+		tmpl := d.createTemplate(content)
+		node.templates = append(node.templates, tmpl)
+		return templateStrImpl(tmpl), extractParams(content)
+	}
+
+	mergedTokens, paramIdx := mergeTemplate(best.tokens, content)
+	best.tokens = mergedTokens
+	best.paramIdx = paramIdx
+	best.count.Add(1)
+	return templateStrImpl(best), extractParamsAt(content, paramIdx)
 }
 
-// sortParams 保持参数原始顺序（这里直接返回即可）。
-func sortParams(params []string) []string {
-	return params
+// findTemplateByContent 根据原始日志行内容查找匹配的已知模板。
+func (d *Drain) findTemplateByContent(line string) (*knownTemplate, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	tokens := d.tokenize(line)
+	if len(tokens) == 0 {
+		return nil, false
+	}
+	content := preprocess(tokens)
+	if len(content) == 0 {
+		content = tokens
+	}
+
+	prefix := content
+	if len(prefix) > 4 {
+		prefix = prefix[:4]
+	}
+	node := d.findNode(prefix)
+	if len(node.templates) == 0 {
+		return nil, false
+	}
+	best, score := d.matchBestTemplate(content, node.templates)
+	if best == nil || score < d.simThresh {
+		return nil, false
+	}
+	return best, true
 }
 
 // AllTemplates 返回 Drain 已知所有模板的拷贝。
@@ -508,9 +496,9 @@ func (d *Drain) AllTemplates() []Template {
 	templates := make([]Template, 0, len(d.id2tmpl))
 	for _, tmpl := range d.id2tmpl {
 		templates = append(templates, Template{
-			ID:      tmpl.id,
+			ID:       tmpl.id,
 			Template: templateStrImpl(tmpl),
-			Count:   tmpl.count.Load(),
+			Count:    tmpl.count.Load(),
 		})
 	}
 	sort.Slice(templates, func(i, j int) bool {

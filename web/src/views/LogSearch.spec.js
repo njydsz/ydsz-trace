@@ -55,6 +55,11 @@ function mountComponent() {
         'el-alert': { template: '<div />' },
         'el-empty': { template: '<div />' },
         'el-icon': { template: '<span />' },
+        'el-radio-group': { template: '<div><slot /></div>', props: ['modelValue'] },
+        'el-radio-button': { template: '<button />', props: ['label'] },
+        'el-tag': { template: '<span><slot /></span>' },
+        'el-collapse': { template: '<div><slot /></div>' },
+        'el-collapse-item': { template: '<div><slot /></div>', props: ['title'] },
       },
     },
   })

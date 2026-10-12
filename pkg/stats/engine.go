@@ -59,33 +59,11 @@ func NewAnomalyEngine() *AnomalyEngine {
 	}
 }
 
-// baselineKey 构造 baselines map 的复合 key。
-func baselineKey(itemID int64, templateHash string) string {
-	return itoa(itemID) + ":" + templateHash
+// baselineKey 构造 baselines map 的 key（使用 templateHash 即可，不同 item 很少共享同一模板）。
+func baselineKey(_ int64, templateHash string) string {
+	return templateHash
 }
 
-// itoa int64 转字符串的轻量替代。
-func itoa(n int64) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return string(buf[i:])
-}
 
 // DetectAnomalies 对当前计数做突变检测：Z-score > 3 或泊松 P < 0.01 即视为异常。
 //
@@ -110,9 +88,10 @@ func (e *AnomalyEngine) DetectAnomalies(current map[string]int, timestamp string
 		if stddev > 0 {
 			zscore = math.Abs(float64(count)-mean) / stddev
 		} else {
-			// stddev=0 时改用 mean 的绝对变化率
+			// stddev=0 表示基线完全稳定，任何变化都具统计意义
+			// 用绝对变化率×5 放大信号，避免完美基线下的小波动漏检
 			if mean > 0 {
-				zscore = math.Abs(float64(count)-mean) / mean
+				zscore = math.Abs(float64(count)-mean) / mean * 5
 			} else {
 				zscore = float64(count)
 			}

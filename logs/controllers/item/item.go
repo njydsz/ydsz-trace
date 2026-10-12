@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"ydsz-trace/logs/controllers/audit"
+	"ydsz-trace/logs/controllers/logs"
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
 
@@ -49,6 +50,10 @@ func Add(c *gin.Context) {
 	item.UpdatedTime = nowStr()
 	id, err := models.AddItem(&item)
 	log.Printf("ID: %d, ERR: %v\n", id, err)
+	// 缓存无效化：新增 item 后清除关联缓存（首次新增一般无历史查询，但保持一致性）
+	if id > 0 {
+		logs.InvalidateItemCache(id)
+	}
 	// 审计埋点：项目日志项新增
 	result := "success"
 	if err != nil {
@@ -95,6 +100,10 @@ func Update(c *gin.Context) {
 	}
 	item.UpdatedTime = nowStr()
 	models.UpdateItem(&item)
+	// 缓存无效化：更新 item 后清除关联缓存
+	if item.Id > 0 {
+		logs.InvalidateItemCache(item.Id)
+	}
 	api.Success(c, "更新项目日志成功", nil)
 }
 

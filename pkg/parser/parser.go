@@ -73,8 +73,16 @@ func (p *LogParser) ParseLine(line string) ParseResult {
 			preFields[k] = v
 		}
 		templateStr := maskParams(line, fmtFields)
+		// 格式匹配也记录到 Drain 以便模板管理
+		_, drainParams := p.drain.ProcessLine(line)
+		var tmplID int64
+		if t, found := p.drain.findTemplateByContent(line); found {
+			tmplID = t.id
+		}
 		return ParseResult{
+			TemplateID: tmplID,
 			Template:   templateStr,
+			Params:     drainParams,
 			Fields:     preFields,
 			Format:     fmtName,
 			Confidence: 1.0,
@@ -91,7 +99,14 @@ func (p *LogParser) ParseLine(line string) ParseResult {
 		}
 	}
 
+	// 获取匹配到的模板 ID
+	var tmplID int64
+	if tmpl, found := p.drain.findTemplateByContent(line); found {
+		tmplID = tmpl.id
+	}
+
 	return ParseResult{
+		TemplateID: tmplID,
 		Template:   templateStr,
 		Params:     params,
 		Fields:     preFields,

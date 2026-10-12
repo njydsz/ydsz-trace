@@ -37,9 +37,9 @@ var (
 	reUserID = regexp.MustCompile(
 		`\b(?:userId?|user[_-]?id|uid|account[_-]?id)[:=]\s*(\S+)\b`)
 
-	// reHTTPStatus 匹配 HTTP 状态码
+	// reHTTPStatus 匹配 HTTP 状态码（避免匹配 IP 段，要求前面是空格或行首）
 	reHTTPStatus = regexp.MustCompile(
-		`\b([1-5]\d{2})\b`)
+		`(?:^|\s)([1-5]\d{2})(?:\s|$)`)
 
 	// reDuration 匹配带单位的时间（ms/s/min）
 	reDuration = regexp.MustCompile(
