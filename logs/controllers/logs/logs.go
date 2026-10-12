@@ -18,6 +18,7 @@ import (
 	"ydsz-trace/pkg/api"
 	"ydsz-trace/pkg/config"
 	"ydsz-trace/pkg/metrics"
+	"ydsz-trace/pkg/sanitize"
 	"ydsz-trace/pkg/util"
 
 	"github.com/gin-gonic/gin"
@@ -128,6 +129,18 @@ func Query(c *gin.Context) {
 	err = json.Unmarshal(data, &logsReq)
 	if err != nil {
 		api.Fail(c, api.CodeBadRequest, "请求参数错误")
+		return
+	}
+
+	// P0-4 修复：校验日期格式，防止路径穿越
+	if _, ok := sanitize.SafeDate(logsReq.Date); !ok {
+		api.Fail(c, api.CodeBadRequest, "date 参数非法，仅允许 YYYY-MM-DD 格式")
+		return
+	}
+
+	// P0-4 修复：校验 key 白名单，防止路径穿越
+	if _, ok := sanitize.SafeFilename(logsReq.Key); !ok {
+		api.Fail(c, api.CodeBadRequest, "key 参数非法，仅允许字母数字下划线连字符")
 		return
 	}
 

@@ -3,7 +3,7 @@
 // 测试环境：jsdom（vitest.config.js 已配置），Pinia createPinia() 每个用例前重置。
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
-import { useAuthStore, useAuth } from './auth'
+import { useAuthStorage as useAuthStore, useAuth } from './auth'
 
 // 辅助：创建局部 localStorage 隔离（jsdom 默认会共享）
 function cleanLocalStorage() {

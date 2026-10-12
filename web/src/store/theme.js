@@ -34,7 +34,10 @@ function applyToDOM(theme, systemDark) {
   }
 }
 
-export const useThemeStore = defineStore('theme', () => {
+// useThemeStore — 主题状态管理 Pinia store。
+//
+// 偏好：'light' | 'dark' | 'system'；持久化到 localStorage，key = 'ydsz-theme-preference'。
+export const useThemeStorage = defineStore('theme', () => {
   const preference = ref(readPref())
   const systemDark = ref(isSystemDark())
   const systemDarkMQ = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)')
@@ -90,3 +93,11 @@ export const useThemeStore = defineStore('theme', () => {
     init,
   }
 })
+
+/**
+ * useTheme 兼容包装函数，等价于 useThemeStorage。
+ * 供旧代码迁移期间保持兼容。
+ */
+export function useTheme() {
+  return useThemeStorage()
+}

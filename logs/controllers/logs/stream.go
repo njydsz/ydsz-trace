@@ -17,6 +17,7 @@ import (
 
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
+	"ydsz-trace/pkg/sanitize"
 
 	"github.com/gin-gonic/gin"
 )
@@ -63,6 +64,12 @@ func Stream(c *gin.Context) {
 
 	if req.Item == 0 || (req.Key == "" && req.Query == "") || req.Date == "" {
 		sseError(c, "item/query+key 不能同时为空，且 date 必填")
+		return
+	}
+
+	// P0-4 修复：使用 sanitize 包白名单校验日期格式，防止路径穿越
+	if _, ok := sanitize.SafeDate(req.Date); !ok {
+		sseError(c, "日期格式非法，仅允许 YYYY-MM-DD")
 		return
 	}
 

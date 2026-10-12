@@ -66,7 +66,7 @@
  */
 import { computed, onMounted, onBeforeUnmount } from 'vue'
 // P0-1 修复：主题初始化必须在 onMounted 中注册，返回清理函数给 onBeforeUnmount。
-// 原代码错误：onBeforeUnmount(themeStore.init()) 在 setup 阶段直接调用 init()，
+// 原代码错误：onBeforeUnmount(themeStorage.init()) 在 setup 阶段直接调用 init()，
 // 导致 watcher 在 setup 阶段启动且清理函数被覆盖。
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -76,12 +76,12 @@ import {
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { logout } from '@/api/auth'
 import { useAuth } from '@/store/auth'
-import { useThemeStore } from '@/store/theme'
+import { useThemeStorage } from '@/store/theme'
 
 const auth = useAuth()
 const route = useRoute()
 const router = useRouter()
-const themeStore = useThemeStore()
+const themeStorage = useThemeStorage()
 
 const activeMenu = computed(() => route.path)
 const currentTitle = computed(() => route.meta?.title || 'Ydsz Trace')
@@ -91,7 +91,7 @@ const themeIcon = computed(() => {
     light: Sunny,
     dark: Moon,
     system: Platform,
-  }[themeStore.preference]
+  }[themeStorage.preference]
 })
 
 const themeLabel = computed(() => {
@@ -99,17 +99,17 @@ const themeLabel = computed(() => {
     light: '浅色',
     dark: '深色',
     system: '跟随系统',
-  }[themeStore.preference]
+  }[themeStorage.preference]
 })
 
 function onCycleTheme() {
-  themeStore.cyclePreference()
+  themeStorage.cyclePreference()
 }
 
 let themeCleanup
 
 onMounted(() => {
-  themeCleanup = themeStore.init()
+  themeCleanup = themeStorage.init()
 })
 
 onBeforeUnmount(() => {

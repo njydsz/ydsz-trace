@@ -14,12 +14,12 @@ import (
 )
 
 const (
-	// heartbeatInterval 正常心跳间隔
-	heartbeatInterval = 60 * time.Second
-	// maxRetryInterval 最大重试间隔
-	maxRetryInterval = 10 * time.Minute
-	// initialRetryInterval 初始重试间隔
-	initialRetryInterval = 5 * time.Second
+	// HEARTBEAT_INTERVAL 正常心跳间隔
+	HEARTBEAT_INTERVAL = 60 * time.Second
+	// MAX_RETRY_INTERVAL 最大重试间隔
+	MAX_RETRY_INTERVAL = 10 * time.Minute
+	// INITIAL_RETRY_INTERVAL 初始重试间隔
+	INITIAL_RETRY_INTERVAL = 5 * time.Second
 )
 
 // HeartbeatManager 心跳续约管理器。
@@ -57,7 +57,7 @@ func (h *HeartbeatManager) Start() {
 
 	h.isRunning = true
 	go h.heartbeatLoop()
-	log.Printf("[心跳] 心跳续约已启动，间隔: %v，目标: %s", heartbeatInterval, h.server)
+	log.Printf("[心跳] 心跳续约已启动，间隔: %v，目标: %s", HEARTBEAT_INTERVAL, h.server)
 }
 
 // Stop 停止心跳 goroutine，阻塞至循环退出。
@@ -119,12 +119,12 @@ func (h *HeartbeatManager) getInterval() time.Duration {
 	defer h.mu.Unlock()
 
 	if h.retryCount == 0 {
-		return heartbeatInterval
+		return HEARTBEAT_INTERVAL
 	}
 
-	interval := time.Duration(math.Pow(2, float64(h.retryCount))) * initialRetryInterval
-	if interval > maxRetryInterval {
-		interval = maxRetryInterval
+	interval := time.Duration(math.Pow(2, float64(h.retryCount))) * INITIAL_RETRY_INTERVAL
+	if interval > MAX_RETRY_INTERVAL {
+		interval = MAX_RETRY_INTERVAL
 	}
 	return interval
 }

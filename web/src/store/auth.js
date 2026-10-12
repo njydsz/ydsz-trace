@@ -10,8 +10,8 @@ import { defineStore } from 'pinia'
 // STORAGE_KEY localStorage 中持久化用户名的 key。
 const STORAGE_KEY = 'ydsz_username'
 
-// useAuthStore — Pinia 组合式 store。
-export const useAuthStore = defineStore('auth', () => {
+// useAuthStorage — Pinia 组合式 store。
+export const useAuthStorage = defineStore('auth', () => {
   const username = ref(localStorage.getItem(STORAGE_KEY) || '')
 
   // setUser 设置当前用户并同步写入 localStorage。
@@ -38,7 +38,7 @@ export const useAuthStore = defineStore('auth', () => {
 // useAuth — 兼容旧接口：返回 { state, setUser, clear, loggedIn } 形态。
 // state 即 Pinia store 实例，模板中 auth.state.username 可直接访问响应式值。
 export function useAuth() {
-  const store = useAuthStore()
+  const store = useAuthStorage()
   return {
     get state() {
       return store
