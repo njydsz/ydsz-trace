@@ -1,0 +1,65 @@
+{
+  "traceWaterfall": {
+    "traceFormat": "logc-v2",
+    "totalNodes": 3,
+    "errorCount": 1,
+    "firstError": {
+      "level": "ERROR",
+      "node": "node-10.0.0.1",
+      "content": "connection refused"
+    },
+    "spans": [
+      {
+        "timestamp": "2026-03-15T10:00:00.100Z",
+        "level": "INFO",
+        "node": "node-10.0.0.1",
+        "service": "api-gateway",
+        "thread": "http-nio-8080-exec-1",
+        "content": "request received: GET /api/users",
+        "isError": false
+      },
+      {
+        "timestamp": "2026-03-15T10:00:00.250Z",
+        "level": "INFO",
+        "node": "node-10.0.0.2",
+        "service": "user-service",
+        "thread": "pool-3-thread-5",
+        "content": "fetching user list",
+        "isError": false
+      },
+      {
+        "timestamp": "2026-03-15T10:00:00.800Z",
+        "level": "ERROR",
+        "node": "node-10.0.0.1",
+        "service": "api-gateway",
+        "thread": "http-nio-8080-exec-1",
+        "content": "connection refused",
+        "isError": true
+      }
+    ]
+  },
+  "traceNodeView": {
+    "traceId": "abc-123-def",
+    "Total": 5,
+    "Nodes": 3,
+    "Results": [
+      {
+        "Node": "node-10.0.0.1",
+        "Count": 3,
+        "Lines": [
+          "INFO   [api-gateway] request received",
+          "DEBUG  [api-gateway] routing to user-service",
+          "ERROR  [api-gateway] connection refused"
+        ]
+      },
+      {
+        "Node": "node-10.0.0.2",
+        "Count": 2,
+        "Lines": [
+          "INFO   [user-service] fetching user list",
+          "INFO   [user-service] returning 0 results"
+        ]
+      }
+    ]
+  }
+}

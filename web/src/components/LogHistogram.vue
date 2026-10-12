@@ -389,7 +389,6 @@ const bars = computed(() => {
   const gap = 1
 
   return bins.map((bin, i) => {
-    const totalHeight = (bin.total / count) * barAreaHeight.value
     let currentY = padding.top + barAreaHeight.value
     const segments = []
     for (const levelInfo of levelColors) {

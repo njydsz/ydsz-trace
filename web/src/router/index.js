@@ -15,6 +15,7 @@ import LogTail from '@/views/LogTail.vue'
 import Alerts from '@/views/Alerts.vue'
 import TaskList from '@/views/TaskList.vue'
 import TraceView from '@/views/TraceView.vue'
+import ConversationWorkbench from '@/views/ConversationWorkbench.vue'
 
 const routes = [
   // 公开路由：登录页。
@@ -22,8 +23,10 @@ const routes = [
   {
     path: '/',
     component: Layout,
-    redirect: '/dashboard',
+    redirect: '/conversation',
     children: [
+      // 默认首页：对话式工作台（v2.0+）。
+      { path: 'conversation', name: 'conversation', component: ConversationWorkbench, meta: { title: '对话检索' } },
       // 控制台子路由（均需登录）。
       { path: 'dashboard', name: 'dashboard', component: Dashboard, meta: { title: '概览' } },
       { path: 'clients', name: 'clients', component: Clients, meta: { title: '客户端管理' } },

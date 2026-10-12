@@ -118,6 +118,21 @@ const loading = ref(false)
 const searchText = ref('')
 const selectedRows = ref([])
 const tableRef = ref(null)
+const dialogVisible = ref(false)
+const isEdit = ref(false)
+const saving = ref(false)
+const statusOn = ref('1')
+
+const form = reactive({
+  id: 0,
+  clientId: null,
+  itemName: '',
+  itemDesc: '',
+  logPath: '',
+  logPrefix: '',
+  logSuffix: '',
+  status: '1',
+})
 
 function clientName(id) {
   return clientMap.value[id] || id

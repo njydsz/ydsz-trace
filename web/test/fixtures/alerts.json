@@ -1,0 +1,36 @@
+{
+  "rules": [
+    {
+      "id": 1,
+      "name": "ERROR 过多",
+      "itemId": 1,
+      "itemName": "auth-service",
+      "threshold": 10,
+      "intervalSec": 300,
+      "enabled": 1
+    },
+    {
+      "id": 2,
+      "name": "超时告警",
+      "itemId": 2,
+      "itemName": "api-gateway",
+      "threshold": 5,
+      "intervalSec": 60,
+      "enabled": 0
+    }
+  ],
+  "events": [
+    {
+      "id": 1,
+      "ruleId": 1,
+      "ruleName": "ERROR 过多",
+      "firedAt": "2026-03-15T10:00:00Z",
+      "message": "最近 300 秒内检测到 15 条 ERROR"
+    }
+  ],
+  "quota": {
+    "enabled": 2,
+    "firedToday": 5,
+    "failedToday": 1
+  }
+}

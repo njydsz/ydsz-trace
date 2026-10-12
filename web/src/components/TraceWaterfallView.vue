@@ -117,7 +117,6 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 import { Loading } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
 import { traceWaterfall } from '@/api/logs'
 
 const props = defineProps({
@@ -271,7 +270,7 @@ async function fetchWaterfall() {
     waterfallData.value = resp
     spans.value = resp.spans || []
     hasSearched.value = true
-  } catch (e) {
+  } catch {
     errorMsg.value = '检索失败，请确认服务端已启动'
   } finally {
     loading.value = false

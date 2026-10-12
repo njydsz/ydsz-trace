@@ -99,7 +99,7 @@ export function createSSE(url, options = {}) {
         // 清空登录态并跳转登录页
         try {
           useAuth().clear()
-        } catch (_) {
+        } catch {
           // store 可能未初始化，忽略
         }
         if (window.location.pathname !== '/login') {

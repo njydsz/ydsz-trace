@@ -104,8 +104,6 @@ const viewerRef = ref(null)
 // 用 shallowRef 包裹行数组，避免深度响应式开销（SSE 高频推送）
 // ringBuffer 存储完整的环形缓冲区，用于视图渲染
 const ringBuffer = shallowRef([])
-// 环形写入指针
-let ringWritePos = 0
 
 const displayLines = computed(() => ringBuffer.value)
 
@@ -160,7 +158,6 @@ function startTail() {
   streaming.value = true
   paused.value = false
   ringBuffer.value = []
-  ringWritePos = 0
   msgCount = 0
   totalCount.value = 0
   sortedIndexStart.value = 0
@@ -254,7 +251,6 @@ function stopTail() {
 
 function clearLog() {
   ringBuffer.value = []
-  ringWritePos = 0
   msgCount = 0
   totalCount.value = 0
   sortedIndexStart.value = 0
