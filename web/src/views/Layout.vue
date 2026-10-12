@@ -1,6 +1,6 @@
 <template>
   <el-container class="h-screen">
-    <el-aside width="220px" class="bg-brand-800 text-white">
+    <el-aside width="220px" class="aside-custom">
       <div class="h-16 flex items-center px-5 text-lg font-bold tracking-wide">
         <el-icon class="mr-2"><Monitor /></el-icon>
         Ydsz Trace
@@ -40,14 +40,20 @@
     </el-aside>
 
     <el-container>
-      <el-header class="flex items-center justify-between bg-white border-b border-slate-200">
-        <div class="text-gray-700 font-medium">{{ currentTitle }}</div>
+      <el-header class="flex items-center justify-between header-custom">
+        <div class="text-primary font-medium">{{ currentTitle }}</div>
         <div class="flex items-center gap-3">
+          <el-button
+            text
+            :icon="themeIcon"
+            :title="`主题: ${themeLabel}`"
+            @click="onCycleTheme"
+          />
           <el-tag type="info" effect="plain" round>{{ auth.state.username }}</el-tag>
           <el-button text :icon="SwitchButton" @click="onLogout">退出</el-button>
         </div>
       </el-header>
-      <el-main class="bg-slate-50">
+      <el-main class="main-custom">
         <router-view />
       </el-main>
     </el-container>
@@ -58,19 +64,57 @@
 /**
  * 控制台框架布局：左侧 Aside 导航 + 顶部 Header（用户信息/退出）+ 右侧 Main。
  */
-import { computed } from 'vue'
+import { computed, onMounted, onBeforeUnmount } from 'vue'
+// P0-1 修复：主题初始化必须在 onMounted 中注册，返回清理函数给 onBeforeUnmount。
+// 原代码错误：onBeforeUnmount(themeStore.init()) 在 setup 阶段直接调用 init()，
+// 导致 watcher 在 setup 阶段启动且清理函数被覆盖。
 import { useRoute, useRouter } from 'vue-router'
-import { Monitor, DataLine, Cpu, Document, Search, SwitchButton, VideoCamera, List, Bell, Share } from '@element-plus/icons-vue'
+import {
+  Monitor, DataLine, Cpu, Document, Search, SwitchButton,
+  VideoCamera, List, Bell, Share, Sunny, Moon, Platform,
+} from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage } from 'element-plus'
 import { logout } from '@/api/auth'
 import { useAuth } from '@/store/auth'
+import { useThemeStore } from '@/store/theme'
 
 const auth = useAuth()
 const route = useRoute()
 const router = useRouter()
+const themeStore = useThemeStore()
 
 const activeMenu = computed(() => route.path)
 const currentTitle = computed(() => route.meta?.title || 'Ydsz Trace')
+
+const themeIcon = computed(() => {
+  return {
+    light: Sunny,
+    dark: Moon,
+    system: Platform,
+  }[themeStore.preference]
+})
+
+const themeLabel = computed(() => {
+  return {
+    light: '浅色',
+    dark: '深色',
+    system: '跟随系统',
+  }[themeStore.preference]
+})
+
+function onCycleTheme() {
+  themeStore.cyclePreference()
+}
+
+let themeCleanup
+
+onMounted(() => {
+  themeCleanup = themeStore.init()
+})
+
+onBeforeUnmount(() => {
+  if (themeCleanup) themeCleanup()
+})
 
 async function onLogout() {
   try {
@@ -88,3 +132,20 @@ async function onLogout() {
   router.push('/login')
 }
 </script>
+
+<style scoped>
+.aside-custom {
+  background-color: var(--bg-aside);
+  color: var(--text-aside);
+}
+.header-custom {
+  background-color: var(--bg-header);
+  border-bottom: 1px solid var(--border-header);
+}
+.main-custom {
+  background-color: var(--bg-main);
+}
+.text-primary {
+  color: var(--text-primary);
+}
+</style>

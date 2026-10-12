@@ -6,8 +6,10 @@
 package client
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"log"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +17,7 @@ import (
 	models "ydsz-trace/logs/models"
 	itemModels "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
+	"ydsz-trace/pkg/config"
 
 	"github.com/gin-gonic/gin"
 )
@@ -115,7 +118,28 @@ func Update(c *gin.Context) {
 	api.Success(c, "更新客户端成功", nil)
 }
 
+// getRegisterKey 获取注册鉴权密钥，优先级：环境变量 YDSZ_REGISTER_KEY > 配置文件 register_key > 默认值。
+func getRegisterKey(c *gin.Context) string {
+	// 环境变量最高优先级
+	if v := os.Getenv("YDSZ_REGISTER_KEY"); v != "" {
+		return v
+	}
+	// 配置文件次之
+	cfg, exists := c.Get("cfg")
+	if exists {
+		if conf, ok := cfg.(*config.Config); ok {
+			if v := conf.StringOr("register_key", ""); v != "" {
+				return v
+			}
+		}
+	}
+	// 默认值
+	return "ydsz-trace-register-2026"
+}
+
 // Register 接收 logc 自注册请求。
+//
+// 安全特性：请求必须在 body 的 key 字段携带与配置一致的注册密钥。
 //
 // 两种模式：
 //  1. 传统模式 (source_type 为空或 file)：按 ip+port+vkey 匹配；通过后置 online=1
@@ -129,20 +153,32 @@ func Register(c *gin.Context) {
 
 	var reg ClientRegisterReq
 	reqBody, err := c.GetRawData()
-	if err == nil {
-		err = json.Unmarshal(reqBody, &reg)
-		if err == nil {
-			switch reg.SourceType {
-			case "docker", "k8s":
-				handleVirtualRegister(c, ip, port, &reg)
-				return
-			default:
-				handleTraditionalRegister(c, ip, port, reg.VKey, reg.LocalLogcPort)
-				return
-			}
-		}
+	if err != nil {
+		api.Fail(c, api.CodeBadRequest, "请求参数错误")
+		return
 	}
-	api.Success(c, "客户端上线成功", nil)
+
+	err = json.Unmarshal(reqBody, &reg)
+	if err != nil {
+		api.Fail(c, api.CodeBadRequest, "请求参数错误")
+		return
+	}
+
+	// 注册鉴权：校验请求体中的 key 是否与配置匹配
+	expectedKey := getRegisterKey(c)
+	if subtle.ConstantTimeCompare([]byte(reg.VKey), []byte(expectedKey)) != 1 {
+		api.Fail(c, api.CodeUnauthorized, "注册鉴权失败：无效的注册密钥")
+		return
+	}
+
+	switch reg.SourceType {
+	case "docker", "k8s":
+		handleVirtualRegister(c, ip, port, &reg)
+		return
+	default:
+		handleTraditionalRegister(c, ip, port, reg.VKey, reg.LocalLogcPort)
+		return
+	}
 }
 
 // handleTraditionalRegister 传统 IP+Port+vKey 注册。

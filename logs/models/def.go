@@ -168,6 +168,18 @@ CREATE TABLE IF NOT EXISTS t_alert_rule (
 CREATE INDEX IF NOT EXISTS idx_alert_rule_item ON t_alert_rule(item_id);
 CREATE INDEX IF NOT EXISTS idx_alert_rule_enabled ON t_alert_rule(enabled);
 
+-- 用户表：支持多账号登录，密码使用 argon2id 哈希存储
+CREATE TABLE IF NOT EXISTS t_user (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    username      TEXT    NOT NULL UNIQUE,
+    password_hash TEXT    NOT NULL,
+    role          TEXT    DEFAULT 'viewer',
+    status        INTEGER DEFAULT 1,
+    created_time  TEXT    DEFAULT (datetime('now', 'localtime')),
+    updated_time  TEXT    DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_t_user_username ON t_user(username);
+
 -- 告警投递记录：每次触发 webhook 写一条，便于追溯与排错
 CREATE TABLE IF NOT EXISTS t_alert_event (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,

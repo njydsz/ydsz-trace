@@ -14,8 +14,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 )
@@ -27,6 +27,11 @@ var (
 	ErrTokenInvalid = errors.New("token 无效")
 	// ErrTokenFormat 表示 token 格式不符合三段式 JWT
 	ErrTokenFormat = errors.New("token 格式错误")
+)
+
+const (
+	// defaultAudience 默认受众标识，当 GenerateToken 未指定 audience 时使用
+	defaultAudience = "ydsz-trace-console"
 )
 
 // Claims JWT 载荷声明。
@@ -42,6 +47,10 @@ type Claims struct {
 	IssuedAt int64 `json:"iat"`
 	// ExpiresAt 过期时间（Unix 秒）
 	ExpiresAt int64 `json:"exp"`
+	// Audience 受众标识，用于限制 token 的使用范围
+	Audience string `json:"aud"`
+	// NotBefore 最早生效时间（Unix 秒），此时间前 token 无效
+	NotBefore int64 `json:"nbf"`
 }
 
 // JWT JWT 认证器实例。
@@ -75,20 +84,34 @@ func NewJWT(secret string, expiry time.Duration) *JWT {
 	}
 }
 
+// expectedAudience 读取当前期望的 audience：环境变量 YDSZ_JWT_AUDIENCE > 默认值。
+func expectedAudience() string {
+	if v := os.Getenv("YDSZ_JWT_AUDIENCE"); v != "" {
+		return v
+	}
+	return defaultAudience
+}
+
 // GenerateToken 签发新的 JWT token。
 //
 // 参数：
 //   - username: 用户名
 //   - role: 用户角色
+//   - audience: 受众标识，为空则使用默认值 "ydsz-trace-console"
 //
 // 返回完整 JWT 字符串（header.payload.signature）。
-func (j *JWT) GenerateToken(username, role string) (string, error) {
+func (j *JWT) GenerateToken(username, role, audience string) (string, error) {
+	if audience == "" {
+		audience = defaultAudience
+	}
 	now := time.Now()
 	claims := Claims{
 		Username:  username,
 		Role:      role,
 		IssuedAt:  now.Unix(),
 		ExpiresAt: now.Add(j.expiry).Unix(),
+		Audience:  audience,
+		NotBefore: now.Unix(),
 	}
 
 	// Header
@@ -115,9 +138,13 @@ func (j *JWT) GenerateToken(username, role string) (string, error) {
 	return encodedHeader + "." + encodedPayload + "." + signature, nil
 }
 
-// ValidateToken 验证 JWT token 的签名、格式、有效期。
+// ValidateToken 验证 JWT token 的签名、格式、有效期、受众与生效时间。
 //
-// 可能返回的错误：ErrTokenFormat / ErrTokenInvalid / ErrTokenExpired
+// 可能返回的错误：ErrTokenFormat / ErrTokenInvalid / ErrTokenExpired 或 "token 尚未生效"。
+//
+// 向后兼容策略：
+//   - 旧 token 的 aud 为空时跳过 aud 校验（仅对新签发且 aud 非空的 token 强制校验）
+//   - nbf 为 0 时跳过生效时间校验
 func (j *JWT) ValidateToken(tokenString string) (*Claims, error) {
 	parts := strings.Split(tokenString, ".")
 	if len(parts) != 3 {
@@ -133,17 +160,31 @@ func (j *JWT) ValidateToken(tokenString string) (*Claims, error) {
 	// 解码 Payload
 	claimsJSON, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrTokenInvalid, err)
+		return nil, errors.Join(ErrTokenInvalid, err)
 	}
 
 	var claims Claims
 	if err := json.Unmarshal(claimsJSON, &claims); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrTokenInvalid, err)
+		return nil, errors.Join(ErrTokenInvalid, err)
 	}
 
-	// 检查过期
-	if time.Now().Unix() > claims.ExpiresAt {
-		return nil, ErrTokenExpired
+	// 检查生效时间（nbf）
+	now := time.Now().Unix()
+	if claims.NotBefore > 0 && now < claims.NotBefore {
+		return nil, errors.New("token 尚未生效")
+	}
+
+	// 受众校验：仅对 aud 非空的 token 执行，旧 token（aud 为空）跳过
+	// 必须在过期检查之前，确保过期续期的 token 也经过 aud 校验
+	if claims.Audience != "" {
+		if claims.Audience != expectedAudience() {
+			return nil, ErrTokenInvalid
+		}
+	}
+
+	// 检查过期（返回 claims 以便 RefreshToken 在宽限期内续期）
+	if now > claims.ExpiresAt {
+		return &claims, ErrTokenExpired
 	}
 
 	return &claims, nil
@@ -160,10 +201,26 @@ func (j *JWT) sign(data string) string {
 //
 // 仍有效的 token 可直接续期；过期 7 天内的 token 也可续期，
 // 超出宽限期返回 ErrTokenExpired。
+//
+// 续期时重新校验 aud：仅在 aud 非空时验证是否与当前期望值一致。
 func (j *JWT) RefreshToken(tokenString string) (string, error) {
+	// 先做完整校验（含 aud/nbf），过期不立即返回，以便从 claims 中取数据
 	claims, err := j.ValidateToken(tokenString)
-	if err != nil && !errors.Is(err, ErrTokenExpired) {
+	isExpired := errors.Is(err, ErrTokenExpired)
+
+	// 非过期的其他错误直接返回
+	if err != nil && !isExpired {
 		return "", err
+	}
+
+	// 校验通过或过期时，均可从 claims 判断宽度期与 aud 一致性
+	if claims == nil {
+		return "", ErrTokenInvalid
+	}
+
+	// 续期时验证：aud 非空则必须匹配当前期望 aud
+	if claims.Audience != "" && claims.Audience != expectedAudience() {
+		return "", ErrTokenInvalid
 	}
 
 	// 允许过期 7 天内的 token 续期
@@ -171,7 +228,7 @@ func (j *JWT) RefreshToken(tokenString string) (string, error) {
 		return "", ErrTokenExpired
 	}
 
-	return j.GenerateToken(claims.Username, claims.Role)
+	return j.GenerateToken(claims.Username, claims.Role, claims.Audience)
 }
 
 // ============ 全局默认 JWT 实例 ============

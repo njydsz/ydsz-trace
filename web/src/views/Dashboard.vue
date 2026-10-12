@@ -1,7 +1,10 @@
 <template>
   <div>
     <h2 class="text-xl font-semibold mb-4">系统概览</h2>
-    <el-row :gutter="16">
+
+    <el-skeleton :rows="1" animated v-if="loading" style="width:100%" />
+
+    <el-row :gutter="16" v-if="!loading">
       <el-col :xs="24" :sm="8">
         <el-card shadow="hover" class="!border-brand-200">
           <div class="text-gray-500 text-sm">客户端总数</div>
@@ -51,6 +54,7 @@ import { queryAllItems } from '@/api/item'
 
 const router = useRouter()
 const stats = ref({ clients: 0, online: 0, items: 0 })
+const loading = ref(true)
 
 async function loadStats() {
   try {
@@ -67,6 +71,8 @@ async function loadStats() {
     stats.value.items = arr.length
   } catch {
     /* 忽略统计错误 */
+  } finally {
+    loading.value = false
   }
 }
 

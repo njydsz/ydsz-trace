@@ -25,7 +25,7 @@ func TestFullFlow(t *testing.T) {
 
 	// 2. 生成并校验 JWT
 	j := auth.NewJWT("integration-secret", 0)
-	token, err := j.GenerateToken("alice", "admin")
+	token, err := j.GenerateToken("alice", "admin", "")
 	if err != nil {
 		t.Fatalf("生成 token 失败: %v", err)
 	}

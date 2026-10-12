@@ -79,6 +79,7 @@ import { useRoute } from 'vue-router'
 import { VideoPlay, VideoPause, Delete } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { queryLogClients } from '@/api/logs'
+import { createSSE } from '@/api/sse'
 
 const clients = ref([])
 const items = ref([])
@@ -86,9 +87,8 @@ const itemsLoading = ref(false)
 const streaming = ref(false)
 const lines = ref([])
 
-// 持有当前 SSE 连接的 reader 与 abortCtrl，用于停止时彻底关闭流
-let currentReader = null
-let currentAbort = null
+// 当前 SSE 连接实例
+let currentSSE = null
 let msgCount = 0
 
 const form = reactive({
@@ -139,84 +139,33 @@ function startTail() {
   lines.value = []
   msgCount = 0
 
-  // AbortController 用于在停止/卸载时主动断开 fetch 连接
-  const abort = new AbortController()
-  currentAbort = abort
-
-  // 使用 fetch + ReadableStream 实现 SSE（后端路由: POST /logs/tail）
-  fetch('/logs/tail', {
+  // 使用安全 SSE 封装（自带 CSRF 防护 + 401 处理 + 自动重连）
+  currentSSE = createSSE('/logs/tail', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-    body: JSON.stringify({
+    body: {
       client: Number(form.client),
       item: Number(form.item),
       date: form.date,
       key: form.key,
       regex: form.regex,
       level: form.level,
-    }),
-    signal: abort.signal,
-  }).then(response => {
-    if (!response.ok) {
-      ElMessage.error('连接失败: HTTP ' + response.status)
+    },
+    onMessage: (event, data) => {
+      if (!streaming.value) return
+      handleEvent({ event, data })
+    },
+    onError: (err) => {
+      if (streaming.value) {
+        ElMessage.error('流读取失败: ' + err.message)
+      }
       streaming.value = false
-      return
-    }
-    const reader = response.body.getReader()
-    currentReader = reader
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    function readChunk() {
-      reader.read().then(({ done, value }) => {
-        if (done) {
-          streaming.value = false
-          return
-        }
-        if (!streaming.value) {
-          return
-        }
-        buffer += decoder.decode(value, { stream: true })
-        const parts = buffer.split('\n\n')
-        buffer = parts.pop()
-        for (const part of parts) {
-          const event = parseSSEEvent(part)
-          if (event) handleEvent(event)
-        }
-        readChunk()
-      }).catch(err => {
-        if (err.name === 'AbortError') {
-          // 用户主动停止，无需提示
-          return
-        }
-        if (streaming.value) {
-          ElMessage.error('流读取失败: ' + err.message)
-        }
-        streaming.value = false
-      })
-    }
-    readChunk()
-  }).catch(err => {
-    if (err.name === 'AbortError') {
-      return
-    }
-    ElMessage.error('连接失败: ' + err.message)
-    streaming.value = false
+    },
+    onClose: () => {
+      streaming.value = false
+    },
+    maxRetries: 3,
+    retryInterval: 3000,
   })
-}
-
-function parseSSEEvent(block) {
-  let event = 'message'
-  let data = ''
-  for (const line of block.split('\n')) {
-    if (line.startsWith('event: ')) {
-      event = line.slice(7).trim()
-    } else if (line.startsWith('data: ')) {
-      data += (data ? '\n' : '') + line.slice(6)
-    }
-  }
-  if (!data) return null
-  return { event, data }
 }
 
 function handleEvent({ event, data }) {
@@ -249,14 +198,10 @@ function handleEvent({ event, data }) {
 
 function stopTail() {
   streaming.value = false
-  // 主动中止 fetch 连接 + 取消 reader，避免流资源泄漏
-  if (currentReader) {
-    currentReader.cancel().catch(() => {})
-    currentReader = null
-  }
-  if (currentAbort) {
-    currentAbort.abort()
-    currentAbort = null
+  // 关闭 SSE 连接（sse.js 封装会自动清理 reader 和 abort controller）
+  if (currentSSE) {
+    currentSSE.close()
+    currentSSE = null
   }
 }
 

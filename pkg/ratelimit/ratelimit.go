@@ -15,6 +15,7 @@ package ratelimit
 
 import (
 	"context"
+	"log"
 	"sync"
 	"time"
 
@@ -167,8 +168,11 @@ func (l *redisLimiter) Allow(ip string) (bool, int) {
 		return true, 0
 	}
 	if int(cnt) >= l.maxFail {
-		// 阈值已到但未设 block key（防守 window=blockFor 边界情况），补设
-		_ = l.client.Set(ctx, blockKey, 1, l.blockFor).Err()
+		// 阈值已到但未设 block key（防守 window=blockFor 边界情况），补设。
+		// 此处为 best-effort：Set 失败时下次 Allow 调用会再次尝试。
+		if err := l.client.Set(ctx, blockKey, 1, l.blockFor).Err(); err != nil {
+			log.Printf("[ratelimit] set block key failed for %s: %v", ip, err)
+		}
 		return false, int(l.blockFor.Seconds())
 	}
 	return true, 0
@@ -179,19 +183,26 @@ func (l *redisLimiter) RecordFailure(ip string) {
 	cntKey := l.key("cnt", ip)
 	newCnt, err := l.client.Incr(ctx, cntKey).Result()
 	if err != nil {
+		log.Printf("[ratelimit] incr cnt failed for %s: %v", ip, err)
 		return
 	}
 	if newCnt == 1 {
-		_ = l.client.Expire(ctx, cntKey, l.window).Err()
+		if err := l.client.Expire(ctx, cntKey, l.window).Err(); err != nil {
+			log.Printf("[ratilimit] expire cnt failed for %s: %v", ip, err)
+		}
 	}
 	if int(newCnt) >= l.maxFail {
-		_ = l.client.Set(ctx, l.key("block", ip), 1, l.blockFor).Err()
+		if err := l.client.Set(ctx, l.key("block", ip), 1, l.blockFor).Err(); err != nil {
+			log.Printf("[ratelimit] set block failed for %s: %v", ip, err)
+		}
 	}
 }
 
 func (l *redisLimiter) RecordSuccess(ip string) {
 	ctx := context.Background()
-	_, _ = l.client.Del(ctx, l.key("cnt", ip), l.key("block", ip)).Result()
+	if _, err := l.client.Del(ctx, l.key("cnt", ip), l.key("block", ip)).Result(); err != nil {
+		log.Printf("[ratelimit] del cnt/block failed for %s: %v", ip, err)
+	}
 }
 
 func (l *redisLimiter) key(kind, ip string) string {

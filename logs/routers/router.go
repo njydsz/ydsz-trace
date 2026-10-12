@@ -11,7 +11,6 @@
 package routers
 
 import (
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -21,6 +20,7 @@ import (
 	"ydsz-trace/logs/controllers/item"
 	"ydsz-trace/logs/controllers/alert"
 	"ydsz-trace/logs/controllers/logs"
+	"ydsz-trace/pkg/api"
 	pkgauth "ydsz-trace/pkg/auth"
 	"ydsz-trace/pkg/config"
 	"ydsz-trace/pkg/metrics"
@@ -135,12 +135,14 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 			op.DELETE("/logs/alerts/events/:id", alert.DeleteEvent)
 		}
 
-		// ━━ admin 级别（用户 / 角色管理，预留）━━
-		admin := auth.Group("")
-		admin.Use(pkgauth.RequireRole(pkgauth.RoleAdmin))
+		// ━━ admin 级别（用户 / 角色管理）━━
+		adm := auth.Group("/admin")
+		adm.Use(pkgauth.RequireRole(pkgauth.RoleAdmin))
 		{
-			// TODO: 新增用户管理、角色分配接口时登记在此处
-			_ = admin
+			adm.GET("/users", admin.ListUsers)
+			adm.POST("/users", admin.CreateUser)
+			adm.PUT("/users/:id", admin.UpdateUser)
+			adm.DELETE("/users/:id", admin.DisableUser)
 		}
 	}
 
@@ -168,11 +170,7 @@ func csrfProtection(c *gin.Context) {
 		return
 	}
 	if c.GetHeader("X-Requested-With") == "" {
-		c.JSON(http.StatusForbidden, map[string]interface{}{
-			"code": "403",
-			"msg":  "CSRF 校验失败：缺少 X-Requested-With 请求头",
-			"data": nil,
-		})
+		api.Fail(c, api.CodeForbidden, "CSRF 校验失败：缺少 X-Requested-With 请求头")
 		c.Abort()
 		return
 	}
@@ -183,11 +181,7 @@ func csrfProtection(c *gin.Context) {
 func filterAuth(c *gin.Context) {
 	username := session.GetString(c, "username")
 	if username == "" {
-		c.JSON(http.StatusUnauthorized, map[string]interface{}{
-			"code": "401",
-			"msg":  "未登录或登录已过期",
-			"data": nil,
-		})
+		api.Fail(c, api.CodeUnauthorized, "未登录或登录已过期")
 		c.Abort()
 		return
 	}

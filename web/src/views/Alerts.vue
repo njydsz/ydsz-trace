@@ -50,9 +50,10 @@
               />
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="220" fixed="right">
+          <el-table-column label="操作" width="280" fixed="right">
             <template #default="{ row }">
               <el-button link :icon="Promotion" size="small" type="primary" @click="onTestFire(row)">测试触发</el-button>
+              <el-button link :icon="Edit" size="small" @click="onEditRule(row)">编辑</el-button>
               <el-button link :icon="Delete" size="small" type="danger" @click="onDeleteRule(row)">删除</el-button>
             </template>
           </el-table-column>
@@ -171,7 +172,7 @@
  */
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Plus, Promotion, Delete } from '@element-plus/icons-vue'
+import { Refresh, Plus, Promotion, Delete, Edit } from '@element-plus/icons-vue'
 import {
   listRules, addRule, updateRule, deleteRule, toggleRule, testFireRule,
   listEvents, deleteEvent, getQuota,
@@ -253,7 +254,8 @@ async function loadQuota() {
 
 function ruleSummary(r) {
   const parts = []
-  if (r.keyWord) parts.push(r.regex ? `[正则] ${r.keyWord}` : r.keyWord)
+  const isRegex = r.regex === 1 || r.regex === true
+  if (r.keyWord) parts.push(isRegex ? `[正则] ${r.keyWord}` : r.keyWord)
   if (r.level) parts.push(`[${r.level}]`)
   return parts.length ? parts.join(' ') : '—'
 }
@@ -264,6 +266,22 @@ function onAddRule() {
     name: '', itemId: ruleForm.itemId || null, clientId: 0,
     keyWord: '', regex: false, level: '',
     threshold: 10, intervalSec: 300, webhookUrl: '',
+  })
+  dialogVisible.value = true
+}
+
+async function onEditRule(row) {
+  editingId.value = row.id
+  Object.assign(form, {
+    name: row.name,
+    itemId: row.itemId,
+    clientId: row.clientId || 0,
+    keyWord: row.keyWord || '',
+    regex: !!row.regex,
+    level: row.level || '',
+    threshold: row.threshold || 10,
+    intervalSec: row.intervalSec || 300,
+    webhookUrl: row.webhookUrl || '',
   })
   dialogVisible.value = true
 }

@@ -266,11 +266,18 @@ func FillRuleItemName(r *AlertRule) {
 }
 
 // AlertRulesQuota 返回近期活跃规则数 / 近 24h 投递成功数 / 失败数，便于前端展示摘要。
+// 查询失败时记录日志并返回 0，不向上传播错误（统计摘要非关键路径）。
 func AlertRulesQuota() (enabled, firedToday, failedToday int) {
-	_ = DB.Get(&enabled, `SELECT COUNT(*) FROM t_alert_rule WHERE enabled = ?`, AlertStatusEnabled)
+	if err := DB.Get(&enabled, `SELECT COUNT(*) FROM t_alert_rule WHERE enabled = ?`, AlertStatusEnabled); err != nil {
+		log.Printf("[alert] quota: count enabled rules failed: %v", err)
+	}
 	since := time.Now().Add(-24 * time.Hour).Format("2006-01-02 15:04:05")
-	_ = DB.Get(&firedToday, `SELECT COUNT(*) FROM t_alert_event WHERE fired_time >= ?`, since)
-	_ = DB.Get(&failedToday, `SELECT COUNT(*) FROM t_alert_event WHERE fired_time >= ? AND status = ?`, since, "fail")
+	if err := DB.Get(&firedToday, `SELECT COUNT(*) FROM t_alert_event WHERE fired_time >= ?`, since); err != nil {
+		log.Printf("[alert] quota: count fired events failed: %v", err)
+	}
+	if err := DB.Get(&failedToday, `SELECT COUNT(*) FROM t_alert_event WHERE fired_time >= ? AND status = ?`, since, "fail"); err != nil {
+		log.Printf("[alert] quota: count failed events failed: %v", err)
+	}
 	return enabled, firedToday, failedToday
 }
 

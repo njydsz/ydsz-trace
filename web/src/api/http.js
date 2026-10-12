@@ -23,8 +23,27 @@ http.interceptors.request.use((config) => {
   return config
 })
 
+// 是否为 JSON 响应（含 code 字段需要统一解包）
+function isJsonResponse(response) {
+  const ct = response.headers?.['content-type'] || ''
+  return ct.includes('application/json')
+}
+
 http.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // 统一响应解包：JSON 响应含 code 字段时自动判断业务状态
+    if (isJsonResponse(response) && response.data && 'code' in response.data) {
+      const payload = response.data
+      const code = payload.code
+      if (code !== '200' && code !== 0) {
+        const msg = payload.message || payload.msg || '请求失败'
+        ElMessage.error(msg)
+        return Promise.reject(new Error(msg))
+      }
+    }
+    // 非 JSON 响应（如 blob 下载）或成功响应，直接返回原始 response
+    return response
+  },
   (error) => {
     const status = error.response?.status
     if (status === 401) {

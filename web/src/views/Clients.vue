@@ -6,7 +6,8 @@
     </div>
 
     <el-card shadow="never">
-      <el-table :data="list" v-loading="loading" stripe border>
+      <el-skeleton :rows="6" animated v-if="loading && list.length === 0" />
+      <el-table v-if="!(loading && list.length === 0)" :data="list" v-loading="loading" stripe border>
         <el-table-column prop="id" label="ID" width="80" />
         <el-table-column prop="ip" label="IP" />
         <el-table-column prop="port" label="端口" width="90" />

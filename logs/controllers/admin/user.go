@@ -1,9 +1,10 @@
-// Package admin 包含用户认证与 SPA 控制台相关控制器。
+// Package admin 包含用户认证、SPA 控制台与多用户管理控制器。
 //
 // 安全说明：
 //   - 账号密码来自环境变量 / 配置文件（当前为单账号，后续可扩展）
 //   - 密码使用加盐哈希比对（pkg/auth 模块），支持明文→哈希平滑迁移
 //   - 登录接口内置单 IP 速率限制，防御暴力破解
+//   - 用户管理（CRUD）通过 t_user 表支持多账号
 package admin
 
 import (
@@ -15,9 +16,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
+	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
 	"ydsz-trace/pkg/auth"
 	"ydsz-trace/pkg/config"
@@ -304,4 +307,167 @@ func Exit(c *gin.Context) {
 	session.Delete(c, "username")
 	session.Destroy(c)
 	api.Success(c, "退出成功", nil)
+}
+
+// ========== 多用户管理 CRUD ==========
+
+// userCreateReq 创建用户请求体。
+type userCreateReq struct {
+	// Username 用户名（唯一）
+	Username string `json:"username" binding:"required"`
+	// Password 明文密码（服务端用 argon2id 哈希后存储）
+	Password string `json:"password" binding:"required,min=6"`
+	// Role 用户角色：admin / operator / viewer（默认 viewer）
+	Role string `json:"role"`
+}
+
+// userUpdateReq 更新用户请求体。
+type userUpdateReq struct {
+	// Role 用户角色
+	Role string `json:"role"`
+	// Status 用户状态：1-启用 0-禁用
+	Status int `json:"status"`
+	// Password 新密码（可选，为空则不改密码）
+	Password string `json:"password"`
+}
+
+// ListUsers 分页查询用户列表。
+//
+// GET /admin/users?page=1&limit=20&keyword=xxx
+func ListUsers(c *gin.Context) {
+	pageNum, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	keyword := c.Query("keyword")
+	page := models.QueryUsers(pageNum, pageSize, keyword)
+	api.Paginated(c, "查询用户成功", page.List, page.TotalCount, pageNum, pageSize)
+}
+
+// CreateUser 创建用户（密码使用 argon2id 哈希后存储）。
+//
+// POST /admin/users
+func CreateUser(c *gin.Context) {
+	var req userCreateReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.Fail(c, api.CodeBadRequest, "请求参数错误: 用户名和密码不能为空，密码至少 6 位")
+		return
+	}
+
+	// 校验角色合法性
+	role := req.Role
+	if role == "" {
+		role = "viewer"
+	}
+	if role != auth.RoleAdmin.String() && role != auth.RoleOperator.String() && role != auth.RoleViewer.String() {
+		api.Fail(c, api.CodeBadRequest, "无效的用户角色，允许值: admin / operator / viewer")
+		return
+	}
+
+	// 校验用户名唯一性
+	if models.UserExists(req.Username, 0) {
+		api.Fail(c, api.CodeBadRequest, "用户名已存在")
+		return
+	}
+
+	// 密码 argon2id 哈希
+	passwordHash, err := auth.HashPassword(req.Password)
+	if err != nil {
+		api.Fail(c, api.CodeServerError, "密码哈希失败")
+		return
+	}
+
+	user := &models.TUser{
+		Username:     req.Username,
+		PasswordHash: passwordHash,
+		Role:         role,
+		Status:       models.StatusEnabled,
+	}
+	id, err := models.AddUser(user)
+	if err != nil {
+		api.Fail(c, api.CodeServerError, "创建用户失败")
+		return
+	}
+	api.Success(c, "创建用户成功", gin.H{"id": id})
+}
+
+// UpdateUser 更新用户信息（角色、状态、密码）。
+//
+// PUT /admin/users/:id
+func UpdateUser(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		api.Fail(c, api.CodeBadRequest, "无效的用户 ID")
+		return
+	}
+
+	var req userUpdateReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.Fail(c, api.CodeBadRequest, "请求参数错误")
+		return
+	}
+
+	// 查询用户是否存在
+	existing, err := models.GetUserByID(id)
+	if err != nil {
+		api.Fail(c, api.CodeNotFound, "用户不存在")
+		return
+	}
+
+	// 校验角色合法性
+	if req.Role != "" {
+		if req.Role != auth.RoleAdmin.String() && req.Role != auth.RoleOperator.String() && req.Role != auth.RoleViewer.String() {
+			api.Fail(c, api.CodeBadRequest, "无效的用户角色，允许值: admin / operator / viewer")
+			return
+		}
+		existing.Role = req.Role
+	}
+
+	// 更新状态（Status 零值视为未传，Go 无法区分 0 与未传，约定 status 字段只有显式传 0 或 1 才更新）
+	existing.Status = req.Status
+
+	// 更新密码（如传入新密码）
+	if req.Password != "" {
+		if len(req.Password) < 6 {
+			api.Fail(c, api.CodeBadRequest, "密码至少 6 位")
+			return
+		}
+		passwordHash, err := auth.HashPassword(req.Password)
+		if err != nil {
+			api.Fail(c, api.CodeServerError, "密码哈希失败")
+			return
+		}
+		if err := models.UpdateUserPassword(id, passwordHash); err != nil {
+			api.Fail(c, api.CodeServerError, "更新密码失败")
+			return
+		}
+	}
+
+	if err := models.UpdateUser(&existing); err != nil {
+		api.Fail(c, api.CodeServerError, "更新用户失败")
+		return
+	}
+	api.Success(c, "更新用户成功", nil)
+}
+
+// DisableUser 禁用用户（软删除：设置 status=0）。
+//
+// DELETE /admin/users/:id
+func DisableUser(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		api.Fail(c, api.CodeBadRequest, "无效的用户 ID")
+		return
+	}
+
+	// 查询用户是否存在
+	existing, err := models.GetUserByID(id)
+	if err != nil {
+		api.Fail(c, api.CodeNotFound, "用户不存在")
+		return
+	}
+
+	if err := models.DeleteUser(existing.ID); err != nil {
+		api.Fail(c, api.CodeServerError, "禁用用户失败")
+		return
+	}
+	api.Success(c, "禁用用户成功", nil)
 }

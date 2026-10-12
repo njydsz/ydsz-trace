@@ -31,8 +31,8 @@ type Resp struct {
 func Register(c *gin.Context) {
 	cfg := c.MustGet("cfg").(*config.Config)
 	server := config.EnvOrConfig("YDSZ_LOG_SERVER", cfg.String("logs"), "127.0.0.1:2021")
-	vKey := GetVKey(cfg)
-	RegisterLocalIp(server, vKey)
+	cfgKey := getRegisterKey(cfg)
+	RegisterLocalIp(server, cfgKey)
 	c.JSON(http.StatusOK, Resp{"200", "注册请求已发送"})
 }
 
@@ -47,6 +47,17 @@ func GetVKey(cfg *config.Config) string {
 		return v
 	}
 	return cfg.StringOr("key", "123456")
+}
+
+// getRegisterKey 获取注册鉴权密钥，优先级：环境变量 YDSZ_REGISTER_KEY > 配置文件 register_key > 默认值。
+func getRegisterKey(cfg *config.Config) string {
+	if v := os.Getenv("YDSZ_REGISTER_KEY"); v != "" {
+		return v
+	}
+	if v := cfg.StringOr("register_key", ""); v != "" {
+		return v
+	}
+	return "ydsz-trace-register-2026"
 }
 
 // RegisterLocalIp 向 logs 服务发起一次自注册请求（传统模式）。
@@ -93,6 +104,7 @@ type VirtualRegisterRequest struct {
 }
 
 // VirtualClient 向 logs 注册一个虚拟客户端。
+// key 字段使用注册鉴权密钥（与 logs 侧校验保持一致）。
 func VirtualClient(req *VirtualRegisterRequest) error {
 	if req.Server == "" || req.Identity == "" {
 		return fmt.Errorf("server 和 identity 不能为空")
