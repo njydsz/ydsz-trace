@@ -1,17 +1,19 @@
 <template>
   <div>
-    <!-- 页面标题 -->
-    <div class="flex items-center justify-between mb-5">
-      <div>
-        <h2 class="flex items-center gap-2 text-xl font-bold text-primary">
-          <div class="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-indigo-600 text-white">
-            <el-icon :size="16"><Document /></el-icon>
-          </div>
-          日志项配置
-        </h2>
-        <p class="text-sm text-muted mt-1 ml-10">管理各客户端上的日志采集项与路径配置</p>
+    <!-- 统一页面头部 -->
+    <div class="page-header mb-5">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="page-header__title">
+            <span class="page-header__icon" style="background: linear-gradient(135deg, #6366f1, #4f46e5); box-shadow: 0 2px 8px rgba(99, 102, 241, 0.2);">
+              <el-icon :size="18"><Document /></el-icon>
+            </span>
+            采集路径配置
+          </h2>
+          <p class="page-header__subtitle">管理各节点上的日志采集路径与文件匹配规则</p>
+        </div>
+        <el-button type="primary" :icon="Plus" @click="openAdd">新增日志项</el-button>
       </div>
-      <el-button type="primary" :icon="Plus" @click="openAdd">新增日志项</el-button>
     </div>
 
     <el-card shadow="never" class="!rounded-xl">
@@ -109,7 +111,7 @@
   </div>
 </template>
 
-/** 日志项配置页：按客户端分组管理日志项，增删改查、启用/禁用切换。搜索过滤、批量删除。绑定所属客户端必填。 */
+/** 采集路径配置页：按节点分组管理日志采集路径，增删改查、启用/禁用切换。搜索过滤、批量删除。绑定所属节点必填。 */
 <script setup>
 import { ref, reactive, onMounted, computed } from 'vue'
 import { Plus, Edit, Delete, Switch, Search, Document } from '@element-plus/icons-vue'

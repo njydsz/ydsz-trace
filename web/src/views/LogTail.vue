@@ -1,6 +1,15 @@
 <template>
   <div>
-    <h2 class="text-xl font-semibold mb-4">实时日志追踪</h2>
+    <!-- 统一页面头部 -->
+    <div class="page-header mb-5">
+      <h2 class="page-header__title">
+        <span class="page-header__icon" style="background: linear-gradient(135deg, #6366f1, #4f46e5); box-shadow: 0 2px 8px rgba(99, 102, 241, 0.2);">
+          <el-icon :size="18"><VideoCamera /></el-icon>
+        </span>
+        实时日志追踪
+      </h2>
+      <p class="page-header__subtitle">通过 SSE 流式接收实时日志输出，支持正则过滤与日志级别筛选</p>
+    </div>
     <el-card shadow="never" class="max-w-4xl">
       <el-form :model="form" label-width="100px">
         <el-form-item label="客户端">

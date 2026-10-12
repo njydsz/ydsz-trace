@@ -16,6 +16,7 @@ import Alerts from '@/views/Alerts.vue'
 import TaskList from '@/views/TaskList.vue'
 import TraceView from '@/views/TraceView.vue'
 import ConversationWorkbench from '@/views/ConversationWorkbench.vue'
+import ModelCapability from '@/views/ModelCapability.vue'
 
 const routes = [
   // 公开路由：登录页。
@@ -26,16 +27,17 @@ const routes = [
     redirect: '/conversation',
     children: [
       // 默认首页：对话式工作台（v2.0+）。
-      { path: 'conversation', name: 'conversation', component: ConversationWorkbench, meta: { title: '对话工作台' } },
+      { path: 'conversation', name: 'conversation', component: ConversationWorkbench, meta: { title: '日志检索助手' } },
       // 控制台子路由（均需登录）。
-      { path: 'trace', name: 'trace', component: TraceView, meta: { title: 'Trace ID 聚合' } },
+      { path: 'trace', name: 'trace', component: TraceView, meta: { title: '日志链路追踪' } },
       { path: 'logs', name: 'logs', component: LogSearch, meta: { title: '历史日志检索' } },
       { path: 'tail', name: 'tail', component: LogTail, meta: { title: '实时日志追踪' } },
       { path: 'alerts', name: 'alerts', component: Alerts, meta: { title: '智能日志预警' } },
       { path: 'tasks', name: 'tasks', component: TaskList, meta: { title: '检索任务归档' } },
-      { path: 'clients', name: 'clients', component: Clients, meta: { title: '客户端配置' } },
-      { path: 'items', name: 'items', component: Items, meta: { title: '日志项配置' } },
-      { path: 'dashboard', name: 'dashboard', component: Dashboard, meta: { title: 'Ydsz Trace 介绍' } },
+      { path: 'clients', name: 'clients', component: Clients, meta: { title: '日志节点配置' } },
+      { path: 'items', name: 'items', component: Items, meta: { title: '采集路径配置' } },
+      { path: 'model-capability', name: 'model-capability', component: ModelCapability, meta: { title: '模型能力配置' } },
+      { path: 'dashboard', name: 'dashboard', component: Dashboard, meta: { title: '云顶日志平台' } },
     ],
   },
   { path: '/:pathMatch(.*)*', redirect: '/dashboard' },

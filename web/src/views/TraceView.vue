@@ -1,6 +1,15 @@
 <template>
   <div>
-    <h2 class="text-xl font-semibold mb-4">Trace ID 聚合</h2>
+    <!-- 统一页面头部 -->
+    <div class="page-header mb-5">
+      <h2 class="page-header__title">
+        <span class="page-header__icon" style="background: linear-gradient(135deg, #f59e0b, #d97706); box-shadow: 0 2px 8px rgba(245, 158, 11, 0.2);">
+          <el-icon :size="18"><Share /></el-icon>
+        </span>
+        日志链路追踪
+      </h2>
+      <p class="page-header__subtitle">根据 TraceId 跨节点聚合调用链日志，支持分组视图与瀑布视图</p>
+    </div>
     <el-card shadow="never" class="max-w-3xl">
       <el-form :model="form" label-width="100px">
         <el-form-item label="Trace ID">

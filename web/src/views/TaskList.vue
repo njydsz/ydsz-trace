@@ -1,15 +1,14 @@
 <template>
   <div>
-    <div class="flex items-center justify-between mb-5">
-      <div>
-        <h2 class="flex items-center gap-2 text-xl font-bold text-primary">
-          <div class="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 text-white">
-            <el-icon :size="16"><List /></el-icon>
-          </div>
-          检索任务归档
-        </h2>
-        <p class="text-sm text-muted mt-1 ml-10">查看历史检索任务状态与结果，支持重试与清理</p>
-      </div>
+    <!-- 统一页面头部 -->
+    <div class="page-header mb-5">
+      <h2 class="page-header__title">
+        <span class="page-header__icon" style="background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2);">
+          <el-icon :size="18"><List /></el-icon>
+        </span>
+        检索任务归档
+      </h2>
+      <p class="page-header__subtitle">查看历史检索任务状态与结果，支持重试与清理</p>
     </div>
 
     <div class="flex items-center gap-3 mb-4">

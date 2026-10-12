@@ -24,11 +24,11 @@
           >
             <el-menu-item index="/conversation">
               <div class="nav-icon-wrap"><el-icon><ChatLineRound /></el-icon></div>
-              <span>对话工作台</span>
+              <span>日志检索助手</span>
             </el-menu-item>
             <el-menu-item index="/trace">
               <div class="nav-icon-wrap"><el-icon><Share /></el-icon></div>
-              <span>Trace ID 聚合</span>
+              <span>日志链路追踪</span>
             </el-menu-item>
             <el-menu-item index="/logs">
               <div class="nav-icon-wrap"><el-icon><Search /></el-icon></div>
@@ -74,30 +74,24 @@
           >
             <el-menu-item index="/clients">
               <div class="nav-icon-wrap"><el-icon><Cpu /></el-icon></div>
-              <span>客户端配置</span>
+              <span>日志节点配置</span>
             </el-menu-item>
             <el-menu-item index="/items">
               <div class="nav-icon-wrap"><el-icon><Document /></el-icon></div>
-              <span>日志项配置</span>
+              <span>采集路径配置</span>
+            </el-menu-item>
+            <el-menu-item index="/model-capability">
+              <div class="nav-icon-wrap"><el-icon><MagicStick /></el-icon></div>
+              <span>模型能力配置</span>
             </el-menu-item>
             <el-menu-item index="/dashboard">
               <div class="nav-icon-wrap"><el-icon><DataLine /></el-icon></div>
-              <span>平台介绍</span>
+              <span>云顶日志平台</span>
             </el-menu-item>
           </el-menu>
         </div>
       </nav>
 
-      <!-- 底部主题切换 -->
-      <div class="aside-footer flex items-center justify-center py-4">
-        <el-button
-          text
-          :icon="themeIcon"
-          :title="`主题: ${themeLabel}`"
-          @click="onCycleTheme"
-          class="theme-toggle"
-        />
-      </div>
     </el-aside>
 
     <!-- ========== 右侧内容区 ========== -->
@@ -120,15 +114,25 @@
             @click="openGlobalSearch"
           />
           <el-divider direction="vertical" class="header-divider" />
-          <div class="user-info flex items-center gap-2">
-            <el-avatar :size="32" class="user-avatar">
-              {{ avatarText }}
-            </el-avatar>
-            <span class="user-name text-sm font-medium">{{ auth.state.username }}</span>
-          </div>
-          <el-button text :icon="SwitchButton" @click="onLogout" class="logout-btn">
-            退出
-          </el-button>
+          <el-dropdown trigger="click" @command="onUserCommand" class="user-dropdown">
+            <div class="user-info flex items-center gap-2">
+              <el-avatar :size="32" class="user-avatar">
+                {{ avatarText }}
+              </el-avatar>
+              <span class="user-name text-sm font-medium">{{ auth.state.username }}</span>
+              <el-icon :size="12" class="dropdown-arrow"><ArrowDown /></el-icon>
+            </div>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="changePassword" :icon="EditPen">
+                  修改密码
+                </el-dropdown-item>
+                <el-dropdown-item command="logout" :icon="SwitchButton" divided>
+                  退出登录
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </el-header>
 
@@ -147,6 +151,54 @@
       ref="globalSearchRef"
       v-model="globalSearchVisible"
     />
+
+    <!-- 修改密码弹窗 -->
+    <el-dialog
+      v-model="passwordDialogVisible"
+      title="修改密码"
+      width="420px"
+      :close-on-click-modal="false"
+      class="password-dialog"
+    >
+      <ElForm
+        ref="passwordFormRef"
+        :model="passwordForm"
+        :rules="passwordRules"
+        label-position="top"
+      >
+        <ElFormItem label="旧密码" prop="oldPassword">
+          <ElInput
+            v-model="passwordForm.oldPassword"
+            type="password"
+            placeholder="请输入当前密码"
+            show-password
+            autocomplete="current-password"
+          />
+        </ElFormItem>
+        <ElFormItem label="新密码" prop="newPassword">
+          <ElInput
+            v-model="passwordForm.newPassword"
+            type="password"
+            placeholder="至少 6 位"
+            show-password
+            autocomplete="new-password"
+          />
+        </ElFormItem>
+        <ElFormItem label="确认新密码" prop="confirmPassword">
+          <ElInput
+            v-model="passwordForm.confirmPassword"
+            type="password"
+            placeholder="请再次输入新密码"
+            show-password
+            autocomplete="new-password"
+          />
+        </ElFormItem>
+      </ElForm>
+      <template #footer>
+        <el-button @click="passwordDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="passwordLoading" @click="submitChangePassword">确认修改</el-button>
+      </template>
+    </el-dialog>
   </el-container>
 </template>
 
@@ -162,20 +214,42 @@ import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Monitor, DataLine, Cpu, Document, Search, SwitchButton,
-  VideoCamera, List, Bell, Share, Sunny, Moon, Platform, ChatLineRound,
+  VideoCamera, List, Bell, Share, ChatLineRound, ArrowDown, EditPen, MagicStick,
 } from '@element-plus/icons-vue'
-import { ElMessageBox, ElMessage } from 'element-plus'
-import { logout } from '@/api/auth'
+import { ElMessageBox, ElMessage, ElForm, ElFormItem, ElInput } from 'element-plus'
+import { logout, changePassword } from '@/api/auth'
 import { useAuth } from '@/store/auth'
-import { useThemeStorage } from '@/store/theme'
 import GlobalSearchDialog from '@/components/GlobalSearchDialog.vue'
 
 const auth = useAuth()
 const route = useRoute()
 const router = useRouter()
-const themeStorage = useThemeStorage()
 const globalSearchRef = ref(null)
 const globalSearchVisible = ref(false)
+const passwordDialogVisible = ref(false)
+const passwordFormRef = ref(null)
+const passwordLoading = ref(false)
+const passwordForm = ref({ oldPassword: '', newPassword: '', confirmPassword: '' })
+const passwordRules = {
+  oldPassword: [{ required: true, message: '请输入旧密码', trigger: 'blur' }],
+  newPassword: [
+    { required: true, message: '请输入新密码', trigger: 'blur' },
+    { min: 6, message: '密码至少 6 位', trigger: 'blur' },
+  ],
+  confirmPassword: [
+    { required: true, message: '请确认新密码', trigger: 'blur' },
+    {
+      validator: (rule, value, callback) => {
+        if (value !== passwordForm.value.newPassword) {
+          callback(new Error('两次输入的密码不一致'))
+        } else {
+          callback()
+        }
+      },
+      trigger: 'blur',
+    },
+  ],
+}
 
 const sidebarWidth = 220
 
@@ -191,38 +265,16 @@ const breadcrumbHome = computed(() => {
   if (path.startsWith('/alerts') || path.startsWith('/tasks')) {
     return { to: { path: '/alerts' }, label: '监控运维' }
   }
-  if (path.startsWith('/clients') || path.startsWith('/items') || path.startsWith('/dashboard')) {
+  if (path.startsWith('/clients') || path.startsWith('/items') || path.startsWith('/model-capability') || path.startsWith('/dashboard')) {
     return { to: { path: '/clients' }, label: '系统配置' }
   }
   return { to: { path: '/conversation' }, label: '日志分析' }
 })
 
-const themeIcon = computed(() => {
-  return {
-    light: Sunny,
-    dark: Moon,
-    system: Platform,
-  }[themeStorage.preference]
-})
-
-const themeLabel = computed(() => {
-  return {
-    light: '浅色',
-    dark: '深色',
-    system: '跟随系统',
-  }[themeStorage.preference]
-})
-
-function onCycleTheme() {
-  themeStorage.cyclePreference()
-}
-
 function openGlobalSearch() {
   globalSearchVisible.value = true
   globalSearchRef.value?.open()
 }
-
-let themeCleanup
 
 // 全局搜索快捷键 Cmd/Ctrl+K
 function handleGlobalKeydown(e) {
@@ -235,14 +287,48 @@ function handleGlobalKeydown(e) {
 }
 
 onMounted(() => {
-  themeCleanup = themeStorage.init()
   document.addEventListener('keydown', handleGlobalKeydown)
 })
 
 onBeforeUnmount(() => {
-  if (themeCleanup) themeCleanup()
   document.removeEventListener('keydown', handleGlobalKeydown)
 })
+
+function onUserCommand(cmd) {
+  if (cmd === 'changePassword') {
+    openPasswordDialog()
+  } else if (cmd === 'logout') {
+    onLogout()
+  }
+}
+
+function openPasswordDialog() {
+  passwordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' }
+  passwordDialogVisible.value = true
+}
+
+async function submitChangePassword() {
+  if (!passwordFormRef.value) return
+  try {
+    await passwordFormRef.value.validate()
+  } catch {
+    return
+  }
+  passwordLoading.value = true
+  try {
+    await changePassword(passwordForm.value.oldPassword, passwordForm.value.newPassword)
+    ElMessage.success('密码修改成功，请重新登录')
+    passwordDialogVisible.value = false
+    // 密码修改成功后清除本地会话并跳转登录
+    auth.clear()
+    router.push('/login')
+  } catch (err) {
+    const msg = err?.response?.data?.msg || err?.message || '密码修改失败'
+    ElMessage.error(msg)
+  } finally {
+    passwordLoading.value = false
+  }
+}
 
 async function onLogout() {
   try {
@@ -268,18 +354,18 @@ async function onLogout() {
 
 /* ===== 侧边栏 ===== */
 .aside-custom {
-  background: linear-gradient(180deg, #0f172a 0%, #0c1929 100%);
+  background: var(--bg-aside);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  border-right: 1px solid rgba(255, 255, 255, 0.04);
+  border-right: 1px solid var(--border-light);
 }
 
 /* Logo 区域 */
 .aside-logo {
   height: var(--header-height);
   padding: 0 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid var(--border-light);
   flex-shrink: 0;
 }
 .logo-icon {
@@ -287,10 +373,10 @@ async function onLogout() {
   height: 36px;
   background: linear-gradient(135deg, var(--brand-600) 0%, var(--brand-500) 100%);
   color: white;
-  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.25);
 }
 .logo-text {
-  color: rgba(255, 255, 255, 0.95);
+  color: var(--text-primary);
 }
 
 /* 导航区域 */
@@ -302,11 +388,11 @@ async function onLogout() {
   margin-bottom: 8px;
 }
 .nav-group-title {
-  padding: 12px 24px 6px;
-  font-size: 11px;
+  padding: 14px 24px 6px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  text-transform: none;
   color: var(--text-aside-muted);
 }
 
@@ -328,12 +414,12 @@ async function onLogout() {
   transition: all var(--transition-fast) !important;
 }
 .el-menu-item:hover {
-  background-color: rgba(255, 255, 255, 0.06) !important;
-  color: rgba(255, 255, 255, 0.95) !important;
+  background-color: var(--bg-aside-hover) !important;
+  color: var(--text-primary) !important;
 }
 .el-menu-item.is-active {
-  background: linear-gradient(90deg, rgba(37, 99, 235, 0.25) 0%, rgba(37, 99, 235, 0.1) 100%) !important;
-  color: #ffffff !important;
+  background: var(--bg-aside-active) !important;
+  color: var(--brand-700) !important;
   font-weight: 600 !important;
   box-shadow: none !important;
   position: relative;
@@ -345,25 +431,8 @@ async function onLogout() {
   top: 8px;
   bottom: 8px;
   width: 3px;
-  background: var(--brand-500);
+  background: var(--brand-600);
   border-radius: 0 3px 3px 0;
-}
-
-/* 底部 */
-.aside-footer {
-  border-top: 1px solid rgba(255, 255, 255, 0.06);
-  flex-shrink: 0;
-}
-.theme-toggle {
-  color: var(--text-aside) !important;
-  font-size: 18px;
-  padding: 8px 16px !important;
-  border-radius: var(--radius-md) !important;
-  transition: all var(--transition-fast);
-}
-.theme-toggle:hover {
-  color: white !important;
-  background: rgba(255, 255, 255, 0.08);
 }
 
 /* ===== Header ===== */
@@ -403,9 +472,12 @@ async function onLogout() {
   border-color: var(--border-light) !important;
 }
 
-/* 用户信息 */
+/* 用户信息 / 下拉 */
+.user-dropdown {
+  outline: none;
+}
 .user-info {
-  cursor: default;
+  cursor: pointer;
   padding: 2px 8px 2px 4px;
   border-radius: var(--radius-md);
   transition: background var(--transition-fast);
@@ -422,12 +494,13 @@ async function onLogout() {
 .user-name {
   color: var(--text-primary);
 }
-.logout-btn {
-  color: var(--text-secondary) !important;
-  font-size: 13px !important;
+.dropdown-arrow {
+  color: var(--text-muted);
+  transition: transform var(--transition-fast);
 }
-.logout-btn:hover {
-  color: var(--danger) !important;
+:deep(.el-dropdown-menu__item:hover) {
+  color: var(--brand-600) !important;
+  background: var(--brand-50) !important;
 }
 
 /* ===== Main ===== */

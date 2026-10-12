@@ -14,3 +14,8 @@ export function logout() {
 export function health() {
   return http.get('/health')
 }
+
+// changePassword 调用后端 /admin/users/change-password 自助修改密码。
+export function changePassword(oldPassword, newPassword) {
+  return http.post('/admin/users/change-password', { oldPassword, newPassword })
+}

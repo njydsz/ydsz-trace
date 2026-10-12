@@ -1,15 +1,14 @@
 <template>
   <div>
-    <div class="flex items-center justify-between mb-5">
-      <div>
-        <h2 class="flex items-center gap-2 text-xl font-bold text-primary">
-          <div class="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-amber-500 to-orange-500 text-white">
-            <el-icon :size="16"><Bell /></el-icon>
-          </div>
-          智能日志预警
-        </h2>
-        <p class="text-sm text-muted mt-1 ml-10">配置日志告警规则，自动检测异常并推送通知</p>
-      </div>
+    <!-- 统一页面头部 -->
+    <div class="page-header mb-5">
+      <h2 class="page-header__title">
+        <span class="page-header__icon" style="background: linear-gradient(135deg, #f59e0b, #d97706); box-shadow: 0 2px 8px rgba(245, 158, 11, 0.2);">
+          <el-icon :size="18"><Bell /></el-icon>
+        </span>
+        智能日志预警
+      </h2>
+      <p class="page-header__subtitle">配置日志告警规则，自动检测异常并推送通知</p>
     </div>
 
     <el-tabs v-model="activeTab" class="alerts-tabs">
@@ -21,7 +20,7 @@
         <el-button :icon="Refresh" @click="loadQuota" size="small">刷新摘要</el-button>
       </div>
 
-      <el-tab-pane label="智能日志预警规则" name="rules">
+      <el-tab-pane label="日志预警规则" name="rules">
         <div class="flex items-center gap-3 mb-3">
           <el-select v-model="ruleForm.itemId" placeholder="选择日志项" style="width: 240px" :loading="itemsLoading">
             <el-option v-for="it in items" :key="it.id" :label="it.itemName" :value="it.id" />
@@ -83,7 +82,7 @@
         </div>
       </el-tab-pane>
 
-      <el-tab-pane label="投递记录" name="events">
+      <el-tab-pane label="预警投递记录" name="events">
         <div class="flex items-center gap-3 mb-3">
           <el-select v-model="eventStatusFilter" placeholder="全部状态" clearable style="width: 140px" @change="loadEvents">
             <el-option label="成功" value="ok" />

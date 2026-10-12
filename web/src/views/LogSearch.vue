@@ -1,14 +1,14 @@
 <template>
   <div class="logs-page">
-    <!-- 顶部标题 -->
+    <!-- 统一页面头部 -->
     <div class="page-header mb-5">
-      <h2 class="page-title flex items-center gap-2">
-        <div class="page-icon flex items-center justify-center rounded-lg">
+      <h2 class="page-header__title">
+        <span class="page-header__icon" style="background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2);">
           <el-icon :size="18"><Search /></el-icon>
-        </div>
+        </span>
         历史日志检索
       </h2>
-      <p class="page-subtitle mt-1">选择客户端与日志项，跨节点检索日志</p>
+      <p class="page-header__subtitle">选择客户端与日志项，跨节点检索日志</p>
     </div>
 
     <!-- 检索表单卡片 -->
@@ -630,26 +630,6 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* ===== 页面标题 ===== */
-.page-title {
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin: 0;
-}
-.page-icon {
-  width: 36px;
-  height: 36px;
-  background: linear-gradient(135deg, #10b981, #059669);
-  color: white;
-  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2);
-}
-.page-subtitle {
-  font-size: 13px;
-  color: var(--text-muted);
-  margin: 0;
-}
-
 /* ===== 表单卡片 ===== */
 .search-card :deep(.el-form-item__label) {
   font-size: 12.5px;

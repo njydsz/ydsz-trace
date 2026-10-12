@@ -89,22 +89,8 @@
       </div>
     </div>
 
-    <!-- 快捷预设栏 -->
-    <div class="chat-presets flex gap-2 px-4 py-2.5 border-t border-light overflow-x-auto">
-      <button
-        v-for="preset in quickPresets"
-        :key="preset.label"
-        class="preset-btn flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-sm font-medium whitespace-nowrap"
-        :icon="preset.icon"
-        @click="handleQuickPreset(preset)"
-      >
-        <el-icon :size="14"><component :is="preset.icon" /></el-icon>
-        {{ preset.label }}
-      </button>
-    </div>
-
     <!-- 输入区 -->
-    <div class="chat-input-area px-4 pb-4 pt-2 border-t border-light">
+    <div class="chat-input-area px-4 pb-4 pt-2">
       <div class="input-wrapper flex items-end gap-3 rounded-2xl p-3">
         <el-input
           v-model="inputText"
@@ -126,9 +112,6 @@
           @click="handleSend"
         />
       </div>
-      <p class="chat-input-tip text-xs text-muted mt-1.5 text-center">
-        支持自然语言 · 试试 "近 1 小时 ERROR 日志"
-      </p>
     </div>
   </div>
 </template>
@@ -137,10 +120,10 @@
 /**
  * 对话式工作台 FR-1201 — v2.0+ 默认首页。增强版 UI。
  *
- * 特性: 欢迎界面、快捷预设栏(胶囊按钮)、动画输入框、打字指示器。
+ * 特性: 欢迎界面、动画输入框、打字指示器。
  */
 import { ref, nextTick } from 'vue'
-import { Promotion, Search, Clock, Sunny, Calendar, ChatLineRound } from '@element-plus/icons-vue'
+import { Promotion, Search, ChatLineRound } from '@element-plus/icons-vue'
 import { searchLogs } from '@/api/logs'
 import ChatMessage from '@/components/ChatMessage.vue'
 import QueryResultCard from '@/components/QueryResultCard.vue'
@@ -155,12 +138,6 @@ let messageIdCounter = 0
 function nextId() {
   return ++messageIdCounter
 }
-
-const quickPresets = [
-  { label: '近 1 小时 ERROR', icon: Clock, query: '近 1 小时 ERROR 日志', timeRange: '1h', level: 'ERROR' },
-  { label: '今天 WARN', icon: Sunny, query: '今天 WARN 级别日志', timeRange: 'today', level: 'WARN' },
-  { label: '近 3 天 500 错误', icon: Calendar, query: '近 3 天 500 错误', timeRange: '3d', key: '500' },
-]
 
 function formatTime(date) {
   const h = String(date.getHours()).padStart(2, '0')
@@ -226,10 +203,6 @@ function formatDslConditions(params) {
   if (params.date) parts.push(`日期=${params.date}`)
   if (params.startTime && params.endTime) parts.push(`时间=${params.startTime}~${params.endTime}`)
   return parts.length > 0 ? parts.join(' AND ') : '无条件（全量）'
-}
-
-function handleQuickPreset(preset) {
-  inputText.value = preset.query
 }
 
 function handleKeyDown(e) {
@@ -317,7 +290,7 @@ async function handleSend() {
   await scrollToBottom()
 }
 
-defineExpose({ messages, inputText, parseNaturalLanguage, handleSend, handleQuickPreset })
+defineExpose({ messages, inputText, parseNaturalLanguage, handleSend })
 </script>
 
 <style scoped>
@@ -401,25 +374,6 @@ defineExpose({ messages, inputText, parseNaturalLanguage, handleSend, handleQuic
   30% { transform: translateY(-4px); opacity: 1; }
 }
 
-/* ===== 快捷预设 ===== */
-.chat-presets {
-  background: transparent;
-}
-.preset-btn {
-  background: var(--bg-card);
-  border: 1px solid var(--border-light);
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: all var(--transition-fast);
-  outline: none;
-  font-family: inherit;
-}
-.preset-btn:hover {
-  background: var(--brand-50);
-  border-color: var(--brand-300);
-  color: var(--brand-700);
-}
-
 /* ===== 输入区 ===== */
 .chat-input-area {
   background: transparent;
@@ -448,8 +402,5 @@ defineExpose({ messages, inputText, parseNaturalLanguage, handleSend, handleQuic
   width: 38px;
   height: 38px;
   box-shadow: 0 2px 8px rgba(37, 99, 235, 0.25);
-}
-.chat-input-tip {
-  text-align: center;
 }
 </style>

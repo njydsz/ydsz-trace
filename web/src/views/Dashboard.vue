@@ -90,19 +90,19 @@
             <div class="quick-action-icon quick-action-icon--primary flex items-center justify-center rounded-xl">
               <el-icon :size="20"><ChatLineRound /></el-icon>
             </div>
-            <span class="quick-action-label text-xs font-medium">对话工作台</span>
+            <span class="quick-action-label text-xs font-medium">日志检索助手</span>
           </button>
           <button class="quick-action flex flex-col items-center gap-2 rounded-xl p-4" @click="go('/clients')">
             <div class="quick-action-icon quick-action-icon--success flex items-center justify-center rounded-xl">
               <el-icon :size="20"><Cpu /></el-icon>
             </div>
-            <span class="quick-action-label text-xs font-medium">客户端配置</span>
+            <span class="quick-action-label text-xs font-medium">日志节点配置</span>
           </button>
           <button class="quick-action flex flex-col items-center gap-2 rounded-xl p-4" @click="go('/items')">
             <div class="quick-action-icon quick-action-icon--info flex items-center justify-center rounded-xl">
               <el-icon :size="20"><Document /></el-icon>
             </div>
-            <span class="quick-action-label text-xs font-medium">日志项配置</span>
+            <span class="quick-action-label text-xs font-medium">采集路径配置</span>
           </button>
           <button class="quick-action flex flex-col items-center gap-2 rounded-xl p-4" @click="go('/logs')">
             <div class="quick-action-icon quick-action-icon--warning flex items-center justify-center rounded-xl">
@@ -114,7 +114,7 @@
             <div class="quick-action-icon quick-action-icon--danger flex items-center justify-center rounded-xl">
               <el-icon :size="20"><Share /></el-icon>
             </div>
-            <span class="quick-action-label text-xs font-medium">Trace 追踪</span>
+            <span class="quick-action-label text-xs font-medium">日志链路追踪</span>
           </button>
           <button class="quick-action flex flex-col items-center gap-2 rounded-xl p-4" @click="go('/alerts')">
             <div class="quick-action-icon quick-action-icon--purple flex items-center justify-center rounded-xl">
@@ -147,6 +147,16 @@
             <span class="tech-tag">Vite 6</span>
             <span class="tech-tag">Tailwind CSS</span>
           </div>
+          <div class="repo-links mt-4">
+            <a href="https://gitee.com/njydsz/ydsz-trace" target="_blank" rel="noopener noreferrer" class="repo-link">
+              <el-icon :size="14"><Position /></el-icon>
+              <span>Gitee 仓库</span>
+            </a>
+            <a href="https://github.com/njydsz/ydsz-trace" target="_blank" rel="noopener noreferrer" class="repo-link">
+              <el-icon :size="14"><Position /></el-icon>
+              <span>GitHub 仓库</span>
+            </a>
+          </div>
         </div>
       </el-card>
     </div>
@@ -162,7 +172,7 @@ import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   Cpu, Document, Connection, Search, Share, Bell,
-  ChatLineRound, Lightning, InfoFilled, DataAnalysis,
+  ChatLineRound, Lightning, InfoFilled, DataAnalysis, Position,
 } from '@element-plus/icons-vue'
 import { queryAllClients } from '@/api/client'
 import { queryAllItems } from '@/api/item'
@@ -360,5 +370,34 @@ onMounted(loadStats)
   background: var(--brand-50);
   border-radius: var(--radius-sm);
   border: 1px solid var(--brand-100);
+}
+
+/* ===== 仓库链接 ===== */
+.repo-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.repo-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--brand-700);
+  background: var(--brand-50);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--brand-100);
+  text-decoration: none;
+  transition: all var(--transition-fast);
+}
+.repo-link:hover {
+  background: var(--brand-100);
+  border-color: var(--brand-200);
+  color: var(--brand-800);
+}
+.repo-link .el-icon {
+  flex-shrink: 0;
 }
 </style>

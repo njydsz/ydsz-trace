@@ -1,19 +1,19 @@
 <template>
   <div class="clients-page">
-    <!-- 顶部操作栏 -->
+    <!-- 统一页面头部 -->
     <div class="page-header mb-5">
       <div class="flex items-center justify-between">
         <div>
-          <h2 class="page-title flex items-center gap-2">
-            <div class="page-icon flex items-center justify-center rounded-lg">
+          <h2 class="page-header__title">
+            <span class="page-header__icon" style="background: linear-gradient(135deg, var(--brand-500), var(--brand-700)); box-shadow: 0 2px 8px rgba(37, 99, 235, 0.2);">
               <el-icon :size="18"><Cpu /></el-icon>
-            </div>
-            客户端配置
+            </span>
+            日志节点配置
           </h2>
-          <p class="page-subtitle mt-1">管理所有已注册的日志采集客户端节点</p>
+          <p class="page-header__subtitle">管理所有已注册的日志采集节点</p>
         </div>
         <el-button type="primary" :icon="Plus" size="default" @click="openAdd" class="action-btn">
-          新增客户端
+          新增节点
         </el-button>
       </div>
     </div>
@@ -107,7 +107,7 @@
     </el-card>
 
     <!-- 新增/编辑 dialog -->
-    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑客户端' : '新增客户端'" width="500px">
+    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑节点' : '新增节点'" width="500px">
       <el-form :model="form" label-width="90px">
         <el-form-item label="IP" required>
           <el-input v-model="form.ip" placeholder="客户端 IP 地址" />
@@ -140,7 +140,7 @@
 </template>
 
 <script setup>
-/** 客户端配置页 v2.0：列表展示、增删改查、启用/禁用切换。搜索过滤、批量操作。删除前弹确认框。 */
+/** 日志节点配置页 v2.0：列表展示、增删改查、启用/禁用切换。搜索过滤、批量操作。删除前弹确认框。 */
 import { ref, reactive, onMounted, computed } from 'vue'
 import { Plus, Edit, Delete, Switch, Search, Check, Close } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -329,28 +329,7 @@ onMounted(load)
 </script>
 
 <style scoped>
-/* ===== 页面标题区 ===== */
-.page-header {
-  position: relative;
-}
-.page-title {
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--text-primary);
-  margin: 0;
-}
-.page-icon {
-  width: 36px;
-  height: 36px;
-  background: linear-gradient(135deg, var(--brand-500), var(--brand-700));
-  color: white;
-  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.2);
-}
-.page-subtitle {
-  font-size: 13px;
-  color: var(--text-muted);
-  margin: 0;
-}
+/* ===== 操作按钮 ===== */
 .action-btn {
   font-weight: 500 !important;
   box-shadow: 0 2px 8px rgba(37, 99, 235, 0.2);

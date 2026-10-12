@@ -148,6 +148,11 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 		// 自助修改密码（任何已登录用户可操作）
 		auth.POST("/admin/users/change-password", admin.ChangePassword)
 
+		// @Tags ModelCapability
+		// 模型能力配置—只读操作（已登录用户可查看）。
+		auth.GET("/admin/model-capability/list", admin.ListModelCapabilities)
+		auth.GET("/admin/model-capability/:id", admin.GetModelCapability)
+
 		// ━━ admin 级别（用户 / 角色管理）━━
 		adm := auth.Group("/admin")
 		adm.Use(pkgauth.RequireRole(pkgauth.RoleAdmin))
@@ -170,6 +175,13 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 			// 迁移工具：v1 -> v2 schema 就绪确认（仅 admin）
 			adm.POST("/migration/run", migration.Run)
 			adm.GET("/migration/status", migration.StatusHandler)
+
+			// @Tags ModelCapability
+			// 模型能力配置—写操作（仅 admin）。
+			adm.POST("/model-capability", admin.AddModelCapability)
+			adm.PUT("/model-capability", admin.UpdateModelCapability)
+			adm.POST("/model-capability/toggle", admin.ToggleModelCapability)
+			adm.POST("/model-capability/delete", admin.DeleteModelCapability)
 		}
 	}
 
