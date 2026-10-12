@@ -196,6 +196,21 @@ CREATE TABLE IF NOT EXISTS t_alert_event (
 );
 CREATE INDEX IF NOT EXISTS idx_alert_event_rule ON t_alert_event(rule_id);
 CREATE INDEX IF NOT EXISTS idx_alert_event_time ON t_alert_event(fired_time);
+
+-- 审计日志：记录查询、导出、配置变更全量留痕
+CREATE TABLE IF NOT EXISTS t_audit_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    username     TEXT,                       -- 操作用户
+    action       TEXT    NOT NULL,           -- 操作类型：search/export/login/config_change/delete
+    resource     TEXT,                       -- 操作对象：/logs/search, /client/register 等
+    detail       TEXT,                       -- JSON 格式详情：搜索条件、影响行数等
+    client_ip    TEXT,                       -- 请求方 IP
+    result       TEXT    DEFAULT 'success',  -- success/fail
+    created_time TEXT    DEFAULT (datetime('now', 'localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_audit_username ON t_audit_log(username);
+CREATE INDEX IF NOT EXISTS idx_audit_action ON t_audit_log(action);
+CREATE INDEX IF NOT EXISTS idx_audit_time ON t_audit_log(created_time);
 `
 
 // InitDB 初始化 SQLite 数据库连接。

@@ -39,6 +39,9 @@
             停止追踪
           </el-button>
           <el-button :icon="Delete" @click="clearLog">清空</el-button>
+          <el-button :icon="paused ? Check : VideoPause" :disabled="!streaming" @click="togglePause">
+            {{ paused ? '恢复' : '暂停接收' }}
+          </el-button>
         </el-form-item>
       </el-form>
     </el-card>
@@ -49,23 +52,29 @@
           <span>实时日志流</span>
           <div class="flex items-center gap-2">
             <el-tag :type="streaming ? 'success' : 'info'" size="small">
-              {{ streaming ? '追踪中' : '已停止' }}
+              {{ streaming ? (paused ? '已暂停' : '追踪中') : '已停止' }}
             </el-tag>
-            <span class="text-gray-400 text-sm">接收行数: {{ lines.length }}</span>
+            <span class="text-gray-400 text-sm">显示行数: {{ displayLines.length }} / 总计 {{ totalCount }}</span>
           </div>
         </div>
       </template>
-      <div class="log-viewer bg-gray-900 rounded p-3 h-[500px] overflow-y-auto font-mono text-sm">
+      <div ref="viewerRef" class="log-viewer bg-gray-900 rounded p-3 h-[500px] overflow-y-auto font-mono text-sm">
         <div
-          v-for="(line, idx) in lines"
+          v-for="(line, idx) in displayLines"
           :key="idx"
-          class="log-line"
+          class="log-line hover:bg-gray-800 group relative"
           :class="getLineClass(line)"
         >
-          <span class="text-gray-500 mr-2">{{ idx + 1 }}</span>
-          <span>{{ line }}</span>
+          <span class="text-gray-500 mr-2 select-none">{{ sortedIndexStart + idx + 1 }}</span>
+          <span class="log-content">{{ line }}</span>
+          <el-button
+            :icon="CopyDocument"
+            size="small"
+            class="copy-hover-btn absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity"
+            @click.stop="handleCopy(line)"
+          />
         </div>
-        <div v-if="lines.length === 0" class="text-gray-500 text-center py-8">
+        <div v-if="displayLines.length === 0" class="text-gray-500 text-center py-8">
           点击"开始追踪"查看实时日志
         </div>
       </div>
@@ -74,18 +83,33 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, computed } from 'vue'
+import { ref, reactive, shallowRef, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
-import { VideoPlay, VideoPause, Delete } from '@element-plus/icons-vue'
+import { VideoPlay, VideoPause, Delete, CopyDocument, Check } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { queryLogClients } from '@/api/logs'
 import { createSSE } from '@/api/sse'
+
+// 环形缓冲区最大容量
+const RING_BUFFER_SIZE = 500
 
 const clients = ref([])
 const items = ref([])
 const itemsLoading = ref(false)
 const streaming = ref(false)
-const lines = ref([])
+const paused = ref(false)
+const totalCount = ref(0)
+const viewerRef = ref(null)
+
+// 用 shallowRef 包裹行数组，避免深度响应式开销（SSE 高频推送）
+// ringBuffer 存储完整的环形缓冲区，用于视图渲染
+const ringBuffer = shallowRef([])
+// 环形写入指针
+let ringWritePos = 0
+
+const displayLines = computed(() => ringBuffer.value)
+
+const sortedIndexStart = ref(0)
 
 // 当前 SSE 连接实例
 let currentSSE = null
@@ -113,9 +137,7 @@ async function loadClients() {
 
 async function loadItems() {
   try {
-    // 简化：直接从客户端列表加载
     itemsLoading.value = true
-    // 实际使用时需要调用 item API
     if (form.client) {
       const { queryItemsByClient } = await import('@/api/logs')
       const { data } = await queryItemsByClient(form.client)
@@ -136,8 +158,12 @@ function startTail() {
 
   stopTail()
   streaming.value = true
-  lines.value = []
+  paused.value = false
+  ringBuffer.value = []
+  ringWritePos = 0
   msgCount = 0
+  totalCount.value = 0
+  sortedIndexStart.value = 0
 
   // 使用安全 SSE 封装（自带 CSRF 防护 + 401 处理 + 自动重连）
   currentSSE = createSSE('/logs/tail', {
@@ -175,15 +201,10 @@ function handleEvent({ event, data }) {
       break
     case 'line':
       msgCount++
-      if (lines.value.length > 5000) {
-        lines.value.splice(0, 1000)
+      totalCount.value = msgCount
+      if (!paused.value) {
+        appendToRing(data)
       }
-      lines.value.push(data)
-      // 自动滚动
-      setTimeout(() => {
-        const viewer = document.querySelector('.log-viewer')
-        if (viewer) viewer.scrollTop = viewer.scrollHeight
-      }, 10)
       break
     case 'error':
       ElMessage.error(data)
@@ -196,8 +217,34 @@ function handleEvent({ event, data }) {
   }
 }
 
+// 环形缓冲区写入 - 使用 splice 避免深度响应
+function appendToRing(line) {
+  const buf = ringBuffer.value
+  if (buf.length < RING_BUFFER_SIZE) {
+    // 未满时直接追加
+    // 触发 shallowRef 响应式更新
+    ringBuffer.value = [...buf, line]
+  } else {
+    // 满了之后，在新数组中替换最早的元素
+    const newArr = buf.slice(1)
+    newArr.push(line)
+    ringBuffer.value = newArr
+    sortedIndexStart.value++
+  }
+}
+
+function togglePause() {
+  paused.value = !paused.value
+  if (!paused.value) {
+    ElMessage.info('已恢复接收')
+  } else {
+    ElMessage.info('已暂停接收，继续追踪但不更新视图')
+  }
+}
+
 function stopTail() {
   streaming.value = false
+  paused.value = false
   // 关闭 SSE 连接（sse.js 封装会自动清理 reader 和 abort controller）
   if (currentSSE) {
     currentSSE.close()
@@ -206,8 +253,11 @@ function stopTail() {
 }
 
 function clearLog() {
-  lines.value = []
+  ringBuffer.value = []
+  ringWritePos = 0
   msgCount = 0
+  totalCount.value = 0
+  sortedIndexStart.value = 0
 }
 
 function getLineClass(line) {
@@ -218,6 +268,15 @@ function getLineClass(line) {
   if (upper.includes('DEBUG')) return 'text-gray-400'
   if (upper.includes('INFO')) return 'text-green-400'
   return 'text-gray-200'
+}
+
+async function handleCopy(line) {
+  try {
+    await navigator.clipboard.writeText(line)
+    ElMessage.success('已复制')
+  } catch {
+    ElMessage.error('复制失败')
+  }
 }
 
 onMounted(() => {
@@ -231,7 +290,6 @@ async function applyRouteQuery() {
   if (!query) return
   if (query.client) {
     form.client = Number(query.client)
-    // 需要加载对应客户端的日志项列表，否则选择器无法显示名称
     await loadItems()
   }
   if (query.item) form.item = Number(query.item)
@@ -258,5 +316,20 @@ onUnmounted(() => {
   white-space: pre-wrap;
   word-break: break-all;
   line-height: 1.5;
+  padding: 1px 4px;
+}
+.log-content {
+  display: inline;
+}
+.copy-hover-btn {
+  background-color: #37373d;
+  border: none;
+  color: #d4d4d4;
+  width: 24px;
+  height: 24px;
+}
+.copy-hover-btn:hover {
+  background-color: #4a4a50 !important;
+  color: #fff !important;
 }
 </style>

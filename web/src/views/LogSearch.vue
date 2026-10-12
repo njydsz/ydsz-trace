@@ -34,7 +34,25 @@
           />
         </el-form-item>
         <el-form-item label="关键词">
-          <el-input v-model="form.key" placeholder="要检索的关键字或正则表达式" />
+          <div class="relative w-full">
+            <el-input
+              v-model="form.key"
+              placeholder="要检索的关键字或正则表达式"
+              @focus="handleKeywordFocus"
+              @blur="handleKeywordBlur"
+            />
+            <button
+              class="absolute top-1/2 -translate-y-1/2 right-2 flex items-center gap-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-sm px-1"
+              title="搜索历史"
+              @mousedown.prevent="handleKeywordFocus"
+            >
+              <el-icon><Clock /></el-icon>
+            </button>
+            <SearchHistoryDropdown
+              ref="historyDropdownRef"
+              @select="handleHistorySelect"
+            />
+          </div>
         </el-form-item>
         <el-form-item label="匹配模式">
           <el-checkbox v-model="form.regex">启用正则匹配</el-checkbox>
@@ -93,21 +111,8 @@
             支持的字段：<code>level</code> <code>ip</code> <code>traceId</code> <code>module</code>；操作符：<code>AND</code> <code>OR</code> <code>NOT</code> <code>( )</code>
           </div>
         </el-form-item>
-        <el-form-item label="历史记录">
-          <el-select
-            v-model="selectedHistory"
-            placeholder="选择历史查询"
-            clearable
-            style="width: 100%"
-            @change="applyHistory"
-          >
-            <el-option
-              v-for="(h, idx) in searchHistory"
-              :key="idx"
-              :label="formatHistoryLabel(h)"
-              :value="idx"
-            />
-          </el-select>
+        <el-form-item label="搜索历史">
+          <el-button text :icon="Clock" @click="toggleHistoryDropdown">查看历史与收藏</el-button>
         </el-form-item>
         <el-form-item>
           <el-button type="primary" :icon="Search" :loading="searching" @click="onSearch">
@@ -128,14 +133,6 @@
           <span class="font-semibold text-gray-800">{{ resultTotal }}</span>
           行（当前展示 {{ rows.length }} 行）
         </div>
-        <el-alert
-          v-if="resultTruncated"
-          type="warning"
-          :closable="false"
-          show-icon
-          title="命中行过多，仅展示前 100000 行。请缩小时间范围或提高关键词精度以获取完整结果。"
-          class="mb-3"
-        />
         <div class="flex items-center gap-3">
           <span v-if="searching" class="text-primary-500 text-sm">加载中…</span>
           <el-button
@@ -173,15 +170,50 @@
           </el-button>
         </div>
       </div>
+      <el-alert
+        v-if="resultTruncated"
+        type="warning"
+        :closable="false"
+        show-icon
+        class="mb-3"
+      >
+        <template #title>
+          结果已达上限 {{ resultTotal }} 行，请缩小时间范围或添加更多过滤条件。
+        </template>
+      </el-alert>
+
+      <!-- 日志直方图 -->
+      <LogHistogram
+        v-if="rows.length > 0"
+        :rows="rows"
+        class="mb-4"
+        @update="handleHistogramUpdate"
+      />
+
       <el-table :data="rows" stripe size="small" max-height="480" style="width: 100%">
         <el-table-column type="index" label="#" width="55" />
         <el-table-column prop="source" label="来源" width="160" show-overflow-tooltip />
         <el-table-column prop="line" label="日志行" min-width="400">
-          <template #default="{ row }">
-            <code class="whitespace-pre-wrap break-all text-xs">{{ row.line }}</code>
+          <template #default="{ row, $index }">
+            <div class="log-cell">
+              <code class="whitespace-pre-wrap break-all text-xs log-cell-content">{{ row.line }}</code>
+              <el-button
+                :icon="DocumentCopy"
+                size="small"
+                class="log-copy-btn"
+                @click.stop="handleCopy($index)"
+              />
+            </div>
           </template>
         </el-table-column>
       </el-table>
+
+      <!-- 加载更多按钮 -->
+      <div v-if="hasMore && !searching" class="mt-4 flex justify-center">
+        <el-button :loading="loadingMore" @click="handleLoadMore">
+          加载更多（已加载 {{ rows.length }} / {{ resultTotal }}）
+        </el-button>
+      </div>
       <div v-if="resultTotal > pageSize" class="mt-4 flex justify-end">
         <el-pagination
           v-model:current-page="pageNo"
@@ -200,29 +232,32 @@
 </template>
 
 /** 日志检索页：选择客户端 + 日志项，按日期和关键词跨节点检索日志。
- *  支持正则匹配、日志级别过滤、时间范围过滤和历史记录功能。
+ *  支持正则匹配、日志级别过滤、时间范围过滤和历史/收藏功能。
  *  结果以 zip 下载，错误以 JSON 返回还原。
  */
 <script setup>
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, shallowRef, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Search, Refresh, Download, Link, VideoPlay, Share } from '@element-plus/icons-vue'
+import { Search, Refresh, Download, Link, VideoPlay, Share, DocumentCopy, Clock } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { queryLogClients, queryItemsByClient, queryLogs, searchLogs } from '@/api/logs'
 import { queryAllItems } from '@/api/item'
-
-const HISTORY_KEY = 'ydsz-log-search-history'
-const MAX_HISTORY = 10
+import LogHistogram from '@/components/LogHistogram.vue'
+import { useSearchHistory } from '@/store/searchHistory'
+import SearchHistoryDropdown from '@/components/SearchHistoryDropdown.vue'
 
 const clients = ref([])
 const items = ref([])
 const itemsLoading = ref(false)
 const searching = ref(false)
-const searchHistory = ref([])
-const selectedHistory = ref(null)
+
+// 搜索历史 store
+const searchStore = useSearchHistory()
+const historyDropdownRef = ref(null)
+const showHistoryDropdown = ref(false)
 
 // 在线分页状态
-const rows = ref([])
+const rows = shallowRef([])
 const pageNo = ref(1)
 const pageSize = ref(50)
 const resultTotal = ref(0)
@@ -231,6 +266,8 @@ const downloading = ref(false)
 const searched = ref(false)
 const lastSearchMeta = ref(null)
 const currentTaskNo = ref('')
+const hasMore = ref(false)
+const loadingMore = ref(false)
 const router = useRouter()
 
 const form = reactive({
@@ -283,83 +320,70 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url)
 }
 
-// 历史记录操作
-function loadHistory() {
-  try {
-    const raw = localStorage.getItem(HISTORY_KEY)
-    searchHistory.value = raw ? JSON.parse(raw) : []
-  } catch {
-    searchHistory.value = []
+// 搜索历史操作
+function handleHistorySelect(entry) {
+  form.key = entry.query
+  if (entry.params) {
+    if (entry.params.item) form.item = entry.params.item
+    if (entry.params.client !== undefined) form.client = entry.params.client
+    if (entry.params.date) form.date = entry.params.date
+    if (entry.params.line !== undefined) form.line = entry.params.line
+    if (entry.params.regex !== undefined) form.regex = entry.params.regex
+    if (entry.params.level !== undefined) form.level = entry.params.level
+    if (entry.params.startTime) form.startTime = entry.params.startTime
+    if (entry.params.endTime) form.endTime = entry.params.endTime
   }
 }
 
-function saveHistory() {
-  // 完全相同的查询不重复保存
-  const dupIdx = searchHistory.value.findIndex(h =>
-    h.item === form.item && h.date === form.date && h.key === form.key &&
-    h.regex === form.regex && h.level === form.level &&
-    h.startTime === form.startTime && h.endTime === form.endTime &&
-    !!h.advanced === !!form.advanced && h.query === form.query
-  )
-  if (dupIdx >= 0) {
-    searchHistory.value.splice(dupIdx, 1)
+function handleKeywordFocus() {
+  showHistoryDropdown.value = true
+  if (historyDropdownRef.value) historyDropdownRef.value.show()
+}
+
+function handleKeywordBlur() {
+  // 延迟关闭，让 click 事件先触发
+  setTimeout(() => {
+    showHistoryDropdown.value = false
+    if (historyDropdownRef.value) historyDropdownRef.value.hide()
+  }, 150)
+}
+
+function toggleHistoryDropdown() {
+  if (!historyDropdownRef.value) return
+  if (showHistoryDropdown.value) {
+    historyDropdownRef.value.hide()
+  } else {
+    showHistoryDropdown.value = true
+    historyDropdownRef.value.show()
   }
-  // 新查询插入到最前
-  searchHistory.value.unshift({
-    item: form.item,
-    itemName: items.value.find(it => it.id === form.item)?.itemName || '未知',
-    client: form.client,
-    clientName: form.client === 0 ? '全部客户端' :
-      (clients.value.find(c => c.id === form.client)?.ip + ':' +
-       clients.value.find(c => c.id === form.client)?.port) || '',
-    date: form.date,
-    key: form.key,
-    line: form.line,
-    regex: form.regex,
-    level: form.level,
-    startTime: form.startTime,
-    endTime: form.endTime,
-    advanced: form.advanced,
-    query: form.query || '',
-    ts: Date.now(),
+}
+
+function addHistoryToStore() {
+  const query = form.advanced ? form.query : form.key
+  if (!query || !query.trim()) return
+  searchStore.add({
+    query: query.trim(),
+    timestamp: Date.now(),
+    hitCount: resultTotal.value || 0,
+    params: {
+      item: form.item,
+      itemName: items.value.find(it => it.id === form.item)?.itemName || '',
+      client: form.client,
+      clientName: (() => {
+        // P1-6 修复：消除重复 .find()，缓存结果避免同一行执行两次
+        if (form.client === 0) return '全部客户端'
+        const c = clients.value.find(c => c.id === form.client)
+        return c ? `${c.ip}:${c.port}` : ''
+      })(),
+      date: form.date,
+      line: form.line,
+      regex: form.regex,
+      level: form.level,
+      startTime: form.startTime,
+      endTime: form.endTime,
+      advanced: form.advanced,
+    },
   })
-  // 仅保留最近 N 条
-  if (searchHistory.value.length > MAX_HISTORY) {
-    searchHistory.value = searchHistory.value.slice(0, MAX_HISTORY)
-  }
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(searchHistory.value))
-  selectedHistory.value = null
-}
-
-function applyHistory(idx) {
-  if (idx === null || idx < 0 || idx >= searchHistory.value.length) return
-  const h = searchHistory.value[idx]
-  form.item = h.item
-  form.client = h.client
-  form.date = h.date
-  form.key = h.key || ''
-  form.line = h.line ?? 20
-  form.regex = !!h.regex
-  form.level = h.level || ''
-  form.startTime = h.startTime || ''
-  form.endTime = h.endTime || ''
-  form.advanced = !!h.advanced
-  form.query = h.query || ''
-  // 切换模式时保持两侧一致性
-  if (form.advanced) form.key = ''
-  else form.query = ''
-}
-
-function formatHistoryLabel(h) {
-  const parts = []
-  parts.push(h.date || '-')
-  parts.push(h.advanced && h.query ? `[布尔] ${h.query.length > 20 ? h.query.slice(0, 20) + '…' : h.query}` : (h.key || '-'))
-  if (h.level) parts.push(`[${h.level}]`)
-  if (h.regex) parts.push('(正则)')
-  const timeRange = h.startTime || h.endTime ? `${h.startTime || '00:00'}-${h.endTime || '23:59'}` : ''
-  if (timeRange) parts.push(`@${timeRange}`)
-  const ts = h.ts ? new Date(h.ts).toLocaleString() : ''
-  return `${parts.join(' ')}  — ${ts}`
 }
 
 function resetForm() {
@@ -374,7 +398,6 @@ function resetForm() {
   form.endTime = ''
   form.advanced = false
   form.query = ''
-  selectedHistory.value = null
 }
 
 function onAdvancedToggle() {
@@ -434,6 +457,7 @@ async function onSearch() {
     rows.value = data.list || []
     resultTotal.value = data.total || 0
     resultTruncated.value = !!data.truncated
+    hasMore.value = data.total > pageSize.value * pageNo.value
     currentTaskNo.value = data.taskNo || ''
     searched.value = true
     lastSearchMeta.value = {
@@ -450,7 +474,7 @@ async function onSearch() {
       query: form.query || '',
     }
     // 保存查询历史
-    saveHistory()
+    addHistoryToStore()
     if (resultTotal.value === 0) {
       ElMessage.info('检索完成，未匹配到结果')
     } else {
@@ -474,7 +498,7 @@ async function onSizeChange(size) {
   await fetchPage()
 }
 
-async function fetchPage() {
+async function fetchPage(append = false) {
   if (!lastSearchMeta.value) return
   const meta = lastSearchMeta.value
   searching.value = true
@@ -495,14 +519,50 @@ async function fetchPage() {
     })
     const payload = res.data || {}
     const data = payload.data || {}
-    rows.value = data.list || []
+    if (append) {
+      rows.value = rows.value.concat(data.list || [])
+    } else {
+      rows.value = data.list || []
+    }
     resultTotal.value = data.total || 0
     resultTruncated.value = !!data.truncated
+    hasMore.value = data.total > pageSize.value * pageNo.value
     currentTaskNo.value = data.taskNo || currentTaskNo.value
   } catch {
     ElMessage.error('分页查询失败，请重试')
   } finally {
     searching.value = false
+  }
+}
+
+async function handleHistogramUpdate(range) {
+  form.startTime = range.startTime
+  form.endTime = range.endTime
+  pageNo.value = 1
+  rows.value = []
+  searched.value = false
+  await onSearch()
+}
+
+async function handleCopy(index) {
+  const row = rows.value[index]
+  const text = typeof row === 'string' ? row : (row.line || row.content || JSON.stringify(row))
+  try {
+    await navigator.clipboard.writeText(text)
+    ElMessage.success('已复制到剪贴板')
+  } catch {
+    ElMessage.error('复制失败')
+  }
+}
+
+async function handleLoadMore() {
+  if (!lastSearchMeta.value) return
+  loadingMore.value = true
+  pageNo.value++
+  try {
+    await fetchPage(true)
+  } finally {
+    loadingMore.value = false
   }
 }
 
@@ -571,6 +631,27 @@ async function onDownloadZip() {
 onMounted(() => {
   loadClients()
   loadItems()
-  loadHistory()
+  searchStore.load()
 })
 </script>
+
+<style scoped>
+.log-cell {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+}
+.log-copy-btn {
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.2s;
+  padding: 4px;
+}
+.log-cell:hover .log-copy-btn {
+  opacity: 1;
+}
+.log-cell-content {
+  flex: 1;
+}
+</style>

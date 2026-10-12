@@ -57,14 +57,21 @@
         <router-view />
       </el-main>
     </el-container>
+
+    <!-- 全局搜索 -->
+    <GlobalSearchDialog
+      ref="globalSearchRef"
+      v-model="globalSearchVisible"
+    />
   </el-container>
 </template>
 
 <script setup>
 /**
  * 控制台框架布局：左侧 Aside 导航 + 顶部 Header（用户信息/退出）+ 右侧 Main。
+ * 全局搜索快捷键 Cmd/Ctrl+K 在此注册。
  */
-import { computed, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 // P0-1 修复：主题初始化必须在 onMounted 中注册，返回清理函数给 onBeforeUnmount。
 // 原代码错误：onBeforeUnmount(themeStorage.init()) 在 setup 阶段直接调用 init()，
 // 导致 watcher 在 setup 阶段启动且清理函数被覆盖。
@@ -77,11 +84,14 @@ import { ElMessageBox, ElMessage } from 'element-plus'
 import { logout } from '@/api/auth'
 import { useAuth } from '@/store/auth'
 import { useThemeStorage } from '@/store/theme'
+import GlobalSearchDialog from '@/components/GlobalSearchDialog.vue'
 
 const auth = useAuth()
 const route = useRoute()
 const router = useRouter()
 const themeStorage = useThemeStorage()
+const globalSearchRef = ref(null)
+const globalSearchVisible = ref(false)
 
 const activeMenu = computed(() => route.path)
 const currentTitle = computed(() => route.meta?.title || 'Ydsz Trace')
@@ -108,12 +118,28 @@ function onCycleTheme() {
 
 let themeCleanup
 
+// 全局搜索快捷键 Cmd/Ctrl+K
+function handleGlobalKeydown(e) {
+  // 在 input/textarea 内不干扰正常输入
+  const tag = e.target?.tagName?.toLowerCase()
+  if (tag === 'input' || tag === 'textarea' || e.target?.isContentEditable) return
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault()
+    if (globalSearchRef.value) {
+      globalSearchVisible.value = true
+      globalSearchRef.value.open()
+    }
+  }
+}
+
 onMounted(() => {
   themeCleanup = themeStorage.init()
+  document.addEventListener('keydown', handleGlobalKeydown)
 })
 
 onBeforeUnmount(() => {
   if (themeCleanup) themeCleanup()
+  document.removeEventListener('keydown', handleGlobalKeydown)
 })
 
 async function onLogout() {

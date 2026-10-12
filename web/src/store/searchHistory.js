@@ -26,14 +26,6 @@ function safeSet(key, value) {
   }
 }
 
-function safeRemove(key) {
-  try {
-    localStorage.removeItem(key)
-  } catch {
-    /* localStorage 不可用时忽略 */
-  }
-}
-
 // useSearchHistory — 搜索历史与收藏 store。
 export const useSearchHistory = defineStore('searchHistory', () => {
   const history = ref([])
@@ -90,9 +82,9 @@ export const useSearchHistory = defineStore('searchHistory', () => {
     saveHistory()
   }
 
-  // remove 从历史移除
-  function remove(id) {
-    history.value = history.value.filter(h => h.id !== id)
+  // remove 从历史移除（按 query + timestamp 唯一定位）
+  function remove(query, timestamp) {
+    history.value = history.value.filter(h => !(h.query === query && h.timestamp === timestamp))
     saveHistory()
   }
 

@@ -17,13 +17,15 @@ import (
 
 // Scanner 周期性评估启用的告警规则；命中阈值且不在冷却期时投递 webhook。
 type Scheduler struct {
-	cron *cron.Cron
-	mu   sync.Mutex
-	sem  chan struct{}
+	cron   *cron.Cron
+	mu     sync.Mutex
+	sem    chan struct{}
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // probeFunc 实际调 logc 的钩子，便于单测替换。
-var probeFunc = func(ctx context.Context, server string, req alertProbeReq, maxLines int) ([]string, error) {
+var probeFunc = func(ctx context.Context, server string, req AlertProbeReq, maxLines int) ([]string, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
@@ -59,9 +61,12 @@ func NewScheduler(maxConcurrent int) *Scheduler {
 	if maxConcurrent <= 0 {
 		maxConcurrent = 5
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Scheduler{
-		cron: cron.New(cron.WithSeconds()),
-		sem:  make(chan struct{}, maxConcurrent),
+		cron:   cron.New(cron.WithSeconds()),
+		sem:    make(chan struct{}, maxConcurrent),
+		ctx:    ctx,
+		cancel: cancel,
 	}
 }
 
@@ -75,10 +80,13 @@ func (s *Scheduler) Start() {
 	go s.ScanOnce()
 }
 
-// Stop 停止后台扫描。
+// Stop 停止后台扫描并取消所有在途评估 goroutine。
 func (s *Scheduler) Stop() {
 	if s.cron != nil {
 		s.cron.Stop()
+	}
+	if s.cancel != nil {
+		s.cancel()
 	}
 }
 
@@ -110,7 +118,7 @@ func (s *Scheduler) ScanOnce() {
 					log.Printf("[alert] 评估规则 %d panic: %v", r.ID, rec)
 				}
 			}()
-			evaluateAndFire(context.Background(), r, t)
+			evaluateAndFire(s.ctx, r, t)
 		}(rule, now)
 	}
 }
@@ -121,7 +129,7 @@ func evaluateAndFire(ctx context.Context, rule models.AlertRule, _ time.Time) {
 		return
 	}
 
-	probe := alertProbeReq{
+	probe := AlertProbeReq{
 		Path: path, Key: rule.KeyWord, Regex: rule.Regex, Level: rule.Level,
 		MaxLines: 50,
 	}
@@ -212,8 +220,8 @@ func joinSamples(samples []string) string {
 	return out
 }
 
-// alertProbeReq 调用 logc /file/search 的请求字段。
-type alertProbeReq struct {
+// AlertProbeReq 调用 logc /file/search 的请求字段。
+type AlertProbeReq struct {
 	Path      string `json:"path"`
 	Key       string `json:"key"`
 	Line      int64  `json:"line"`

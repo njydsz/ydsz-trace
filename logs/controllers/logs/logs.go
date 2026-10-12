@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"ydsz-trace/logs/controllers/audit"
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
 	"ydsz-trace/pkg/config"
@@ -103,7 +104,16 @@ func postToLogc(server, path, key string, line int64, savePath string, regex boo
 //   - client != 0：单客户端同步查询
 //   - client == 0：多客户端并发查询（限流 20 并发，整体 5 分钟超时）
 //
-// 返回：zip 文件（application/octet-stream）。
+// @Summary 日志导出
+// @Description 跨节点并发拉取匹配日志行并打包为 zip 下载。支持关键词、正则、布尔查询、日志级别、时间范围过滤。
+// @Tags LogSearch
+// @Accept json
+// @Produce application/octet-stream
+// @Param body body LogsReq true "检索条件：item + date 必填；key + query 至少一个"
+// @Success 200 {file} binary "zip 附件"
+// @Failure 400 {object} api.Response "参数错误（格式非法 / 参数缺失）"
+// @Failure 404 {object} api.Response "无可用客户端"
+// @Router /logs/query [post]
 func Query(c *gin.Context) {
 	cfg := c.MustGet("cfg").(*config.Config)
 
@@ -144,6 +154,10 @@ func Query(c *gin.Context) {
 		return
 	}
 
+	// 多客户端计数器：在 if/else 块外声明，确保审计埋点可访问
+	successCount := 0
+	failCount := 0
+
 	// 获取临时目录
 	temppath := cfg.StringOr("temppath", "./temp/logs/")
 	workDir := filepath.Join(temppath, logsReq.Key)
@@ -166,6 +180,9 @@ func Query(c *gin.Context) {
 			logsReq.Regex, logsReq.Level, logsReq.StartTime, logsReq.EndTime, logsReq.Query)
 		if err != nil {
 			log.Printf("调用客户端 %s 失败: %v", server, err)
+			failCount++
+		} else {
+			successCount++
 		}
 	} else {
 		// 多客户端并发查询（带并发限流）
@@ -187,8 +204,6 @@ func Query(c *gin.Context) {
 
 		var wg sync.WaitGroup
 		var mu sync.Mutex
-		successCount := 0
-		failCount := 0
 
 		for i := 0; i < len(clients); i++ {
 			// 检查是否整体超时
@@ -251,6 +266,16 @@ func Query(c *gin.Context) {
 		os.Remove(zipFile)
 		os.RemoveAll(workDir)
 	}()
+
+	// 审计埋点：日志导出
+	audit.RecordAudit(c, "export", "/logs/query", map[string]interface{}{
+		"clientId":     logsReq.Client,
+		"itemId":       logsReq.Item,
+		"date":         logsReq.Date,
+		"key":          logsReq.Key,
+		"successCount": successCount,
+		"failCount":    failCount,
+	}, "success")
 
 	c.Header("Content-Disposition", `attachment; filename="`+logsReq.Key+`.zip"`)
 	c.File(zipFile)

@@ -81,9 +81,9 @@ func Trace(c *gin.Context) {
 	}
 	path := item.LogPath + item.LogPrefix + req.Date + item.LogSuffix + ".log"
 
-	// 构造 logc searchReq：使用布尔查询 `traceId:<value>`。
+	// 构造 logc SearchReq：使用布尔查询 `traceId:<value>`。
 	// logc 侧会识别 traceId 字段，未命中字段名时退化为全文包含。
-	searchReq := searchReq{
+	searchReq := SearchReq{
 		Client:   req.Client,
 		Item:     req.Item,
 		Date:     req.Date,
@@ -167,7 +167,7 @@ func Trace(c *gin.Context) {
 }
 
 // queryTraceFromLogc 调用单个 logc 节点检索 traceId 匹配行。
-// 复用 searchReq 结构；maxLines 通过 PageSize 透传。
-func queryTraceFromLogc(server string, path string, req searchReq) ([]string, error) {
+// 复用 SearchReq 结构；maxLines 通过 PageSize 透传。
+func queryTraceFromLogc(server string, path string, req SearchReq) ([]string, error) {
 	return queryOneLogc(server, path, req, req.PageSize)
 }

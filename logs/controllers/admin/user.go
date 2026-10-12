@@ -21,6 +21,7 @@ import (
 	"time"
 
 	models "ydsz-trace/logs/models"
+	"ydsz-trace/logs/controllers/audit"
 	"ydsz-trace/pkg/api"
 	"ydsz-trace/pkg/auth"
 	"ydsz-trace/pkg/config"
@@ -304,8 +305,13 @@ func verifyPassword(input, stored string) (bool, error) {
 
 // Exit 退出登录：清除会话中的 username 并销毁会话。
 func Exit(c *gin.Context) {
+	username := session.GetString(c, "username")
 	session.Delete(c, "username")
 	session.Destroy(c)
+	// 审计埋点：登出
+	audit.RecordAudit(c, "logout", "/admin/exit", map[string]interface{}{
+		"username": username,
+	}, "success")
 	api.Success(c, "退出成功", nil)
 }
 
@@ -333,7 +339,17 @@ type userUpdateReq struct {
 
 // ListUsers 分页查询用户列表。
 //
-// GET /admin/users?page=1&limit=20&keyword=xxx
+// @Summary 查询用户列表
+// @Description 分页查询系统用户列表，支持关键词搜索。
+// @Tags Admin
+// @Accept json
+// @Produce json
+// @Param page query int false "页码（默认 1）"
+// @Param limit query int false "每页条数（默认 20）"
+// @Param keyword query string false "用户名关键词搜索"
+// @Success 200 {object} api.Paginated "用户分页列表"
+// @Failure 401 {object} api.Response "未登录"
+// @Router /admin/users [get]
 func ListUsers(c *gin.Context) {
 	pageNum, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
@@ -344,7 +360,16 @@ func ListUsers(c *gin.Context) {
 
 // CreateUser 创建用户（密码使用 argon2id 哈希后存储）。
 //
-// POST /admin/users
+// @Summary 创建用户
+// @Description 创建新用户，密码将使用 argon2id 哈希后存储。角色可选 admin/operator/viewer。
+// @Tags Admin
+// @Accept json
+// @Produce json
+// @Param body body userCreateReq true "用户信息：username + password（必填，>=6 位），role 可选（默认 viewer）"
+// @Success 200 {object} api.Response{data=map[string]int64} "创建成功，返回用户 ID"
+// @Failure 400 {object} api.Response "参数错误或用户名已存在"
+// @Failure 401 {object} api.Response "未登录"
+// @Router /admin/users [post]
 func CreateUser(c *gin.Context) {
 	var req userCreateReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -391,7 +416,18 @@ func CreateUser(c *gin.Context) {
 
 // UpdateUser 更新用户信息（角色、状态、密码）。
 //
-// PUT /admin/users/:id
+// @Summary 更新用户
+// @Description 更新用户的角色、状态（启用/禁用）或密码。
+// @Tags Admin
+// @Accept json
+// @Produce json
+// @Param id path int true "用户 ID"
+// @Param body body userUpdateReq true "更新字段：role / status / password（均为可选）"
+// @Success 200 {object} api.Response "更新成功"
+// @Failure 400 {object} api.Response "参数错误或无效角色"
+// @Failure 401 {object} api.Response "未登录"
+// @Failure 404 {object} api.Response "用户不存在"
+// @Router /admin/users/{id} [put]
 func UpdateUser(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {

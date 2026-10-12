@@ -6,6 +6,19 @@
 //   - 提供 Web 控制台（SPA 托管）
 //
 // 启动流程：加载配置 → 初始化数据库 → 启动定时任务 → 清理临时文件 → 启动 HTTP 服务
+//
+// @title Ydsz Trace API
+// @version 2.0
+// @description AI 时代日志检索分析引擎 API
+// @termsOfService http://swagger.org/terms/
+// @contact.name API Support
+// @contact.email support@ydsz.local
+// @license.name Apache 2.0
+// @host localhost:2021
+// @BasePath /api
+// @securityDefinitions.apikey BearerAuth
+// @in header
+// @name Cookie
 package main
 
 import (

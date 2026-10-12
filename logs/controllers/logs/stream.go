@@ -144,7 +144,16 @@ func Stream(c *gin.Context) {
 
 // Tail 代理 logc tail 端点：将 logc 的 SSE 流式响应转发给客户端。
 //
-// 请求参数通过 JSON body 传递：client + item + date + key + regex + level + followDuration
+// @Summary 实时日志追踪流
+// @Description 代理 logc tail 端点的 SSE 流，将新增日志行实时推送到客户端。支持关键词、正则、日志级别过滤。
+// @Tags LogSearch
+// @Accept json
+// @Produce text/event-stream
+// @Param body body StreamReq true "追踪条件：item + date 必填"
+// @Success 200 {string} string "SSE 事件流（data: ...\n\n）"
+// @Failure 400 {object} api.Response "参数错误"
+// @Failure 404 {object} api.Response "项目不存在或无可用客户端"
+// @Router /logs/tail [post]
 func Tail(c *gin.Context) {
 	var req StreamReq
 	if err := c.ShouldBindJSON(&req); err != nil {

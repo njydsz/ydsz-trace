@@ -49,7 +49,17 @@ type queryReq struct {
 
 // ===========: Handlers ============
 
-// ListRules GET /logs/alerts/rules?pageNo=&pageSize=&keyword=
+// @Summary 查询告警规则列表
+// @Description 分页查询告警规则列表，支持关键词搜索。每条规则自动填充关联的日志项名称。
+// @Tags Alert
+// @Accept json
+// @Produce json
+// @Param pageNo query int false "页码（默认 1）"
+// @Param pageSize query int false "每页条数（默认 20，最大 100）"
+// @Param keyword query string false "规则名关键词搜索"
+// @Success 200 {object} api.Response "规则分页列表（data.list = []AlertRule, data.totalCount = int）"
+// @Failure 401 {object} api.Response "未登录"
+// @Router /logs/alerts/rules [get]
 func ListRules(c *gin.Context) {
 	var q queryReq
 	_ = c.ShouldBindQuery(&q)
@@ -86,7 +96,17 @@ func GetRule(c *gin.Context) {
 	api.Success(c, "查询成功", rule)
 }
 
-// AddRule POST /logs/alerts/rules
+// @Summary 新增告警规则
+// @Description 创建新的告警规则（关键词 / 正则 / 日志级别 / 阈值 / webhook 等维度配置）。
+// @Tags Alert
+// @Accept json
+// @Produce json
+// @Param body body alertRuleReq true "规则配置：name + itemId + webhookUrl 必填；threshold / intervalSec 有默认值"
+// @Success 200 {object} api.Response "新增成功（data.id = int64）"
+// @Failure 400 {object} api.Response "参数错误或不合法阈值/间隔"
+// @Failure 401 {object} api.Response "未登录"
+// @Failure 500 {object} api.Response "新增失败"
+// @Router /logs/alerts/rules [post]
 func AddRule(c *gin.Context) {
 	var req alertRuleReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -119,7 +139,19 @@ func AddRule(c *gin.Context) {
 	api.Success(c, "新增成功", gin.H{"id": id})
 }
 
-// UpdateRule PUT /logs/alerts/rules/:id
+// @Summary 更新告警规则
+// @Description 更新已有告警规则的全部配置字段。
+// @Tags Alert
+// @Accept json
+// @Produce json
+// @Param id path int true "规则 ID"
+// @Param body body alertRuleReq true "规则配置：name + itemId + webhookUrl 必填"
+// @Success 200 {object} api.Response "更新成功"
+// @Failure 400 {object} api.Response "参数错误或不合法阈值/间隔"
+// @Failure 401 {object} api.Response "未登录"
+// @Failure 404 {object} api.Response "规则不存在"
+// @Failure 500 {object} api.Response "更新失败"
+// @Router /logs/alerts/rules/{id} [put]
 func UpdateRule(c *gin.Context) {
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil || id <= 0 {

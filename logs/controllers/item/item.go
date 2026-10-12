@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"ydsz-trace/logs/controllers/audit"
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
 
@@ -48,6 +49,16 @@ func Add(c *gin.Context) {
 	item.UpdatedTime = nowStr()
 	id, err := models.AddItem(&item)
 	log.Printf("ID: %d, ERR: %v\n", id, err)
+	// 审计埋点：项目日志项新增
+	result := "success"
+	if err != nil {
+		result = "fail"
+	}
+	audit.RecordAudit(c, "config_change", "/item/add", map[string]interface{}{
+		"itemId":   id,
+		"itemName": item.ItemName,
+		"clientId": item.ClientId,
+	}, result)
 	api.Success(c, "项目日志新增成功", gin.H{"id": id})
 }
 

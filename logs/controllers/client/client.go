@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"ydsz-trace/logs/controllers/audit"
 	models "ydsz-trace/logs/models"
 	itemModels "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
@@ -141,10 +142,17 @@ func getRegisterKey(c *gin.Context) string {
 //
 // 安全特性：请求必须在 body 的 key 字段携带与配置一致的注册密钥。
 //
-// 两种模式：
-//  1. 传统模式 (source_type 为空或 file)：按 ip+port+vkey 匹配；通过后置 online=1
-//  2. 虚拟客户端 (source_type=docker|k8s)：按 virtual_parent+identity 去重，
-//     并自动创建关联的 item（日志项）记录
+// @Summary 客户端注册
+// @Description 接收 logc agent 的自注册请求，支持传统（IP+Port+vKey）与虚拟客户端（Docker/K8s identity）两种模式。注册鉴通过后自动上线或新增客户端记录。
+// @Tags Client
+// @Accept json
+// @Produce json
+// @Param body body ClientRegisterReq true "注册请求：key（必填）为注册鉴权密钥；source_type 区分传统（file）或虚拟（docker/k8s）模式"
+// @Success 200 {object} api.Response "注册成功"
+// @Failure 400 {object} api.Response "参数错误或缺少 identity"
+// @Failure 401 {object} api.Response "注册鉴权失败"
+// @Failure 500 {object} api.Response "服务端错误"
+// @Router /client/register [post]
 func Register(c *gin.Context) {
 	addr := c.Request.RemoteAddr
 	s := strings.Split(addr, ":")
@@ -207,6 +215,13 @@ func handleTraditionalRegister(c *gin.Context, ip, port, vKey, localLogcPort str
 			log.Printf("[register] 传统客户端自注册成功 ip=%s id=%d", ip, id)
 		}
 	}
+	// 审计埋点：客户端注册
+	audit.RecordAudit(c, "register", "/client/register", map[string]interface{}{
+		"ip":         ip,
+		"port":       port,
+		"sourceType": "file",
+	}, "success")
+
 	api.Success(c, "客户端上线成功", nil)
 }
 
@@ -281,6 +296,15 @@ func handleVirtualRegister(c *gin.Context, ip, port string, reg *ClientRegisterR
 			log.Printf("[register] 自动创建 item id=%d", itemId)
 		}
 	}
+
+	// 审计埋点：虚拟客户端注册
+	audit.RecordAudit(c, "register", "/client/register", map[string]interface{}{
+		"ip":            ip,
+		"port":          port2,
+		"sourceType":    reg.SourceType,
+		"identity":      reg.Identity,
+		"virtualParent": virtualParent,
+	}, "success")
 
 	api.Success(c, "虚拟客户端注册成功", gin.H{"id": id})
 }

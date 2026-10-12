@@ -1,6 +1,8 @@
-// 全局 axios 实例 + 响应拦截器 + CSRF 请求头注入
+// 全局 axios 实例 + 响应拦截器 + CSRF 请求头注入。
 //
-// 默认 120s 超时（适配日志查询场景）；401 自动清空登录态跳登录页。
+// 默认 120s 超时（适配日志查询场景）。
+// 响应拦截器职责：仅处理 HTTP 层错误（401/403/5xx）；
+// 业务状态码由调用方在 store/composables 层统一判断，不在此处 reject。
 // 所有非 GET 请求附加 X-Requested-With 头，配合服务端 CSRF 中间件校验。
 import axios from 'axios'
 import { ElMessage } from 'element-plus'
@@ -29,25 +31,30 @@ function isJsonResponse(response) {
   return ct.includes('application/json')
 }
 
+/**
+ * 判断业务状态码是否成功。
+ * 兼容字符串 "200" 与数字 0 两种后端返回形式。
+ */
+function isBusinessSuccess(code) {
+  return code === '200' || code === 200 || code === 0 || code === '0'
+}
+
 http.interceptors.response.use(
   (response) => {
-    // 统一响应解包：JSON 响应含 code 字段时自动判断业务状态
+    // P1-5 修复：拦截器仅处理 HTTP 层错误，业务状态码由上层判断。
+    // 对非成功的业务码给出 Toast 提示但不 reject，保持调用链可控。
     if (isJsonResponse(response) && response.data && 'code' in response.data) {
       const payload = response.data
-      const code = payload.code
-      if (code !== '200' && code !== 0) {
+      if (!isBusinessSuccess(payload.code)) {
         const msg = payload.message || payload.msg || '请求失败'
-        ElMessage.error(msg)
-        return Promise.reject(new Error(msg))
+        ElMessage.warning(msg)
       }
     }
-    // 非 JSON 响应（如 blob 下载）或成功响应，直接返回原始 response
     return response
   },
   (error) => {
     const status = error.response?.status
     if (status === 401) {
-      // 会话失效：清空登录态并跳回登录页
       const auth = useAuth()
       auth.clear()
       if (window.location.pathname !== '/login') {
@@ -58,6 +65,8 @@ http.interceptors.response.use(
       ElMessage.error(msg.includes('CSRF') ? '安全校验失败：请通过控制台发起操作' : msg)
     } else if (status && status >= 500) {
       ElMessage.error('服务端异常，请稍后重试')
+    } else if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+      ElMessage.error('请求超时，请稍后重试')
     }
     return Promise.reject(error)
   }

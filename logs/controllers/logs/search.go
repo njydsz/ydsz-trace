@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"ydsz-trace/logs/controllers/audit"
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
 	"ydsz-trace/pkg/session"
@@ -24,8 +25,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// searchReq 在线分页搜索请求体。
-type searchReq struct {
+// SearchReq 在线分页搜索请求体。
+type SearchReq struct {
 	Client    int64  `json:"client"`
 	Item      int64  `json:"item"`
 	Date      string `json:"date"`
@@ -46,8 +47,8 @@ type searchReq struct {
 	Query string `json:"query"`
 }
 
-// searchRespExt 扩展分页响应：在 api.Paginated 标准字段上追加 truncated 与 taskNo。
-type searchRespExt struct {
+// SearchRespExt 扩展分页响应：在 api.Paginated 标准字段上追加 truncated 与 taskNo。
+type SearchRespExt struct {
 	TaskNo    string   `json:"taskNo"`
 	List      []logRow `json:"list"`
 	Total     int      `json:"total"`
@@ -66,8 +67,8 @@ type logRow struct {
 	nodeIdx int
 }
 
-// logcSearchResp 与 logc searchResponse 对应。
-type logcSearchResp struct {
+// LogcSearchResp 与 logc searchResponse 对应。
+type LogcSearchResp struct {
 	Lines []string `json:"lines"`
 	Count int      `json:"count"`
 }
@@ -77,9 +78,18 @@ type logcSearchResp struct {
 //   - client != 0：单节点同步请求（保留历史使用场景）
 //   - client == 0：多节点并发请求，聚合后分页
 //
-// 响应：api.Paginated（data.list = []logRow，data.total / pageNo / pageSize / totalPage）。
+// @Summary 在线分页检索
+// @Description 跨节点并发搜索日志行，聚合后分页返回 JSON 行列表。支持关键词、正则、布尔查询、日志级别、时间范围过滤。
+// @Tags LogSearch
+// @Accept json
+// @Produce json
+// @Param body body SearchReq true "检索条件：item + date 必填；key 与 query 不可同时为空"
+// @Success 200 {object} api.Response{data=SearchRespExt} "检索成功，list = []logRow"
+// @Failure 400 {object} api.Response "参数错误（item/date 为空 或 key+query 同时为空）"
+// @Failure 404 {object} api.Response "项目不存在"
+// @Router /logs/search [post]
 func Search(c *gin.Context) {
-	var req searchReq
+	var req SearchReq
 	if err := c.ShouldBindJSON(&req); err != nil {
 		api.Fail(c, api.CodeBadRequest, "请求参数错误")
 		return
@@ -188,7 +198,7 @@ func Search(c *gin.Context) {
 	c.JSON(http.StatusOK, api.Response{
 		Code:    api.CodeSuccess,
 		Message: "查询成功",
-		Data: searchRespExt{
+		Data: SearchRespExt{
 			TaskNo:    taskNo,
 			List:      page,
 			Total:     total,
@@ -198,6 +208,16 @@ func Search(c *gin.Context) {
 			Truncated: truncated,
 		},
 	})
+
+	// 审计埋点：搜索操作
+	audit.RecordAudit(c, "search", "/logs/search", map[string]interface{}{
+		"itemId":     req.Item,
+		"clientId":   req.Client,
+		"date":       req.Date,
+		"key":        req.Key,
+		"query":      req.Query,
+		"matchCount": total,
+	}, "success")
 }
 
 // targetSpec 单个待查询的 logc 节点。
@@ -206,8 +226,8 @@ type targetSpec struct {
 	label  string
 }
 
-// insertSearchTask 根据 searchReq 写入一条 running 状态的检索任务记录。
-func insertSearchTask(taskNo, userName string, req searchReq, itemName string, nodeTotal, maxLines int) error {
+// insertSearchTask 根据 SearchReq 写入一条 running 状态的检索任务记录。
+func insertSearchTask(taskNo, userName string, req SearchReq, itemName string, nodeTotal, maxLines int) error {
 	t := &models.TTask{
 		TaskNo:    taskNo,
 		UserName:  userName,
@@ -233,7 +253,7 @@ func insertSearchTask(taskNo, userName string, req searchReq, itemName string, n
 
 // fetchAllLines 并发调用每个 target 的 logc /file/search，按 nodeIdx 稳定聚合。
 // truncated 为 true 表示结果达到了 maxTotal 上限。
-func fetchAllLines(c *gin.Context, targets []targetSpec, path string, req searchReq, maxTotal, perNodeBudget int) ([]logRow, bool) {
+func fetchAllLines(c *gin.Context, targets []targetSpec, path string, req SearchReq, maxTotal, perNodeBudget int) ([]logRow, bool) {
 	var mu sync.Mutex
 	all := make([]logRow, 0, maxTotal)
 	var wg sync.WaitGroup
@@ -311,7 +331,7 @@ func sortAllByNodeIdx(rows []logRow) {
 }
 
 // queryOneLogc 调用单个 logc /file/search，maxLines 透传给 logc 以限制单节点返回行数。
-func queryOneLogc(server, path string, req searchReq, maxLines int) ([]string, error) {
+func queryOneLogc(server, path string, req SearchReq, maxLines int) ([]string, error) {
 	if !strings.Contains(server, ":") {
 		server += ":2020"
 	}
@@ -347,7 +367,7 @@ func queryOneLogc(server, path string, req searchReq, maxLines int) ([]string, e
 		return nil, errNonOK(resp.StatusCode)
 	}
 
-	var result logcSearchResp
+	var result LogcSearchResp
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err
 	}
@@ -393,6 +413,10 @@ func DeleteTask(c *gin.Context) {
 		api.Fail(c, api.CodeNotFound, "任务不存在或已删除")
 		return
 	}
+	// 审计埋点：删除检索任务
+	audit.RecordAudit(c, "delete", "/logs/tasks/:taskNo", map[string]interface{}{
+		"taskNo": taskNo,
+	}, "success")
 	api.Success(c, "删除成功", map[string]string{"taskNo": taskNo})
 }
 
@@ -411,5 +435,10 @@ func RetryTask(c *gin.Context) {
 	}
 	_ = models.DeleteTaskByNo(taskNo)
 	newTaskNo := models.NewTaskNo()
+	// 审计埋点：重试检索任务
+	audit.RecordAudit(c, "retry", "/logs/tasks/:taskNo/retry", map[string]interface{}{
+		"oldTaskNo": taskNo,
+		"newTaskNo": newTaskNo,
+	}, "success")
 	api.Success(c, "已创建重试任务", map[string]string{"taskNo": newTaskNo})
 }

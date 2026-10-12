@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"ydsz-trace/logs/controllers/admin"
+	"ydsz-trace/logs/controllers/audit"
 	"ydsz-trace/logs/controllers/client"
 	"ydsz-trace/logs/controllers/item"
 	"ydsz-trace/logs/controllers/alert"
@@ -88,14 +89,17 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	auth.Use(filterAuth)
 	auth.Use(csrfProtection)
 	{
+			// @Tags Client
 		// ━━ viewer 级别（只读）━━
 		auth.GET("/client/query", client.Query)
 		auth.GET("/client/queryAll", client.QueryAll)
 		auth.GET("/client/queryPage", client.QueryPage)
+		// @Tags Item
 		auth.GET("/item/query", item.Query)
 		auth.GET("/item/queryAll", item.QueryAll)
 		auth.GET("/item/queryPage", item.QueryPage)
 
+		// @Tags LogSearch
 		auth.GET("/logs/queryClients", logs.QueryClient)
 		auth.GET("/logs/queryItems", logs.QueryItem)
 		auth.GET("/logs/tasks/:taskNo", logs.QueryTask)
@@ -109,16 +113,19 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 		op := auth.Group("")
 		op.Use(pkgauth.RequireRole(pkgauth.RoleOperator))
 		{
+			// @Tags Client
 			op.POST("/client/add", client.Add)
 			op.POST("/client/delete", client.Delete)
 			op.POST("/client/update", client.Update)
 			op.POST("/client/changeStatus", client.ChangeClientStatus)
 
+			// @Tags Item
 			op.POST("/item/add", item.Add)
 			op.POST("/item/delete", item.Delete)
 			op.POST("/item/update", item.Update)
 			op.POST("/item/changeStatus", item.ChangeItemStatus)
 
+			// @Tags LogSearch
 			op.POST("/logs/query", logs.Query)
 			op.POST("/logs/search", logs.Search)
 			op.POST("/logs/trace", logs.Trace)
@@ -127,6 +134,7 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 			op.POST("/logs/tasks/:taskNo/retry", logs.RetryTask)
 			op.DELETE("/logs/tasks/:taskNo", logs.DeleteTask)
 
+			// @Tags Alert
 			op.POST("/logs/alerts/rules", alert.AddRule)
 			op.PUT("/logs/alerts/rules/:id", alert.UpdateRule)
 			op.DELETE("/logs/alerts/rules/:id", alert.DeleteRule)
@@ -139,10 +147,15 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 		adm := auth.Group("/admin")
 		adm.Use(pkgauth.RequireRole(pkgauth.RoleAdmin))
 		{
+			// @Tags Admin
 			adm.GET("/users", admin.ListUsers)
 			adm.POST("/users", admin.CreateUser)
 			adm.PUT("/users/:id", admin.UpdateUser)
 			adm.DELETE("/users/:id", admin.DisableUser)
+
+			// 审计日志（仅 admin 可查看）
+			adm.GET("/audit/logs", audit.ListAuditLogs)
+			adm.GET("/audit/stats", audit.GetAuditStats)
 		}
 	}
 

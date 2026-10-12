@@ -65,6 +65,12 @@ test-verbose:
 
 # ==================== Lint / Format ====================
 lint:
+	@if command -v golangci-lint >/dev/null 2>&1; then \
+		echo "=== Running golangci-lint ==="; \
+		golangci-lint run --timeout 5m ./pkg/... ./logs/... ./logc/... 2>&1 || true; \
+	else \
+		echo "=== golangci-lint not found, falling back to go vet ==="; \
+	fi
 	@for m in $(PKG); do \
 		echo "=== Vetting $$m ==="; \
 		cd $$m && $(GO) vet ./... 2>&1 || true; cd ..; \

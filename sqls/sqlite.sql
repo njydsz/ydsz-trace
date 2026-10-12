@@ -143,6 +143,24 @@ CREATE TABLE t_alert_event (
 CREATE INDEX IF NOT EXISTS idx_alert_event_rule ON t_alert_event(rule_id);
 CREATE INDEX IF NOT EXISTS idx_alert_event_time ON t_alert_event(fired_time);
 
+-- ==================== 审计日志表 ====================
+DROP TABLE IF EXISTS t_audit_log;
+CREATE TABLE t_audit_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    username     TEXT,                       -- 操作用户
+    action       TEXT    NOT NULL,           -- 操作类型：search/export/login/config_change/delete
+    resource     TEXT,                       -- 操作对象：/logs/search, /client/register 等
+    detail       TEXT,                       -- JSON 格式详情：搜索条件、影响行数等
+    client_ip    TEXT,                       -- 请求方 IP
+    result       TEXT    DEFAULT 'success',  -- success/fail
+    created_time TEXT    DEFAULT (datetime('now', 'localtime'))
+);
+
+-- 审计日志表索引
+CREATE INDEX IF NOT EXISTS idx_audit_username ON t_audit_log(username);
+CREATE INDEX IF NOT EXISTS idx_audit_action ON t_audit_log(action);
+CREATE INDEX IF NOT EXISTS idx_audit_time ON t_audit_log(created_time);
+
 -- ==================== SQLite 性能优化 PRAGMA ====================
 -- WAL 模式：提升并发读写性能
 PRAGMA journal_mode = WAL;
