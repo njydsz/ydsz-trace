@@ -1,8 +1,18 @@
 <template>
   <div>
-    <h2 class="text-xl font-semibold mb-4">智能日志预警</h2>
+    <div class="flex items-center justify-between mb-5">
+      <div>
+        <h2 class="flex items-center gap-2 text-xl font-bold text-primary">
+          <div class="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-amber-500 to-orange-500 text-white">
+            <el-icon :size="16"><Bell /></el-icon>
+          </div>
+          智能日志预警
+        </h2>
+        <p class="text-sm text-muted mt-1 ml-10">配置日志告警规则，自动检测异常并推送通知</p>
+      </div>
+    </div>
 
-    <el-tabs v-model="activeTab">
+    <el-tabs v-model="activeTab" class="alerts-tabs">
       <!-- 配额摘要 -->
       <div class="flex items-center gap-4 mb-4">
         <el-tag type="primary">启用规则: {{ quota.enabled }}</el-tag>
@@ -172,7 +182,7 @@
  */
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Plus, Promotion, Delete, Edit } from '@element-plus/icons-vue'
+import { Refresh, Plus, Promotion, Delete, Edit, Bell } from '@element-plus/icons-vue'
 import {
   listRules, addRule, updateRule, deleteRule, toggleRule, testFireRule,
   listEvents, deleteEvent, getQuota,

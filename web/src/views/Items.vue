@@ -1,11 +1,20 @@
 <template>
   <div>
-    <div class="flex items-center justify-between mb-4">
-      <h2 class="text-xl font-semibold">日志项配置</h2>
+    <!-- 页面标题 -->
+    <div class="flex items-center justify-between mb-5">
+      <div>
+        <h2 class="flex items-center gap-2 text-xl font-bold text-primary">
+          <div class="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-indigo-500 to-indigo-600 text-white">
+            <el-icon :size="16"><Document /></el-icon>
+          </div>
+          日志项配置
+        </h2>
+        <p class="text-sm text-muted mt-1 ml-10">管理各客户端上的日志采集项与路径配置</p>
+      </div>
       <el-button type="primary" :icon="Plus" @click="openAdd">新增日志项</el-button>
     </div>
 
-    <el-card shadow="never">
+    <el-card shadow="never" class="!rounded-xl">
       <el-input
         v-model="searchText"
         placeholder="搜索名称、日志路径、前缀"
@@ -103,7 +112,7 @@
 /** 日志项配置页：按客户端分组管理日志项，增删改查、启用/禁用切换。搜索过滤、批量删除。绑定所属客户端必填。 */
 <script setup>
 import { ref, reactive, onMounted, computed } from 'vue'
-import { Plus, Edit, Delete, Switch, Search } from '@element-plus/icons-vue'
+import { Plus, Edit, Delete, Switch, Search, Document } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { queryItems, addItem, updateItem, deleteItem, changeItemStatus } from '@/api/item'
 import { queryAllClients } from '@/api/client'

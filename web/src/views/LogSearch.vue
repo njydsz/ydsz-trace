@@ -434,14 +434,6 @@ function resetForm() {
   expandedTemplates.value = {}
 }
 
-function onAdvancedToggle() {
-  if (form.advanced) {
-    form.key = ''
-  } else {
-    form.query = ''
-  }
-}
-
 async function onSearch() {
   if (!form.item) { ElMessage.warning('请选择日志项'); return }
   if (!form.date) { ElMessage.warning('请选择日期'); return }

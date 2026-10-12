@@ -1,6 +1,16 @@
 <template>
   <div>
-    <h2 class="text-xl font-semibold mb-4">检索任务归档</h2>
+    <div class="flex items-center justify-between mb-5">
+      <div>
+        <h2 class="flex items-center gap-2 text-xl font-bold text-primary">
+          <div class="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 text-white">
+            <el-icon :size="16"><List /></el-icon>
+          </div>
+          检索任务归档
+        </h2>
+        <p class="text-sm text-muted mt-1 ml-10">查看历史检索任务状态与结果，支持重试与清理</p>
+      </div>
+    </div>
 
     <div class="flex items-center gap-3 mb-4">
       <el-select v-model="statusFilter" placeholder="全部状态" clearable style="width: 160px" @change="onFilterChange">
@@ -96,7 +106,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, RefreshRight, View, Delete } from '@element-plus/icons-vue'
+import { Refresh, RefreshRight, View, Delete, List } from '@element-plus/icons-vue'
 import { listTasks, retryTask, deleteTask, TASK_STATUS } from '@/api/tasks'
 
 const list = ref([])
