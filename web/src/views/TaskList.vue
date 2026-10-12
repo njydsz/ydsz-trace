@@ -1,6 +1,6 @@
 <template>
   <div>
-    <h2 class="text-xl font-semibold mb-4">检索任务</h2>
+    <h2 class="text-xl font-semibold mb-4">检索任务归档</h2>
 
     <div class="flex items-center gap-3 mb-4">
       <el-select v-model="statusFilter" placeholder="全部状态" clearable style="width: 160px" @change="onFilterChange">
@@ -89,7 +89,7 @@
 
 <script setup>
 /**
- * 检索任务列表页：
+ * 检索任务归档列表页：
  *  - 分页、按状态过滤
  *  - 存在运行中/排队任务时每 3 秒自动刷新
  *  - 支持查看详情 / 重试 / 删除

@@ -6,8 +6,11 @@
 package models
 
 import (
+	"fmt"
 	"log"
 	"time"
+
+	"ydsz-trace/pkg/auth"
 )
 
 // StatusEnabled / StatusDisabled 用户启用状态常量。
@@ -140,6 +143,44 @@ func QueryUsers(pageNo, pageSize int, keyword string) Page {
 		return Page{}
 	}
 	return PageUtil(total, pageNo, pageSize, users)
+}
+
+// CountUsers 返回 t_user 表中的用户总数。
+func CountUsers() (int, error) {
+	var count int
+	err := DB.Get(&count, `SELECT COUNT(*) FROM t_user`)
+	if err != nil {
+		log.Printf("count users err: %v", err)
+		return 0, err
+	}
+	return count, nil
+}
+
+// SeedAdminUser 在 t_user 表为空时自动创建默认 admin 账号。
+// 密码使用 argon2id 哈希存储。用于首次启动零配置体验。
+func SeedAdminUser(username, plainPassword string) error {
+	count, err := CountUsers()
+	if err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil // 已有用户，无需种子
+	}
+	argon2Hash, err := auth.HashPassword(plainPassword)
+	if err != nil {
+		return fmt.Errorf("argon2id hash failed: %w", err)
+	}
+	user := &TUser{
+		Username:     username,
+		PasswordHash: argon2Hash,
+		Role:         "admin",
+		Status:       StatusEnabled,
+	}
+	if _, err := AddUser(user); err != nil {
+		return fmt.Errorf("seed admin user failed: %w", err)
+	}
+	log.Printf("[init] t_user 为空，已自动创建默认 admin 账号（username=%s）", username)
+	return nil
 }
 
 // UserExists 判断用户名是否已存在（用于创建时唯一性校验，排除指定 id）。

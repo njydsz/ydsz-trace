@@ -1,7 +1,7 @@
 <template>
   <div>
     <div class="flex items-center justify-between mb-4">
-      <h2 class="text-xl font-semibold">日志项管理</h2>
+      <h2 class="text-xl font-semibold">日志项配置</h2>
       <el-button type="primary" :icon="Plus" @click="openAdd">新增日志项</el-button>
     </div>
 
@@ -100,7 +100,7 @@
   </div>
 </template>
 
-/** 日志项管理页：按客户端分组管理日志项，增删改查、启用/禁用切换。搜索过滤、批量删除。绑定所属客户端必填。 */
+/** 日志项配置页：按客户端分组管理日志项，增删改查、启用/禁用切换。搜索过滤、批量删除。绑定所属客户端必填。 */
 <script setup>
 import { ref, reactive, onMounted, computed } from 'vue'
 import { Plus, Edit, Delete, Switch, Search } from '@element-plus/icons-vue'

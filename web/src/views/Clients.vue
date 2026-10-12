@@ -1,26 +1,44 @@
 <template>
-  <div>
-    <div class="flex items-center justify-between mb-4">
-      <h2 class="text-xl font-semibold">客户端管理</h2>
-      <el-button type="primary" :icon="Plus" @click="openAdd">新增客户端</el-button>
+  <div class="clients-page">
+    <!-- 顶部操作栏 -->
+    <div class="page-header mb-5">
+      <div class="flex items-center justify-between">
+        <div>
+          <h2 class="page-title flex items-center gap-2">
+            <div class="page-icon flex items-center justify-center rounded-lg">
+              <el-icon :size="18"><Cpu /></el-icon>
+            </div>
+            客户端配置
+          </h2>
+          <p class="page-subtitle mt-1">管理所有已注册的日志采集客户端节点</p>
+        </div>
+        <el-button type="primary" :icon="Plus" size="default" @click="openAdd" class="action-btn">
+          新增客户端
+        </el-button>
+      </div>
     </div>
 
-    <el-card shadow="never">
-      <el-input
-        v-model="searchText"
-        placeholder="搜索名称、IP、端口、来源"
-        :debounce="200"
-        clearable
-        :prefix-icon="Search"
-        class="mb-3"
-        style="max-width: 360px"
-      />
-
-      <div v-if="selectedRows.length > 0" class="mb-3">
-        <el-button type="success" :icon="Check" @click="handleBatchEnable">启用所选</el-button>
-        <el-button type="warning" :icon="Close" @click="handleBatchDisable">禁用所选</el-button>
-        <el-button type="danger" :icon="Delete" @click="handleBatchDelete">删除所选</el-button>
-        <span class="ml-3 text-gray-500">已选 {{ selectedRows.length }} 项</span>
+    <!-- 内容卡片 -->
+    <el-card shadow="never" class="!rounded-xl">
+      <!-- 搜索框 -->
+      <div class="toolbar flex items-center gap-3 mb-4">
+        <el-input
+          v-model="searchText"
+          placeholder="搜索名称、IP、端口、来源..."
+          :debounce="200"
+          clearable
+          :prefix-icon="Search"
+          class="search-input"
+          style="max-width: 320px"
+        />
+        <transition name="fade">
+          <div v-if="selectedRows.length > 0" class="batch-actions flex items-center gap-2 pl-3 border-l" style="border-color: var(--border-light)">
+            <span class="text-sm text-muted">已选 <strong class="text-primary">{{ selectedRows.length }}</strong> 项</span>
+            <el-button type="success" size="small" :icon="Check" @click="handleBatchEnable">启用</el-button>
+            <el-button type="warning" size="small" :icon="Close" @click="handleBatchDisable">禁用</el-button>
+            <el-button type="danger" size="small" :icon="Delete" @click="handleBatchDelete">删除</el-button>
+          </div>
+        </transition>
       </div>
 
       <el-skeleton :rows="6" animated v-if="loading && list.length === 0" />
@@ -32,40 +50,44 @@
         border
         @selection-change="handleSelectionChange"
         ref="tableRef"
+        class="clients-table"
       >
-        <el-table-column type="selection" width="50" />
-        <el-table-column prop="id" label="ID" width="80" />
-        <el-table-column prop="name" label="名称" />
-        <el-table-column prop="ip" label="IP" />
-        <el-table-column prop="port" label="端口" width="90" />
-        <el-table-column prop="source" label="来源" width="120" />
-        <el-table-column label="密钥" width="140">
+        <el-table-column type="selection" width="48" />
+        <el-table-column prop="id" label="ID" width="70" />
+        <el-table-column prop="name" label="名称" min-width="120" show-overflow-tooltip />
+        <el-table-column prop="ip" label="IP 地址" width="140">
           <template #default="{ row }">
-            <span v-if="row.vkey">{{ maskSecret(row.vkey) }}</span>
-            <span v-else class="text-gray-400">未设置</span>
+            <code class="ip-code">{{ row.ip }}</code>
           </template>
         </el-table-column>
-        <el-table-column prop="info" label="备注" show-overflow-tooltip />
-        <el-table-column label="在线状态" width="110">
+        <el-table-column prop="port" label="端口" width="80" align="center" />
+        <el-table-column prop="source" label="来源" width="100" show-overflow-tooltip />
+        <el-table-column label="密钥" width="120">
           <template #default="{ row }">
-            <el-tag :type="row.online === '1' ? 'success' : 'info'">
-              {{ row.online === '1' ? '在线' : '离线' }}
-            </el-tag>
+            <span v-if="row.vkey" class="vkey-mask">{{ maskSecret(row.vkey) }}</span>
+            <span v-else class="text-muted text-xs">未设置</span>
           </template>
         </el-table-column>
-        <el-table-column label="启用状态" width="110">
+        <el-table-column prop="info" label="备注" min-width="120" show-overflow-tooltip />
+        <el-table-column label="在线" width="90" align="center">
           <template #default="{ row }">
-            <el-tag :type="row.status === '1' ? 'success' : 'danger'">
+            <span class="status-dot" :class="row.online === '1' ? 'status-dot--online' : 'status-dot--offline'" />
+            <span class="status-text">{{ row.online === '1' ? '在线' : '离线' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="状态" width="90" align="center">
+          <template #default="{ row }">
+            <span class="status-badge" :class="row.status === '1' ? 'status-badge--active' : 'status-badge--inactive'">
               {{ row.status === '1' ? '启用' : '禁用' }}
-            </el-tag>
+            </span>
           </template>
         </el-table-column>
-        <el-table-column prop="createdTime" label="创建时间" width="180" />
-        <el-table-column label="操作" width="220" fixed="right">
+        <el-table-column prop="createdTime" label="创建时间" width="170" />
+        <el-table-column label="操作" width="200" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" :icon="Edit" @click="openEdit(row)">编辑</el-button>
-            <el-button link type="warning" :icon="Switch" @click="toggleStatus(row)">启停</el-button>
-            <el-button link type="danger" :icon="Delete" @click="remove(row)">删除</el-button>
+            <el-button link type="primary" size="small" :icon="Edit" @click="openEdit(row)">编辑</el-button>
+            <el-button link size="small" :icon="Switch" @click="toggleStatus(row)">{{ row.status === '1' ? '禁用' : '启用' }}</el-button>
+            <el-button link type="danger" size="small" :icon="Delete" @click="remove(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -77,25 +99,27 @@
           :total="total"
           :page-sizes="[10, 20, 50]"
           layout="total, sizes, prev, pager, next"
+          background
           @current-change="load"
           @size-change="load"
         />
       </div>
     </el-card>
 
-    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑客户端' : '新增客户端'" width="480px">
+    <!-- 新增/编辑 dialog -->
+    <el-dialog v-model="dialogVisible" :title="isEdit ? '编辑客户端' : '新增客户端'" width="500px">
       <el-form :model="form" label-width="90px">
-        <el-form-item label="IP">
-          <el-input v-model="form.ip" placeholder="客户端 IP" />
+        <el-form-item label="IP" required>
+          <el-input v-model="form.ip" placeholder="客户端 IP 地址" />
         </el-form-item>
-        <el-form-item label="端口">
+        <el-form-item label="端口" required>
           <el-input v-model="form.port" placeholder="默认 2020" />
         </el-form-item>
         <el-form-item label="密钥">
           <el-input v-model="form.vkey" placeholder="与 logc 配置一致" />
         </el-form-item>
         <el-form-item label="备注">
-          <el-input v-model="form.info" />
+          <el-input v-model="form.info" placeholder="备注信息（可选）" />
         </el-form-item>
         <el-form-item label="状态">
           <el-switch
@@ -115,8 +139,8 @@
   </div>
 </template>
 
-/** 客户端管理页：列表展示、增删改查、启用/禁用切换。搜索过滤、批量操作。删除前弹确认框。 */
 <script setup>
+/** 客户端配置页 v2.0：列表展示、增删改查、启用/禁用切换。搜索过滤、批量操作。删除前弹确认框。 */
 import { ref, reactive, onMounted, computed } from 'vue'
 import { Plus, Edit, Delete, Switch, Search, Check, Close } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -137,13 +161,11 @@ const searchText = ref('')
 const selectedRows = ref([])
 const tableRef = ref(null)
 
-// maskSecret 将密钥脱敏为 6 位星号（仅回显是否已设置，不暴露明文）。
 function maskSecret(vkey) {
   if (!vkey) return ''
   return '******'
 }
 
-// filterClients 按关键词过滤客户端列表，覆盖 name + ip + port + source 四个字段。
 function filterClients(clients, keyword) {
   const kw = keyword.trim().toLowerCase()
   if (!kw) return clients
@@ -290,7 +312,7 @@ async function toggleStatus(row) {
 
 async function remove(row) {
   try {
-    await ElMessageBox.confirm(`确认删除客户端 ${row.ip}:${row.port} ？`, '提示', { type: 'warning' })
+    await ElMessageBox.confirm(`确认删除客户端 ${row.ip}:${row.port}？`, '提示', { type: 'warning' })
   } catch {
     return
   }
@@ -305,3 +327,115 @@ async function remove(row) {
 
 onMounted(load)
 </script>
+
+<style scoped>
+/* ===== 页面标题区 ===== */
+.page-header {
+  position: relative;
+}
+.page-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+.page-icon {
+  width: 36px;
+  height: 36px;
+  background: linear-gradient(135deg, var(--brand-500), var(--brand-700));
+  color: white;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.2);
+}
+.page-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0;
+}
+.action-btn {
+  font-weight: 500 !important;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.2);
+}
+
+/* ===== 工具栏 ===== */
+.toolbar {
+  flex-wrap: wrap;
+}
+
+/* ===== 表格增强 ===== */
+.clients-table :deep(.el-table__header th) {
+  font-size: 12.5px !important;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.ip-code {
+  font-size: 12px;
+  color: var(--brand-700);
+  background: var(--brand-50);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+}
+.vkey-mask {
+  font-family: monospace;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* ===== 状态指示 ===== */
+.status-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 5px;
+  vertical-align: middle;
+}
+.status-dot--online {
+  background: var(--success);
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.15);
+}
+.status-dot--offline {
+  background: var(--neutral-400);
+}
+.status-text {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  vertical-align: middle;
+}
+
+.status-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: var(--radius-full);
+  line-height: 18px;
+}
+.status-badge--active {
+  background: var(--success-light);
+  color: #059669;
+}
+.status-badge--inactive {
+  background: var(--danger-light);
+  color: #dc2626;
+}
+
+/* 批量操作 */
+.batch-actions {
+  animation: slideIn 0.2s ease;
+}
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+/* 过渡 */
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.15s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+</style>

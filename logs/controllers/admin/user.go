@@ -182,9 +182,13 @@ func ServeStatic(c *gin.Context) {
 // GET 请求：返回 200，用于前端 SPA 登录页面渲染或探测登录状态（在会话中已有 username 时返回用户名）。
 // POST 请求：验证账号密码，成功则设置会话并返回用户名。
 //
+// 登录策略：
+//   - 优先查询 t_user 数据库表（多用户管理）
+//   - 数据库无匹配时回退到环境变量/配置文件（兼容老版本单账号）
+//
 // 安全特性：
 //   - 密码加盐哈希比对（pkg/auth 模块）
-//   - 支持明文密码平滑迁移：首次登录成功自动哈希
+//   - 禁用状态用户（status=0）拒绝登录
 //   - 单 IP 速率限制，防御暴力破解（默认 60 秒内最多 5 次失败，超出封禁 300 秒）
 func Login(c *gin.Context) {
 	cfg := c.MustGet("cfg").(*config.Config)
@@ -192,7 +196,8 @@ func Login(c *gin.Context) {
 	// GET /admin/login：已登录则返回用户名，未登录也返回 200 供前端渲染
 	if c.Request.Method == http.MethodGet {
 		if userName := session.GetString(c, "username"); userName != "" {
-			api.Success(c, "用户已登录", gin.H{"username": userName})
+			role := session.GetString(c, "role")
+			api.Success(c, "用户已登录", gin.H{"username": userName, "role": role})
 			return
 		}
 		api.Success(c, "未登录", nil)
@@ -202,7 +207,8 @@ func Login(c *gin.Context) {
 	// 先获取 session，判断用户是否已经登录
 	userName := session.GetString(c, "username")
 	if userName != "" {
-		api.Success(c, "用户已登录", gin.H{"username": userName})
+		role := session.GetString(c, "role")
+		api.Success(c, "用户已登录", gin.H{"username": userName, "role": role})
 		return
 	}
 
@@ -229,48 +235,66 @@ func Login(c *gin.Context) {
 		return
 	}
 
-	// 优先从环境变量获取，其次从配置文件获取
+	// 1. 优先查询 t_user 数据库（多用户登录）
+	if dbUser, dbErr := models.GetUserByUsername(user.Username); dbErr == nil && dbUser.ID > 0 {
+		// 检查用户状态
+		if dbUser.Status == models.StatusDisabled {
+			ratelimit.Default.RecordFailure(clientIP)
+			api.Fail(c, api.CodeForbidden, "账号已被禁用，请联系管理员")
+			return
+		}
+		// 校验密码（数据库存储的 argon2id 哈希）
+		valid, verifyErr := auth.VerifyPassword(user.Password, dbUser.PasswordHash)
+		if verifyErr != nil || !valid {
+			ratelimit.Default.RecordFailure(clientIP)
+			api.Fail(c, api.CodeUnauthorized, "用户名或密码错误")
+			return
+		}
+		// 登录成功
+		ratelimit.Default.RecordSuccess(clientIP)
+		session.Set(c, "username", dbUser.Username)
+		auth.SetRoleToSession(c, auth.RoleFromName(dbUser.Role))
+		auth.SetTenantToSession(c, defaultTenant(cfg))
+		api.Success(c, "登录成功", gin.H{"username": dbUser.Username, "role": dbUser.Role})
+		return
+	}
+
+	// 2. 数据库无匹配 → 回退到环境变量/配置文件（兼容老版本单账号）
 	uname := getAdminUser(cfg)
 	upwd := getAdminPassword(cfg)
 
-	// 校验用户名
 	if uname != user.Username {
 		ratelimit.Default.RecordFailure(clientIP)
-		// 使用与密码错误相同的提示，防止用户名枚举
 		api.Fail(c, api.CodeUnauthorized, "用户名或密码错误")
 		return
 	}
 
-	// 密码校验：根据存储格式选择验证方式
-	valid, err := verifyPassword(user.Password, upwd)
+	valid, err := verifyPasswordFallBack(user.Password, upwd)
 	if err != nil || !valid {
 		ratelimit.Default.RecordFailure(clientIP)
 		api.Fail(c, api.CodeUnauthorized, "用户名或密码错误")
 		return
 	}
 
-	// 登录成功，清除失败计数
+	// 登录成功
 	ratelimit.Default.RecordSuccess(clientIP)
 
-	// 平滑迁移：如果存储的是旧版 SHA-256 哈希，升级到 Argon2id
+	// 平滑迁移：明文/旧哈希 → 记录提示
 	if auth.NeedsRehash(upwd) {
 		if hashed, err := auth.HashPassword(user.Password); err == nil {
 			log.Printf("[security] 用户 %s 使用 SHA-256 哈希登录成功，已生成 Argon2id 哈希：%s（请更新至配置/环境变量）", uname, hashed)
 		}
 	}
-
-	// 平滑迁移：如果存储的仍是明文密码，首次成功登录时自动哈希
 	if !auth.IsHashedPassword(upwd) {
 		if hashed, err := auth.HashPassword(user.Password); err == nil {
-			// 记录日志：后续需手动更新环境变量/配置文件为哈希值
 			log.Printf("[security] 用户 %s 使用明文密码登录成功，已生成哈希：%s（请更新至配置）", uname, hashed)
 		}
 	}
 
-	session.Set(c, "username", user.Username)
 	role := determineRoleForUser(uname, cfg)
 	auth.SetRoleToSession(c, role)
 	auth.SetTenantToSession(c, defaultTenant(cfg))
+	session.Set(c, "username", user.Username)
 	api.Success(c, "登录成功", gin.H{"username": uname, "role": role.String()})
 }
 
@@ -291,11 +315,11 @@ func defaultTenant(_ *config.Config) string {
 	return "default"
 }
 
-// verifyPassword 根据存储的密码格式选择合适的验证方式。
+// verifyPasswordFallBack 凭据回退验证（仅用于 env/config 兼容路径）。
 //
 // 如果存储的是哈希值，使用 auth.VerifyPassword 校验；
 // 如果存储的是明文（兼容旧配置），直接比对并标记需迁移。
-func verifyPassword(input, stored string) (bool, error) {
+func verifyPasswordFallBack(input, stored string) (bool, error) {
 	if auth.IsHashedPassword(stored) {
 		return auth.VerifyPassword(input, stored)
 	}
@@ -482,6 +506,78 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 	api.Success(c, "更新用户成功", nil)
+}
+
+// changePasswordReq 自助修改密码请求体。
+type changePasswordReq struct {
+	// OldPassword 旧密码（明文）
+	OldPassword string `json:"oldPassword" binding:"required"`
+	// NewPassword 新明文密码（>= 6 位）
+	NewPassword string `json:"newPassword" binding:"required,min=6"`
+}
+
+// ChangePassword 自助修改当前登录用户密码。
+//
+// @Summary 修改自己的密码
+// @Description 已登录用户修改自身密码，需验证旧密码。
+// @Tags Admin
+// @Accept json
+// @Produce json
+// @Param body body changePasswordReq true "oldPassword + newPassword"
+// @Success 200 {object} api.Response "修改成功"
+// @Failure 400 {object} api.Response "参数错误或旧密码不正确"
+// @Failure 401 {object} api.Response "未登录"
+// @Router /admin/users/change-password [post]
+func ChangePassword(c *gin.Context) {
+	username := session.GetString(c, "username")
+	if username == "" {
+		api.Fail(c, api.CodeUnauthorized, "未登录")
+		return
+	}
+
+	var req changePasswordReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.Fail(c, api.CodeBadRequest, "请求参数错误: 旧密码和新密码不能为空，新密码至少 6 位")
+		return
+	}
+
+	// 查询当前用户
+	dbUser, err := models.GetUserByUsername(username)
+	if err != nil {
+		api.Fail(c, api.CodeNotFound, "用户不存在")
+		return
+	}
+
+	// 验证旧密码
+	valid, verifyErr := auth.VerifyPassword(req.OldPassword, dbUser.PasswordHash)
+	if verifyErr != nil || !valid {
+		api.Fail(c, api.CodeBadRequest, "旧密码不正确")
+		return
+	}
+
+	// 新旧密码不能相同
+	if req.OldPassword == req.NewPassword {
+		api.Fail(c, api.CodeBadRequest, "新密码不能与旧密码相同")
+		return
+	}
+
+	// 哈希新密码并更新
+	newHash, err := auth.HashPassword(req.NewPassword)
+	if err != nil {
+		api.Fail(c, api.CodeServerError, "密码哈希失败")
+		return
+	}
+	if err := models.UpdateUserPassword(dbUser.ID, newHash); err != nil {
+		api.Fail(c, api.CodeServerError, "更新密码失败")
+		return
+	}
+
+	// 审计埋点：密码修改
+	audit.RecordAudit(c, "change_password", "/admin/users/change-password", map[string]interface{}{
+		"username": username,
+	}, "success")
+
+	api.Success(c, "密码修改成功", nil)
 }
 
 // DisableUser 禁用用户（软删除：设置 status=0）。

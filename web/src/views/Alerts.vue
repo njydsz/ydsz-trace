@@ -1,6 +1,6 @@
 <template>
   <div>
-    <h2 class="text-xl font-semibold mb-4">告警</h2>
+    <h2 class="text-xl font-semibold mb-4">智能日志预警</h2>
 
     <el-tabs v-model="activeTab">
       <!-- 配额摘要 -->
@@ -11,7 +11,7 @@
         <el-button :icon="Refresh" @click="loadQuota" size="small">刷新摘要</el-button>
       </div>
 
-      <el-tab-pane label="告警规则" name="rules">
+      <el-tab-pane label="智能日志预警规则" name="rules">
         <div class="flex items-center gap-3 mb-3">
           <el-select v-model="ruleForm.itemId" placeholder="选择日志项" style="width: 240px" :loading="itemsLoading">
             <el-option v-for="it in items" :key="it.id" :label="it.itemName" :value="it.id" />
@@ -168,7 +168,7 @@
 
 <script setup>
 /**
- * 告警页：规则管理 (CRUD / toggle / test-fire) + 投递事件历史。
+ * 智能日志预警页：规则管理 (CRUD / toggle / test-fire) + 投递事件历史。
  */
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'

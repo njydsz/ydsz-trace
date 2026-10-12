@@ -117,6 +117,13 @@ func main() {
 	}
 	defer models.DB.Close()
 
+	// 首次启动种子：t_user 为空时使用配置账号创建 admin 用户
+	seedUname := getEnv("YDSZ_ADMIN_USER", cfg.StringOr("username", "admin"))
+	seedPwd := getEnv("YDSZ_ADMIN_PASSWORD", cfg.StringOr("password", "123456"))
+	if err := models.SeedAdminUser(seedUname, seedPwd); err != nil {
+		log.Printf("[warn] 种子 admin 用户失败: %v", err)
+	}
+
 	// 启动定时任务：按 cron 表达式定期探测所有客户端在线状态。
 	cronTask := task.InitTask(cfg)
 	cronTask.Start()

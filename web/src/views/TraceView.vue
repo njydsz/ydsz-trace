@@ -1,6 +1,6 @@
 <template>
   <div>
-    <h2 class="text-xl font-semibold mb-4">Trace 调用链聚合</h2>
+    <h2 class="text-xl font-semibold mb-4">Trace ID 聚合</h2>
     <el-card shadow="never" class="max-w-3xl">
       <el-form :model="form" label-width="100px">
         <el-form-item label="Trace ID">

@@ -1,4 +1,4 @@
-// web/src/views/Alerts.spec.js — 告警页测试基线
+// web/src/views/Alerts.spec.js — 智能日志预警页测试基线
 //
 // 覆盖：组件挂载、告警规则列表渲染、新增/编辑按钮触发 dialog。
 // 使用 shallowMount 隔离 Element Plus 依赖，vi.mock 拦截 API / 确认弹窗。
@@ -136,6 +136,6 @@ describe('Alerts.vue', () => {
     await new Promise(r => setTimeout(r, 100))
 
     // 模板标题渲染
-    expect(wrapper.find('h2').text()).toBe('告警')
+    expect(wrapper.find('h2').text()).toBe('智能日志预警')
   })
 })

@@ -145,6 +145,9 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 			op.DELETE("/logs/alerts/events/:id", alert.DeleteEvent)
 		}
 
+		// 自助修改密码（任何已登录用户可操作）
+		auth.POST("/admin/users/change-password", admin.ChangePassword)
+
 		// ━━ admin 级别（用户 / 角色管理）━━
 		adm := auth.Group("/admin")
 		adm.Use(pkgauth.RequireRole(pkgauth.RoleAdmin))

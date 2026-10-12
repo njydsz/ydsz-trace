@@ -85,7 +85,7 @@ describe('LogSearch.vue', () => {
   it('初始状态：表单字段默认为空或初始值', () => {
     const wrapper = mountComponent()
     // 验证组件挂载后模板渲染正常
-    expect(wrapper.find('h2').text()).toBe('日志检索')
+    expect(wrapper.find('h2').text()).toBe('历史日志检索')
   })
 
   it('searchLogs 调用时携带正确参数', async () => {

@@ -1,193 +1,165 @@
 <template>
-  <div>
-    <h2 class="text-xl font-semibold mb-4">日志检索</h2>
-    <el-card shadow="never" class="max-w-3xl">
-      <el-form :model="form" label-width="100px">
-        <el-form-item label="客户端">
-          <el-select
-            v-model="form.client"
-            placeholder="选择客户端"
-            style="width: 100%"
-            @change="onClientChange"
-          >
-            <el-option label="全部客户端（并发检索）" :value="0" />
-            <el-option v-for="c in clients" :key="c.id" :label="`${c.ip}:${c.port}`" :value="c.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="日志项">
-          <el-select
-            v-model="form.item"
-            placeholder="选择日志项"
-            style="width: 100%"
-            :loading="itemsLoading"
-          >
-            <el-option v-for="it in items" :key="it.id" :label="it.itemName" :value="it.id" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="日期">
-          <el-date-picker
-            v-model="form.date"
-            type="date"
-            value-format="YYYYMMDD"
-            placeholder="检索哪一天的日志"
-            style="width: 100%"
-          />
-        </el-form-item>
-        <el-form-item label="关键词">
-          <div class="relative w-full">
-            <el-input
-              v-model="form.key"
-              placeholder="要检索的关键字或正则表达式"
-              @focus="handleKeywordFocus"
-              @blur="handleKeywordBlur"
-            />
-            <button
-              class="absolute top-1/2 -translate-y-1/2 right-2 flex items-center gap-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 text-sm px-1"
-              title="搜索历史"
-              @mousedown.prevent="handleKeywordFocus"
+  <div class="logs-page">
+    <!-- 顶部标题 -->
+    <div class="page-header mb-5">
+      <h2 class="page-title flex items-center gap-2">
+        <div class="page-icon flex items-center justify-center rounded-lg">
+          <el-icon :size="18"><Search /></el-icon>
+        </div>
+        历史日志检索
+      </h2>
+      <p class="page-subtitle mt-1">选择客户端与日志项，跨节点检索日志</p>
+    </div>
+
+    <!-- 检索表单卡片 -->
+    <el-card shadow="never" class="!rounded-xl search-card mb-5">
+      <div class="search-form">
+        <el-form :model="form" label-position="top" class="grid-form">
+          <el-form-item label="客户端">
+            <el-select
+              v-model="form.client"
+              placeholder="全部客户端（并发检索）"
+              style="width: 100%"
+              @change="onClientChange"
             >
-              <el-icon><Clock /></el-icon>
-            </button>
-            <SearchHistoryDropdown
-              ref="historyDropdownRef"
-              @select="handleHistorySelect"
+              <el-option label="全部客户端" :value="0" />
+              <el-option v-for="c in clients" :key="c.id" :label="`${c.ip}:${c.port}`" :value="c.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="日志项" required>
+            <el-select
+              v-model="form.item"
+              placeholder="请选择日志项"
+              style="width: 100%"
+              :loading="itemsLoading"
+            >
+              <el-option v-for="it in items" :key="it.id" :label="it.itemName" :value="it.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="日期" required>
+            <el-date-picker
+              v-model="form.date"
+              type="date"
+              value-format="YYYYMMDD"
+              placeholder="选择检索日期"
+              style="width: 100%"
             />
-          </div>
-        </el-form-item>
-        <el-form-item label="匹配模式">
-          <el-checkbox v-model="form.regex">启用正则匹配</el-checkbox>
-          <span class="text-gray-400 text-sm ml-2">勾选后关键词按正则解析</span>
-        </el-form-item>
-        <el-form-item label="上下文行数">
-          <el-input-number v-model="form.line" :min="0" :max="500" />
-          <span class="text-gray-400 text-sm ml-2">命中行上下的上下文行数</span>
-        </el-form-item>
-        <el-form-item label="日志级别">
-          <el-select v-model="form.level" placeholder="不过滤" clearable style="width: 100%">
+          </el-form-item>
+        </el-form>
+
+        <el-divider class="!my-4" />
+
+        <el-form :model="form" label-position="top">
+          <el-form-item label="关键词">
+            <div class="relative w-full">
+              <el-input
+                v-model="form.key"
+                placeholder="要检索的关键字或正则表达式"
+                size="default"
+                @focus="handleKeywordFocus"
+                @blur="handleKeywordBlur"
+              />
+              <button
+                class="history-btn absolute right-2 top-1/2 -translate-y-1/2 flex items-center text-muted hover:text-brand-600 transition-colors"
+                title="搜索历史"
+                @mousedown.prevent="handleKeywordFocus"
+              >
+                <el-icon><Clock /></el-icon>
+              </button>
+              <SearchHistoryDropdown
+                ref="historyDropdownRef"
+                @select="handleHistorySelect"
+              />
+            </div>
+          </el-form-item>
+        </el-form>
+
+        <div class="flex flex-wrap items-center gap-3">
+          <el-checkbox v-model="form.regex" class="!mr-0">
+            <span class="text-sm">正则匹配</span>
+          </el-checkbox>
+          <el-select v-model="form.level" placeholder="不过滤级别" clearable style="width: 140px">
             <el-option label="DEBUG" value="DEBUG" />
             <el-option label="INFO" value="INFO" />
             <el-option label="WARN" value="WARN" />
             <el-option label="ERROR" value="ERROR" />
             <el-option label="FATAL" value="FATAL" />
           </el-select>
-        </el-form-item>
-        <el-form-item label="时间范围">
-          <div class="flex gap-2">
+          <div class="time-range flex items-center gap-2">
             <el-time-picker
               v-model="form.startTime"
               format="HH:mm:ss"
               value-format="HH:mm:ss"
-              placeholder="开始时间"
+              placeholder="开始"
               :clearable="true"
-              style="width: 100%"
+              style="width: 140px"
             />
-            <span class="text-gray-400 self-center">至</span>
+            <span class="text-muted text-xs">至</span>
             <el-time-picker
               v-model="form.endTime"
               format="HH:mm:ss"
               value-format="HH:mm:ss"
-              placeholder="结束时间"
+              placeholder="结束"
               :clearable="true"
-              style="width: 100%"
+              style="width: 140px"
             />
           </div>
-        </el-form-item>
-        <el-form-item label="高级检索">
-          <el-switch
-            v-model="form.advanced"
-            active-text="使用布尔查询"
-            inactive-text="普通关键词"
-            @change="onAdvancedToggle"
-          />
-        </el-form-item>
-        <el-form-item v-if="form.advanced" label="布尔查询">
-          <el-input
-            v-model="form.query"
-            type="textarea"
-            :rows="2"
-            placeholder="E.g. ERROR AND timeout NOT level:DEBUG&#10;支持 field:value (level/ip/traceId/module) AND/OR/NOT ()"
-          />
-          <div class="text-gray-400 text-xs mt-1">
-            支持的字段：<code>level</code> <code>ip</code> <code>traceId</code> <code>module</code>；操作符：<code>AND</code> <code>OR</code> <code>NOT</code> <code>( )</code>
-          </div>
-        </el-form-item>
-        <el-form-item label="搜索历史">
-          <el-button text :icon="Clock" @click="toggleHistoryDropdown">查看历史与收藏</el-button>
-        </el-form-item>
-        <el-form-item>
+        </div>
+
+        <el-divider class="!my-4" />
+
+        <div class="flex items-center gap-3">
           <el-button type="primary" :icon="Search" :loading="searching" @click="onSearch">
             开始检索
           </el-button>
-          <el-button :icon="Refresh" @click="resetForm" class="ml-2">
-            清空
-          </el-button>
-        </el-form-item>
-      </el-form>
+          <el-button :icon="Refresh" @click="resetForm">清空</el-button>
+          <el-button text :icon="Clock" @click="toggleHistoryDropdown">搜索历史</el-button>
+        </div>
+      </div>
     </el-card>
 
     <!-- 在线分页结果卡片 -->
-    <el-card v-if="rows.length > 0 || searching || searched" shadow="never" class="mt-6">
-      <div class="flex items-center justify-between mb-3">
-        <div class="text-sm text-gray-600">
-          共命中
-          <span class="font-semibold text-gray-800">{{ resultTotal }}</span>
-          行（当前展示 {{ rows.length }} 行）
-        </div>
+    <el-card v-if="rows.length > 0 || searching || searched" shadow="never" class="!rounded-xl">
+      <!-- 结果头部 -->
+      <div class="result-header flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
-          <span v-if="searching" class="text-primary-500 text-sm">加载中…</span>
-          <el-button
-            v-if="currentTaskNo"
-            :icon="Link"
-            size="small"
-            @click="router.push('/tasks')"
-          >
-            任务 {{ currentTaskNo }}
-          </el-button>
-          <el-button
-            v-if="lastSearchMeta"
-            :icon="Download"
-            :loading="downloading"
-            size="small"
-            @click="onDownloadZip"
-          >
-            下载 zip
-          </el-button>
-          <el-button
-            v-if="lastSearchMeta"
-            :icon="VideoPlay"
-            size="small"
-            @click="gotoTail"
-          >
-            定位到 Tail
-          </el-button>
-          <el-button
-            v-if="lastSearchMeta && form.key"
-            :icon="Share"
-            size="small"
-            @click="gotoTrace"
-          >
-            追踪链路
-          </el-button>
+          <div class="result-stat flex items-center gap-1.5">
+            <el-icon class="text-success"><CircleCheckFilled /></el-icon>
+            <span class="text-sm text-secondary">
+              共命中 <strong class="text-primary">{{ resultTotal }}</strong> 行
+            </span>
+          </div>
+          <span class="text-xs text-muted">当前展示 {{ rows.length }} 行</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span v-if="searching" class="flex items-center gap-1 text-brand-500 text-sm">
+            <el-icon class="animate-spin"><Loading /></el-icon>搜索中…
+          </span>
+          <el-button v-if="currentTaskNo" :icon="Link" size="small" @click="router.push('/tasks')">任务详情</el-button>
+          <el-button v-if="lastSearchMeta" :icon="Download" :loading="downloading" size="small" @click="onDownloadZip">下载 zip</el-button>
+          <el-button v-if="lastSearchMeta" :icon="VideoPlay" size="small" @click="gotoTail">定位 Tail</el-button>
+          <el-button v-if="lastSearchMeta && form.key" :icon="Share" size="small" @click="gotoTrace">追踪链路</el-button>
         </div>
       </div>
+
       <el-alert
         v-if="resultTruncated"
         type="warning"
         :closable="false"
         show-icon
-        class="mb-3"
+        class="mb-4"
       >
         <template #title>
-          结果已达上限 {{ resultTotal }} 行，请缩小时间范围或添加更多过滤条件。
+          结果已达上限 {{ resultTotal }} 行，建议缩小时间范围或添加更多过滤条件。
         </template>
       </el-alert>
 
       <!-- 模板聚类视图 -->
       <div v-if="templateGroups.length > 0" class="mb-4">
         <div class="flex items-center justify-between mb-2">
-          <span class="text-sm text-gray-600 font-medium">模板聚类视图</span>
+          <span class="text-sm text-secondary font-medium">模板聚类视图</span>
           <el-radio-group v-model="viewMode" size="small">
-            <el-radio-button value="cluster">聚类视图</el-radio-button>
+            <el-radio-button value="cluster">聚类</el-radio-button>
             <el-radio-button value="flat">原始列表</el-radio-button>
           </el-radio-group>
         </div>
@@ -200,16 +172,16 @@
           >
             <template #title>
               <div class="flex items-center gap-2 w-full">
-                <code class="text-xs text-gray-600 font-mono truncate max-w-lg">{{ g.template }}</code>
+                <code class="text-xs text-secondary font-mono truncate max-w-md">{{ g.template }}</code>
                 <el-tag size="small" type="info">{{ g.count }} 次</el-tag>
                 <el-tag v-if="g.level" size="small" :type="getLevelTagType(g.level)">{{ g.level }}</el-tag>
               </div>
             </template>
-            <div class="bg-gray-50 p-3 rounded text-sm font-mono">
+            <div class="bg-muted-bg p-3 rounded-lg text-sm font-mono">
               <div
                 v-for="(line, i) in (expandedTemplates[g.templateId] ? g.sampleLines : g.sampleLines.slice(0, 5))"
                 :key="i"
-                class="text-gray-700 leading-6 py-0.5"
+                class="text-secondary leading-6 py-0.5"
               >{{ line }}</div>
               <el-button
                 v-if="g.sampleLines.length > 5 && !expandedTemplates[g.templateId]"
@@ -233,6 +205,7 @@
         @update="handleHistogramUpdate"
       />
 
+      <!-- 日志表格 -->
       <el-table
         v-if="viewMode === 'flat' || templateGroups.length === 0"
         :data="rows"
@@ -258,7 +231,7 @@
         </el-table-column>
       </el-table>
 
-      <!-- 加载更多按钮 -->
+      <!-- 加载更多 -->
       <div v-if="hasMore && !searching" class="mt-4 flex justify-center">
         <el-button :loading="loadingMore" @click="handleLoadMore">
           加载更多（已加载 {{ rows.length }} / {{ resultTotal }}）
@@ -281,14 +254,11 @@
   </div>
 </template>
 
-/** 日志检索页：选择客户端 + 日志项，按日期和关键词跨节点检索日志。
- *  支持正则匹配、日志级别过滤、时间范围过滤和历史/收藏功能。
- *  结果以 zip 下载，错误以 JSON 返回还原。
- */
 <script setup>
+/** 历史日志检索页 v2.0：选择客户端 + 日志项，按日期和关键词跨节点检索日志。 */
 import { ref, reactive, shallowRef, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Search, Refresh, Download, Link, VideoPlay, Share, DocumentCopy, Clock } from '@element-plus/icons-vue'
+import { Search, Refresh, Download, Link, VideoPlay, Share, DocumentCopy, Clock, CircleCheckFilled, Loading } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { queryLogClients, queryItemsByClient, queryLogs, searchLogs } from '@/api/logs'
 import { queryAllItems } from '@/api/item'
@@ -301,18 +271,15 @@ const items = ref([])
 const itemsLoading = ref(false)
 const searching = ref(false)
 
-// 模板聚类视图状态
 const viewMode = ref('cluster')
 const templateGroups = ref([])
 const activeTemplateGroups = ref([])
 const expandedTemplates = ref({})
 
-// 搜索历史 store
 const searchStore = useSearchHistory()
 const historyDropdownRef = ref(null)
 const showHistoryDropdown = ref(false)
 
-// 在线分页状态
 const rows = shallowRef([])
 const pageNo = ref(1)
 const pageSize = ref(50)
@@ -376,7 +343,6 @@ function downloadBlob(blob, filename) {
   URL.revokeObjectURL(url)
 }
 
-// 搜索历史操作
 function handleHistorySelect(entry) {
   form.key = entry.query
   if (entry.params) {
@@ -397,7 +363,6 @@ function handleKeywordFocus() {
 }
 
 function handleKeywordBlur() {
-  // 延迟关闭，让 click 事件先触发
   setTimeout(() => {
     showHistoryDropdown.value = false
     if (historyDropdownRef.value) historyDropdownRef.value.hide()
@@ -426,7 +391,6 @@ function addHistoryToStore() {
       itemName: items.value.find(it => it.id === form.item)?.itemName || '',
       client: form.client,
       clientName: (() => {
-        // P1-6 修复：消除重复 .find()，缓存结果避免同一行执行两次
         if (form.client === 0) return '全部客户端'
         const c = clients.value.find(c => c.id === form.client)
         return c ? `${c.ip}:${c.port}` : ''
@@ -442,20 +406,14 @@ function addHistoryToStore() {
   })
 }
 
-// getLevelTagType 根据日志级别返回 el-tag 的 type 属性值。
 function getLevelTagType(level) {
   switch (level) {
     case 'ERROR':
-    case 'FATAL':
-      return 'danger'
-    case 'WARN':
-      return 'warning'
-    case 'INFO':
-      return 'success'
-    case 'DEBUG':
-      return 'info'
-    default:
-      return ''
+    case 'FATAL': return 'danger'
+    case 'WARN': return 'warning'
+    case 'INFO': return 'success'
+    case 'DEBUG': return 'info'
+    default: return ''
   }
 }
 
@@ -477,7 +435,6 @@ function resetForm() {
 }
 
 function onAdvancedToggle() {
-  // 切换模式时清空另一边，避免二者并存导致非预期交集。
   if (form.advanced) {
     form.key = ''
   } else {
@@ -486,22 +443,10 @@ function onAdvancedToggle() {
 }
 
 async function onSearch() {
-  if (!form.item) {
-    ElMessage.warning('请选择日志项')
-    return
-  }
-  if (!form.date) {
-    ElMessage.warning('请选择日期')
-    return
-  }
-  if (form.advanced && !form.query.trim()) {
-    ElMessage.warning('请输入布尔查询表达式')
-    return
-  }
-  if (!form.advanced && !form.key.trim()) {
-    ElMessage.warning('请输入检索关键词')
-    return
-  }
+  if (!form.item) { ElMessage.warning('请选择日志项'); return }
+  if (!form.date) { ElMessage.warning('请选择日期'); return }
+  if (form.advanced && !form.query.trim()) { ElMessage.warning('请输入布尔查询表达式'); return }
+  if (!form.advanced && !form.key.trim()) { ElMessage.warning('请输入检索关键词'); return }
   pageNo.value = 1
   searched.value = false
   rows.value = []
@@ -535,25 +480,16 @@ async function onSearch() {
     resultTruncated.value = !!data.truncated
     hasMore.value = data.total > pageSize.value * pageNo.value
     currentTaskNo.value = data.taskNo || ''
-    // 处理模板聚类数据
     templateGroups.value = data.templateGroups || []
     activeTemplateGroups.value = templateGroups.value.slice(0, 3).map(g => g.templateId)
     expandedTemplates.value = {}
     searched.value = true
     lastSearchMeta.value = {
-      client: form.client || 0,
-      item: form.item,
-      date: form.date,
-      key: form.key,
-      line: form.line,
-      regex: form.regex,
-      level: form.level,
-      startTime: form.startTime,
-      endTime: form.endTime,
-      advanced: form.advanced,
-      query: form.query || '',
+      client: form.client || 0, item: form.item, date: form.date, key: form.key,
+      line: form.line, regex: form.regex, level: form.level,
+      startTime: form.startTime, endTime: form.endTime,
+      advanced: form.advanced, query: form.query || '',
     }
-    // 保存查询历史
     addHistoryToStore()
     if (resultTotal.value === 0) {
       ElMessage.info('检索完成，未匹配到结果')
@@ -584,18 +520,11 @@ async function fetchPage(append = false) {
   searching.value = true
   try {
     const res = await searchLogs({
-      client: meta.client,
-      item: meta.item,
-      date: meta.date,
-      key: meta.key,
-      line: meta.line,
-      regex: meta.regex,
-      level: meta.level,
-      startTime: meta.startTime,
-      endTime: meta.endTime,
+      client: meta.client, item: meta.item, date: meta.date, key: meta.key,
+      line: meta.line, regex: meta.regex, level: meta.level,
+      startTime: meta.startTime, endTime: meta.endTime,
       query: meta.query || '',
-      pageNo: pageNo.value,
-      pageSize: pageSize.value,
+      pageNo: pageNo.value, pageSize: pageSize.value,
     })
     const payload = res.data || {}
     const data = payload.data || {}
@@ -644,11 +573,7 @@ async function handleLoadMore() {
   if (!lastSearchMeta.value) return
   loadingMore.value = true
   pageNo.value++
-  try {
-    await fetchPage(true)
-  } finally {
-    loadingMore.value = false
-  }
+  try { await fetchPage(true) } finally { loadingMore.value = false }
 }
 
 function gotoTail() {
@@ -681,16 +606,10 @@ async function onDownloadZip() {
   downloading.value = true
   try {
     const res = await queryLogs({
-      client: meta.client,
-      item: meta.item,
-      date: meta.date,
-      key: meta.key,
-      line: meta.line,
-      regex: meta.regex,
-      level: meta.level,
-      startTime: meta.startTime,
-      endTime: meta.endTime,
-      query: meta.query || '',
+      client: meta.client, item: meta.item, date: meta.date,
+      key: meta.key, line: meta.line, regex: meta.regex,
+      level: meta.level, startTime: meta.startTime,
+      endTime: meta.endTime, query: meta.query || '',
     })
     const blob = res.data
     const ct = res.headers['content-type'] || ''
@@ -699,9 +618,7 @@ async function onDownloadZip() {
       try {
         const obj = JSON.parse(text)
         ElMessage.error(obj.msg || '检索失败')
-      } catch {
-        ElMessage.error('检索失败')
-      }
+      } catch { ElMessage.error('检索失败') }
       return
     }
     downloadBlob(blob, `${meta.date || 'log'}_${meta.key || 'all'}.zip`)
@@ -721,6 +638,65 @@ onMounted(() => {
 </script>
 
 <style scoped>
+/* ===== 页面标题 ===== */
+.page-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0;
+}
+.page-icon {
+  width: 36px;
+  height: 36px;
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: white;
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2);
+}
+.page-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+/* ===== 表单卡片 ===== */
+.search-card :deep(.el-form-item__label) {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding-bottom: 4px;
+}
+.grid-form {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0 20px;
+}
+@media (max-width: 768px) {
+  .grid-form {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 检索历史按钮 */
+.history-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  z-index: 2;
+}
+
+/* ===== 结果头部 ===== */
+.result-header {
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-light);
+  margin-bottom: 16px;
+}
+.result-stat .text-primary {
+  color: var(--brand-600);
+  font-size: 16px;
+}
+
+/* 日志单元格 */
 .log-cell {
   position: relative;
   display: flex;
@@ -733,10 +709,11 @@ onMounted(() => {
   transition: opacity 0.2s;
   padding: 4px;
 }
-.log-cell:hover .log-copy-btn {
-  opacity: 1;
-}
-.log-cell-content {
-  flex: 1;
+.log-cell:hover .log-copy-btn { opacity: 1; }
+.log-cell-content { flex: 1; }
+
+/* 背景色 */
+.bg-muted-bg {
+  background: var(--bg-card-muted);
 }
 </style>
