@@ -129,6 +129,7 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 			op.POST("/logs/query", logs.Query)
 			op.POST("/logs/search", logs.Search)
 			op.POST("/logs/trace", logs.Trace)
+			op.POST("/logs/trace/waterfall", logs.TraceWaterfall)
 			op.POST("/logs/stream", logs.Stream)
 			op.POST("/logs/tail", logs.Tail)
 			op.POST("/logs/tasks/:taskNo/retry", logs.RetryTask)
@@ -156,6 +157,11 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 			// 审计日志（仅 admin 可查看）
 			adm.GET("/audit/logs", audit.ListAuditLogs)
 			adm.GET("/audit/stats", audit.GetAuditStats)
+
+			// 统计与异常检测（仅 admin 可查看）
+			adm.GET("/stats/patterns", admin.StatsPatterns)
+			adm.GET("/stats/anomalies", admin.StatsAnomalyEvents)
+			adm.GET("/stats/baseline", admin.StatsBaseline)
 		}
 	}
 

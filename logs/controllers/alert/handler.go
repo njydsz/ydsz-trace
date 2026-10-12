@@ -9,6 +9,7 @@ import (
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
 	"ydsz-trace/pkg/session"
+	"ydsz-trace/pkg/stats"
 
 	"github.com/gin-gonic/gin"
 )
@@ -236,7 +237,8 @@ func TestFire(c *gin.Context) {
 		return
 	}
 	models.FillRuleItemName(&rule)
-	go evaluateAndFire(context.Background(), rule, time.Now())
+	dedup := &dedupeWindow{windows: make(map[int64]time.Time)}
+	go evaluateAndFire(context.Background(), rule, time.Now(), dedup, stats.NewAnomalyEngine())
 	api.Success(c, "已触发测试执行", gin.H{"ruleId": rule.ID})
 }
 

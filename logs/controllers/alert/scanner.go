@@ -1,19 +1,54 @@
+// Package alert 实现日志告警规则与 webhook 推送：
+//   - 周期性评估启用的告警规则（调用 logc /file/search 统计命中行数）
+//   - 命中数达到阈值时，POST JSON payload 到 webhook_url，并记录一次事件
+//   - 基于模式时序计数的异常检测（突变/骤降）
+//   - 同源异常去重保护（按 ruleID + interval 窗口去重）
+//
+// 设计要点：
+//   - 不同 rule 的评估间隔相互独立（各自保存 interval_sec）
+//   - 同一 rule 在 interval 窗口内最多触发一次，避免告警风暴
+//   - 调用方通过公开函数 FireRule(ctx, rule) 触发单次评估，便于 cron 与测试接口复用
+//   - 评估命中后写 t_pattern_stat 供基线学习使用，再做异常检测
 package alert
 
 import (
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
 	models "ydsz-trace/logs/models"
+	"ydsz-trace/pkg/stats"
 
 	"github.com/robfig/cron/v3"
 )
+
+// dedupeWindow 同规则在 N 秒内不重复投递的内存去重表（FR-806）。
+// key = ruleID，value = 上次投递时间。
+type dedupeWindow struct {
+	mu      sync.Mutex
+	windows map[int64]time.Time // ruleID -> last fire time
+}
+
+// ShouldFire 判断规则是否应投递（已过冷却期）。
+func (d *dedupeWindow) ShouldFire(ruleID int64, cooldownSec int) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	last, ok := d.windows[ruleID]
+	if !ok || time.Since(last) > time.Duration(cooldownSec)*time.Second {
+		d.windows[ruleID] = time.Now()
+		return true
+	}
+	return false
+}
 
 // Scanner 周期性评估启用的告警规则；命中阈值且不在冷却期时投递 webhook。
 type Scheduler struct {
@@ -22,6 +57,9 @@ type Scheduler struct {
 	sem    chan struct{}
 	ctx    context.Context
 	cancel context.CancelFunc
+	dedupe *dedupeWindow
+
+	anomalyEngine *stats.AnomalyEngine
 }
 
 // probeFunc 实际调 logc 的钩子，便于单测替换。
@@ -63,10 +101,12 @@ func NewScheduler(maxConcurrent int) *Scheduler {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Scheduler{
-		cron:   cron.New(cron.WithSeconds()),
-		sem:    make(chan struct{}, maxConcurrent),
-		ctx:    ctx,
-		cancel: cancel,
+		cron:          cron.New(cron.WithSeconds()),
+		sem:           make(chan struct{}, maxConcurrent),
+		ctx:           ctx,
+		cancel:        cancel,
+		dedupe:        &dedupeWindow{windows: make(map[int64]time.Time)},
+		anomalyEngine: stats.NewAnomalyEngine(),
 	}
 }
 
@@ -118,12 +158,12 @@ func (s *Scheduler) ScanOnce() {
 					log.Printf("[alert] 评估规则 %d panic: %v", r.ID, rec)
 				}
 			}()
-			evaluateAndFire(s.ctx, r, t)
+			evaluateAndFire(s.ctx, r, t, s.dedupe, s.anomalyEngine)
 		}(rule, now)
 	}
 }
 
-func evaluateAndFire(ctx context.Context, rule models.AlertRule, _ time.Time) {
+func evaluateAndFire(ctx context.Context, rule models.AlertRule, now time.Time, dedupe *dedupeWindow, eng *stats.AnomalyEngine) {
 	targets, path := resolveAlertTargets(rule.ItemID, rule.ClientID)
 	if len(targets) == 0 || path == "" {
 		return
@@ -160,6 +200,33 @@ func evaluateAndFire(ctx context.Context, rule models.AlertRule, _ time.Time) {
 		return
 	}
 
+	// ── FR-304: 写入模式时序统计 ──
+	ts := now.Format("2006-01-02 15:04:05")
+	templateHash := hashProbeKey(rule.KeyWord, rule.Regex)
+	if sampleForStat := pickSample(samples); sampleForStat != "" {
+		if err := models.RecordPatternHit(rule.ItemID, rule.ClientID, templateHash, ts, sampleForStat); err != nil {
+			log.Printf("[alert] RecordPatternHit 失败: %v", err)
+		}
+	}
+
+	// ── FR-802: 异常检测 ──
+	eng.UpdateBaseline(templateHash, rule.ItemID, totalMatches)
+	currentCounts := map[string]int{templateHash: totalMatches }
+	anomalyEvents := eng.DetectAnomalies(currentCounts, ts)
+	for _, ev := range anomalyEvents {
+		jsonDetail, _ := json.Marshal(ev)
+		if _, err := models.InsertAlertEvent(0, "anomaly:"+ev.TemplateHash, "", "anomaly",
+			0, ev.CurrentCount, string(jsonDetail), ""); err != nil {
+			log.Printf("[alert] 写 anomaly event 失败: %v", err)
+		}
+	}
+
+	// ── FR-806: 去重检查，避免同源异常重复投递 ──
+	if dedupe != nil && !dedupe.ShouldFire(rule.ID, rule.IntervalSec) {
+		log.Printf("[alert] rule %d 命中阈值但在冷却期内，跳过投递", rule.ID)
+		return
+	}
+
 	result := FireWebhook(ctx, rule, totalMatches, samples)
 	status := "ok"
 	errMsg := ""
@@ -176,6 +243,7 @@ func evaluateAndFire(ctx context.Context, rule models.AlertRule, _ time.Time) {
 	}
 }
 
+// resolveAlertTargets 解析告警目标服务器列表和日志路径。
 func resolveAlertTargets(itemID, clientID int64) ([]string, string) {
 	item := models.ReadItem(itemID)
 	if item.Id == 0 {
@@ -218,6 +286,30 @@ func joinSamples(samples []string) string {
 		out += s
 	}
 	return out
+}
+
+// hashProbeKey 对告警规则的 KeyWord 做归一化后计算 sha1 前 8 字节。
+func hashProbeKey(keyword string, isRegex bool) string {
+	var normalized string
+	if isRegex {
+		// 正则：去除空白后取正则本身作为模板
+		normalized = regexp.MustCompile(`\s+`).ReplaceAllString(keyword, "")
+	} else {
+		// 精确匹配：转为小写
+		normalized = strings.ToLower(strings.TrimSpace(keyword))
+	}
+	h := sha1.Sum([]byte(normalized))
+	return hex.EncodeToString(h[:8])
+}
+
+// pickSample 从 samples 中挑一条非空样本供统计存储。
+func pickSample(samples []string) string {
+	for _, s := range samples {
+		if s != "" {
+			return s
+		}
+	}
+	return ""
 }
 
 // AlertProbeReq 调用 logc /file/search 的请求字段。

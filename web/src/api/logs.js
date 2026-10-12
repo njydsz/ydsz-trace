@@ -24,3 +24,8 @@ export function searchLogs(payload) {
 export function traceLogs(payload) {
   return http.post('/logs/trace', payload)
 }
+
+// traceWaterfall 按 traceId 检索并返回瀑布视图数据（按时间排序的 spans）。
+export function traceWaterfall(payload) {
+  return http.post('/logs/trace/waterfall', payload)
+}

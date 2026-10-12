@@ -9,6 +9,8 @@ package logs
 import (
 	"log"
 	"net/http"
+	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -170,4 +172,273 @@ func Trace(c *gin.Context) {
 // 复用 SearchReq 结构；maxLines 通过 PageSize 透传。
 func queryTraceFromLogc(server string, path string, req SearchReq) ([]string, error) {
 	return queryOneLogc(server, path, req, req.PageSize)
+}
+
+// traceWaterfallReq TraceID 瀑布视图请求体。
+type traceWaterfallReq struct {
+	// TraceID 要检索的 traceId（必填）。
+	TraceID string `json:"traceId"`
+	// Date 日志日期（YYYYMMDD，必填）。
+	Date string `json:"date"`
+	// Item 日志项 ID（必填）。
+	Item int64 `json:"item"`
+	// Client 客户端 ID（0 表示全部客户端并发检索）。
+	Client int64 `json:"client"`
+	// MaxPerNode 单节点返回行上限（0 使用默认值 5000）。
+	MaxPerNode int `json:"maxPerNode"`
+}
+
+// traceSpan 瀑布视图中的单个时间线段。
+type traceSpan struct {
+	Node      string `json:"node"`      // ip:port
+	Timestamp string `json:"timestamp"`  // 日志中的时间戳
+	Level     string `json:"level"`     // 级别
+	Content   string `json:"content"`   // 摘要（前 200 字符）
+	Service   string `json:"service"`   // 尝试识别的服务名
+	Thread    string `json:"thread"`    // 线程名
+	IsError   bool   `json:"isError"`   // 是否 ERROR
+}
+
+// traceWaterfallResp TraceID 瀑布视图响应体。
+type traceWaterfallResp struct {
+	TraceID     string       `json:"traceId"`
+	TraceFormat string       `json:"traceFormat"` // w3c/b3/skywalking/custom
+	TotalNodes  int          `json:"totalNodes"`
+	Spans       []traceSpan  `json:"spans"`      // 按时间排序
+	ErrorCount  int          `json:"errorCount"`
+	FirstError  *traceSpan   `json:"firstError"` // 首个错误 span
+}
+
+// TraceWaterfall 端点增强：自动识别 TraceID 格式（W3C/B3/SkyWalking/自定义），
+// 并发检索所有节点后按时间排序输出瀑布视图。
+// POST /logs/trace/waterfall
+func TraceWaterfall(c *gin.Context) {
+	var req traceWaterfallReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.Fail(c, api.CodeBadRequest, "请求参数错误")
+		return
+	}
+	req.TraceID = strings.TrimSpace(req.TraceID)
+	if req.TraceID == "" || req.Date == "" || req.Item == 0 {
+		api.Fail(c, api.CodeBadRequest, "traceId、date 与 item 均为必填")
+		return
+	}
+
+	const defaultMaxPerNode = 5000
+	maxPerNode := req.MaxPerNode
+	if maxPerNode <= 0 || maxPerNode > defaultMaxPerNode {
+		maxPerNode = defaultMaxPerNode
+	}
+
+	item := models.ReadItem(req.Item)
+	if item.Id == 0 {
+		api.Fail(c, api.CodeNotFound, "项目不存在")
+		return
+	}
+	path := item.LogPath + item.LogPrefix + req.Date + item.LogSuffix + ".log"
+
+	// 计算 TraceID 格式
+	traceFormat := detectTraceIDFormat(req.TraceID)
+
+	// 构造 logc SearchReq
+	searchReq := SearchReq{
+		Client:   req.Client,
+		Item:     req.Item,
+		Date:     req.Date,
+		Key:      "",
+		Regex:    false,
+		Query:    "traceId:" + req.TraceID,
+		PageNo:   1,
+		PageSize: maxPerNode,
+	}
+
+	var targets []targetSpec
+	if req.Client != 0 {
+		cl := models.ReadClient(req.Client)
+		if cl.Id == 0 {
+			api.Fail(c, api.CodeNotFound, "客户端不存在")
+			return
+		}
+		targets = []targetSpec{{server: cl.Ip + ":" + cl.Port, label: cl.Ip + ":" + cl.Port}}
+	} else {
+		clients, err := models.QueryAllClient()
+		if err != nil || len(clients) == 0 {
+			api.Fail(c, api.CodeNotFound, "无可用客户端")
+			return
+		}
+		for _, cl := range clients {
+			if cl.Id == 0 {
+				continue
+			}
+			targets = append(targets, targetSpec{server: cl.Ip + ":" + cl.Port, label: cl.Ip + ":" + cl.Port})
+		}
+	}
+	if len(targets) == 0 {
+		api.Fail(c, api.CodeNotFound, "未找到有效客户端")
+		return
+	}
+
+	// 并发检索所有节点
+	type nodeLines struct {
+		node  string
+		lines []string
+	}
+	var mu sync.Mutex
+	var allSpans []traceSpan
+	var wg sync.WaitGroup
+	var totalNodes int64
+	sem := make(chan struct{}, 20)
+
+	for _, tgt := range targets {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(t targetSpec) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			lines, err := queryTraceFromLogc(t.server, path, searchReq)
+			if err != nil {
+				log.Printf("waterfall 查询节点 %s 失败: %v", t.server, err)
+				return
+			}
+			if len(lines) == 0 {
+				return
+			}
+
+			totalNodes++
+			spans := make([]traceSpan, 0, len(lines))
+			for _, line := range lines {
+				spans = append(spans, parseTraceSpan(line, t.label))
+			}
+
+			mu.Lock()
+			allSpans = append(allSpans, spans...)
+			mu.Unlock()
+		}(tgt)
+	}
+	wg.Wait()
+
+	// 按时间排序
+	sort.SliceStable(allSpans, func(i, j int) bool {
+		return allSpans[i].Timestamp < allSpans[j].Timestamp
+	})
+
+	// 统计错误并标记首个错误
+	var errorCount int
+	var firstError *traceSpan
+	for i := range allSpans {
+		if allSpans[i].IsError {
+			errorCount++
+			if firstError == nil {
+				copy := allSpans[i]
+				firstError = &copy
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, api.Response{
+		Code:    api.CodeSuccess,
+		Message: "查询成功",
+		Data: traceWaterfallResp{
+			TraceID:     req.TraceID,
+			TraceFormat: traceFormat,
+			TotalNodes:  int(totalNodes),
+			Spans:       allSpans,
+			ErrorCount:  errorCount,
+			FirstError:  firstError,
+		},
+	})
+}
+
+// parseTraceSpan 从日志行中提取瀑布视图所需的 span 信息。
+func parseTraceSpan(line, node string) traceSpan {
+	ts := extractTimestamp(line)
+	level := extractLevel(line)
+	content := line
+	if len(content) > 200 {
+		content = content[:200]
+	}
+	service := extractService(line)
+	thread := extractThread(line)
+	isError := level == "ERROR" || level == "FATAL"
+
+	return traceSpan{
+		Node:      node,
+		Timestamp: ts,
+		Level:     level,
+		Content:   content,
+		Service:   service,
+		Thread:    thread,
+		IsError:   isError,
+	}
+}
+
+// detectTraceIDFormat 自动识别 TraceID 格式。
+func detectTraceIDFormat(traceID string) string {
+	if len(traceID) == 32 || len(traceID) == 16 {
+		allHex := true
+		for _, c := range traceID {
+			if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+				allHex = false
+				break
+			}
+		}
+		if allHex {
+			return "b3"
+		}
+	}
+	if strings.Contains(traceID, "-") {
+		return "w3c"
+	}
+	if len(traceID) > 50 {
+		return "skywalking"
+	}
+	return "custom"
+}
+
+// extractTimestamp 从日志行中提取时间戳。
+// 支持 ISO 8601 (2024-01-15T10:30:45.123Z) 和常见格式 (2024-01-15 10:30:45.123)。
+var (
+	tsISO  = regexp.MustCompile(`\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?`)
+	tsLong = regexp.MustCompile(`\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?`)
+)
+
+func extractTimestamp(line string) string {
+	if m := tsISO.FindString(line); m != "" {
+		return m
+	}
+	if m := tsLong.FindString(line); m != "" {
+		return m
+	}
+	return ""
+}
+
+// extractService 从日志行尝试识别服务名。
+var svcPatterns = regexp.MustCompile(`service[=:](\w+)|app[=:](\w+)|appName[=:](\w+)`)
+
+func extractService(line string) string {
+	m := svcPatterns.FindStringSubmatch(line)
+	if m != nil {
+		for _, s := range m[1:] {
+			if s != "" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// extractThread 从日志行尝试提取线程名。
+var threadPattern = regexp.MustCompile(`\[([\w\-/]+)\]|thread[=:](\w+)`)
+
+func extractThread(line string) string {
+	m := threadPattern.FindStringSubmatch(line)
+	if m != nil {
+		for _, s := range m[1:] {
+			if s != "" {
+				return s
+			}
+		}
+	}
+	return ""
 }

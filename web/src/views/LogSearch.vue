@@ -182,6 +182,49 @@
         </template>
       </el-alert>
 
+      <!-- 模板聚类视图 -->
+      <div v-if="templateGroups.length > 0" class="mb-4">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-sm text-gray-600 font-medium">模板聚类视图</span>
+          <el-radio-group v-model="viewMode" size="small">
+            <el-radio-button value="cluster">聚类视图</el-radio-button>
+            <el-radio-button value="flat">原始列表</el-radio-button>
+          </el-radio-group>
+        </div>
+
+        <el-collapse v-if="viewMode === 'cluster'" v-model="activeTemplateGroups">
+          <el-collapse-item
+            v-for="g in templateGroups"
+            :key="g.templateId"
+            :name="g.templateId"
+          >
+            <template #title>
+              <div class="flex items-center gap-2 w-full">
+                <code class="text-xs text-gray-600 font-mono truncate max-w-lg">{{ g.template }}</code>
+                <el-tag size="small" type="info">{{ g.count }} 次</el-tag>
+                <el-tag v-if="g.level" size="small" :type="getLevelTagType(g.level)">{{ g.level }}</el-tag>
+              </div>
+            </template>
+            <div class="bg-gray-50 p-3 rounded text-sm font-mono">
+              <div
+                v-for="(line, i) in (expandedTemplates[g.templateId] ? g.sampleLines : g.sampleLines.slice(0, 5))"
+                :key="i"
+                class="text-gray-700 leading-6 py-0.5"
+              >{{ line }}</div>
+              <el-button
+                v-if="g.sampleLines.length > 5 && !expandedTemplates[g.templateId]"
+                text
+                size="small"
+                class="mt-1"
+                @click="expandedTemplates[g.templateId] = true"
+              >
+                展开全部 ({{ g.sampleLines.length }} 条)
+              </el-button>
+            </div>
+          </el-collapse-item>
+        </el-collapse>
+      </div>
+
       <!-- 日志直方图 -->
       <LogHistogram
         v-if="rows.length > 0"
@@ -190,7 +233,14 @@
         @update="handleHistogramUpdate"
       />
 
-      <el-table :data="rows" stripe size="small" max-height="480" style="width: 100%">
+      <el-table
+        v-if="viewMode === 'flat' || templateGroups.length === 0"
+        :data="rows"
+        stripe
+        size="small"
+        max-height="480"
+        style="width: 100%"
+      >
         <el-table-column type="index" label="#" width="55" />
         <el-table-column prop="source" label="来源" width="160" show-overflow-tooltip />
         <el-table-column prop="line" label="日志行" min-width="400">
@@ -250,6 +300,12 @@ const clients = ref([])
 const items = ref([])
 const itemsLoading = ref(false)
 const searching = ref(false)
+
+// 模板聚类视图状态
+const viewMode = ref('cluster')
+const templateGroups = ref([])
+const activeTemplateGroups = ref([])
+const expandedTemplates = ref({})
 
 // 搜索历史 store
 const searchStore = useSearchHistory()
@@ -386,6 +442,23 @@ function addHistoryToStore() {
   })
 }
 
+// getLevelTagType 根据日志级别返回 el-tag 的 type 属性值。
+function getLevelTagType(level) {
+  switch (level) {
+    case 'ERROR':
+    case 'FATAL':
+      return 'danger'
+    case 'WARN':
+      return 'warning'
+    case 'INFO':
+      return 'success'
+    case 'DEBUG':
+      return 'info'
+    default:
+      return ''
+  }
+}
+
 function resetForm() {
   form.client = 0
   form.item = null
@@ -398,6 +471,9 @@ function resetForm() {
   form.endTime = ''
   form.advanced = false
   form.query = ''
+  templateGroups.value = []
+  activeTemplateGroups.value = []
+  expandedTemplates.value = {}
 }
 
 function onAdvancedToggle() {
@@ -459,6 +535,10 @@ async function onSearch() {
     resultTruncated.value = !!data.truncated
     hasMore.value = data.total > pageSize.value * pageNo.value
     currentTaskNo.value = data.taskNo || ''
+    // 处理模板聚类数据
+    templateGroups.value = data.templateGroups || []
+    activeTemplateGroups.value = templateGroups.value.slice(0, 3).map(g => g.templateId)
+    expandedTemplates.value = {}
     searched.value = true
     lastSearchMeta.value = {
       client: form.client || 0,
@@ -528,6 +608,11 @@ async function fetchPage(append = false) {
     resultTruncated.value = !!data.truncated
     hasMore.value = data.total > pageSize.value * pageNo.value
     currentTaskNo.value = data.taskNo || currentTaskNo.value
+    if (data.templateGroups) {
+      templateGroups.value = data.templateGroups
+      activeTemplateGroups.value = data.templateGroups.slice(0, 3).map(g => g.templateId)
+      expandedTemplates.value = {}
+    }
   } catch {
     ElMessage.error('分页查询失败，请重试')
   } finally {

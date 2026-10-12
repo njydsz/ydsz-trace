@@ -54,37 +54,51 @@
     </el-card>
 
     <el-card v-if="result" shadow="never" class="mt-6">
-      <template #header>
-        <div class="flex items-center justify-between">
-          <div class="text-sm text-gray-600">
-            TraceId
-            <code class="bg-gray-100 px-1.5 py-0.5 rounded mx-1">{{ result.traceId }}</code>
-            共 {{ result.Total }} 行命中 / 涉及 {{ result.Nodes }} 个节点 / 展示 {{ result.Results.length }} 个节点
-          </div>
-        </div>
-      </template>
+      <el-tabs v-model="resultViewType">
+        <el-tab-pane label="节点分组" name="node">
+          <template #header>
+            <div class="flex items-center justify-between">
+              <div class="text-sm text-gray-600">
+                TraceId
+                <code class="bg-gray-100 px-1.5 py-0.5 rounded mx-1">{{ result.traceId }}</code>
+                共 {{ result.Total }} 行命中 / 涉及 {{ result.Nodes }} 个节点 / 展示 {{ result.Results.length }} 个节点
+              </div>
+            </div>
+          </template>
 
-      <div v-if="result.Results.length === 0" class="text-gray-500 text-center py-8">
-        未找到匹配 traceId 的日志行
-      </div>
-
-      <div v-for="group in result.Results" :key="group.Node" class="mb-6">
-        <div class="flex items-center gap-2 mb-2">
-          <el-tag size="small" type="primary">{{ group.Node }}</el-tag>
-          <span class="text-sm text-gray-500">{{ group.Count }} 行</span>
-        </div>
-        <div class="bg-gray-900 rounded p-3 max-h-[400px] overflow-y-auto font-mono text-xs">
-          <div
-            v-for="(line, idx) in group.Lines"
-            :key="idx"
-            class="log-line"
-            :class="getLineClass(line)"
-          >
-            <span class="text-gray-500 mr-2 select-none">{{ idx + 1 }}</span>
-            <span>{{ line }}</span>
+          <div v-if="result.Results.length === 0" class="text-gray-500 text-center py-8">
+            未找到匹配 traceId 的日志行
           </div>
-        </div>
-      </div>
+
+          <div v-for="group in result.Results" :key="group.Node" class="mb-6">
+            <div class="flex items-center gap-2 mb-2">
+              <el-tag size="small" type="primary">{{ group.Node }}</el-tag>
+              <span class="text-sm text-gray-500">{{ group.Count }} 行</span>
+            </div>
+            <div class="bg-gray-900 rounded p-3 max-h-[400px] overflow-y-auto font-mono text-xs">
+              <div
+                v-for="(line, idx) in group.Lines"
+                :key="idx"
+                class="log-line"
+                :class="getLineClass(line)"
+              >
+                <span class="text-gray-500 mr-2 select-none">{{ idx + 1 }}</span>
+                <span>{{ line }}</span>
+              </div>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="瀑布视图" name="waterfall">
+          <TraceWaterfallView
+            :trace-id="form.traceId.trim()"
+            :date="form.date"
+            :item="form.item"
+            :client="form.client"
+            :max-per-node="5000"
+          />
+        </el-tab-pane>
+      </el-tabs>
     </el-card>
   </div>
 </template>
@@ -95,6 +109,7 @@ import { useRoute } from 'vue-router'
 import { Link, Refresh } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import { queryLogClients, queryItemsByClient, traceLogs } from '@/api/logs'
+import TraceWaterfallView from '@/components/TraceWaterfallView.vue'
 
 const route = useRoute()
 
@@ -103,6 +118,7 @@ const items = ref([])
 const itemsLoading = ref(false)
 const loading = ref(false)
 const result = ref(null)
+const resultViewType = ref('node')
 
 const form = reactive({
   traceId: '',

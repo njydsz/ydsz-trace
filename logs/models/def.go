@@ -197,6 +197,23 @@ CREATE TABLE IF NOT EXISTS t_alert_event (
 CREATE INDEX IF NOT EXISTS idx_alert_event_rule ON t_alert_event(rule_id);
 CREATE INDEX IF NOT EXISTS idx_alert_event_time ON t_alert_event(fired_time);
 
+-- 模式时序计数表：按 5min 桶聚合模板命中数，用于异常检测基线
+CREATE TABLE IF NOT EXISTS t_pattern_stat (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id      INTEGER NOT NULL,
+    client_id    INTEGER NOT NULL,
+    template_hash TEXT   NOT NULL,
+    time_bucket  TEXT    NOT NULL,
+    count        INTEGER DEFAULT 0,
+    first_time   TEXT,
+    last_time    TEXT,
+    sample       TEXT,
+    created_time TEXT    DEFAULT (datetime('now','localtime')),
+    UNIQUE(item_id, client_id, template_hash, time_bucket)
+);
+CREATE INDEX IF NOT EXISTS idx_pattern_stat_lookup ON t_pattern_stat(item_id, client_id, time_bucket);
+CREATE INDEX IF NOT EXISTS idx_pattern_stat_template ON t_pattern_stat(template_hash);
+
 -- 审计日志：记录查询、导出、配置变更全量留痕
 CREATE TABLE IF NOT EXISTS t_audit_log (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,

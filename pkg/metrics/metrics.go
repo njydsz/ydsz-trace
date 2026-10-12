@@ -39,6 +39,9 @@ type Collector struct {
 
 	httpRequests *prometheus.CounterVec
 	httpDuration prometheus.Histogram
+
+	cacheHits   prometheus.Counter
+	cacheMisses prometheus.Counter
 }
 
 var globalCollector *Collector
@@ -89,10 +92,18 @@ func ensureGlobal() *Collector {
 			Help:    "HTTP 请求耗时分布（秒）",
 			Buckets: httpDurationBuckets,
 		}),
+
+		cacheHits: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace, Name: "query_cache_hits_total", Help: "查询缓存命中次数",
+		}),
+		cacheMisses: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: namespace, Name: "query_cache_misses_total", Help: "查询缓存未命中次数",
+		}),
 	}
 	reg.MustRegister(
 		c.queryTotal, c.querySuccess, c.queryFailed, c.queryDuration,
 		c.clientTotal, c.clientOnline, c.httpRequests, c.httpDuration,
+		c.cacheHits, c.cacheMisses,
 	)
 	globalCollector = c
 	return c
@@ -142,6 +153,12 @@ func (c *Collector) HTTPRequestRecordedWithMethod(method string, statusCode int,
 func (c *Collector) Handler() http.Handler {
 	return promhttp.HandlerFor(c.reg, promhttp.HandlerOpts{})
 }
+
+// CacheHit 记录一次缓存命中。
+func (c *Collector) CacheHit() { c.cacheHits.Inc() }
+
+// CacheMiss 记录一次缓存未命中。
+func (c *Collector) CacheMiss() { c.cacheMisses.Inc() }
 
 // GinHandler 是 Gin 中间件-friendly 的适配器。
 func (c *Collector) GinHandler() gin.HandlerFunc {

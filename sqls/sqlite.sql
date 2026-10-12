@@ -143,6 +143,26 @@ CREATE TABLE t_alert_event (
 CREATE INDEX IF NOT EXISTS idx_alert_event_rule ON t_alert_event(rule_id);
 CREATE INDEX IF NOT EXISTS idx_alert_event_time ON t_alert_event(fired_time);
 
+-- ==================== 模式时序计数表 ====================
+DROP TABLE IF EXISTS t_pattern_stat;
+CREATE TABLE t_pattern_stat (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id      INTEGER NOT NULL,           -- 日志项 ID
+    client_id    INTEGER NOT NULL,           -- 客户端 ID
+    template_hash TEXT   NOT NULL,           -- 模板模式 hash（normalized line 的 hash）
+    time_bucket  TEXT    NOT NULL,           -- 时间桶（YYYYMMDDHHMI，按 5 分钟对齐）
+    count        INTEGER DEFAULT 0,          -- 命中行数
+    first_time   TEXT,                       -- 首次出现时间
+    last_time    TEXT,                       -- 末次出现时间
+    sample       TEXT,                       -- 第一条命中行原文
+    created_time TEXT    DEFAULT (datetime('now','localtime')),
+    UNIQUE(item_id, client_id, template_hash, time_bucket)
+);
+
+-- 模式时序计数表索引
+CREATE INDEX IF NOT EXISTS idx_pattern_stat_lookup ON t_pattern_stat(item_id, client_id, time_bucket);
+CREATE INDEX IF NOT EXISTS idx_pattern_stat_template ON t_pattern_stat(template_hash);
+
 -- ==================== 审计日志表 ====================
 DROP TABLE IF EXISTS t_audit_log;
 CREATE TABLE t_audit_log (

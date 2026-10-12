@@ -9,9 +9,12 @@ package logs
 import (
 	"bytes"
 	"encoding/json"
+	"hash/fnv"
 	"io"
 	"log"
 	"net/http"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,15 +50,26 @@ type SearchReq struct {
 	Query string `json:"query"`
 }
 
-// SearchRespExt 扩展分页响应：在 api.Paginated 标准字段上追加 truncated 与 taskNo。
+// SearchRespExt 扩展分页响应：在 api.Paginated 标准字段上追加 truncated、taskNo 与模板聚类。
 type SearchRespExt struct {
-	TaskNo    string   `json:"taskNo"`
-	List      []logRow `json:"list"`
-	Total     int      `json:"total"`
-	PageNo    int      `json:"pageNo"`
-	PageSize  int      `json:"pageSize"`
-	TotalPage int      `json:"totalPage"`
-	Truncated bool     `json:"truncated"`
+	TaskNo         string          `json:"taskNo"`
+	List           []logRow        `json:"list"`
+	Total          int             `json:"total"`
+	PageNo         int             `json:"pageNo"`
+	PageSize       int             `json:"pageSize"`
+	TotalPage      int             `json:"totalPage"`
+	Truncated      bool            `json:"truncated"`
+	TemplateGroups []templateGroup `json:"templateGroups"`
+}
+
+// templateGroup 模板聚类段：共享同一模板的命中行折叠展示。
+type templateGroup struct {
+	TemplateID  string   `json:"templateId"`  // 模板 hash（去掉参数后的稳定标识）
+	Template    string   `json:"template"`    // 模板串（参数位用 <*> 占位）
+	Count       int      `json:"count"`       // 该模板下的命中行数
+	SampleLines []string `json:"sampleLines"` // 最多 3 条示例行
+	FirstSeen   string   `json:"firstSeen"`   // 该模板下首次命中行
+	Level       string   `json:"level"`       // 模板级别（取该组第一行的级别字段）
 }
 
 // logRow 单条日志行（前端表格展示一行）。
@@ -195,17 +209,22 @@ func Search(c *gin.Context) {
 	}
 
 	totalPage := (total + req.PageSize - 1) / req.PageSize
+
+	// 模板聚类：对全量命中行做模板分组（最多处理前 2000 行）。
+	templateGroups := groupByTemplate(lines, 2000)
+
 	c.JSON(http.StatusOK, api.Response{
 		Code:    api.CodeSuccess,
 		Message: "查询成功",
 		Data: SearchRespExt{
-			TaskNo:    taskNo,
-			List:      page,
-			Total:     total,
-			PageNo:    req.PageNo,
-			PageSize:  req.PageSize,
-			TotalPage: totalPage,
-			Truncated: truncated,
+			TaskNo:         taskNo,
+			List:           page,
+			Total:          total,
+			PageNo:         req.PageNo,
+			PageSize:       req.PageSize,
+			TotalPage:      totalPage,
+			Truncated:      truncated,
+			TemplateGroups: templateGroups,
 		},
 	})
 
@@ -441,4 +460,118 @@ func RetryTask(c *gin.Context) {
 		"newTaskNo": newTaskNo,
 	}, "success")
 	api.Success(c, "已创建重试任务", map[string]string{"taskNo": newTaskNo})
+}
+
+// normalizeLine 将日志行中的参数化部分替换为占位符 <*>，得到稳定模板串。
+//
+// 依次替换：文件路径 / UUID / IPv4 / 数字（含浮点数），最后压缩多余空格。
+// 使用包级预编译正则，避免每次调用重复编译。
+var (
+	normPath    = regexp.MustCompile(`(?:/[\w\-\.]+){2,}`)
+	normUUID    = regexp.MustCompile(`\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
+	normIPv4    = regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
+	normNumbers = regexp.MustCompile(`\b\d+\.\d+\b|\b\d+\b`)
+	normHex     = regexp.MustCompile(`\b[0-9a-fA-F]{16,}\b`)
+)
+
+// normalizeLine 将一行日志中的动态参数替换为 <*> 占位，用于模板聚类。
+func normalizeLine(line string) string {
+	line = normPath.ReplaceAllString(line, "<*>")
+	line = normUUID.ReplaceAllString(line, "<*>")
+	line = normIPv4.ReplaceAllString(line, "<*>")
+	line = normHex.ReplaceAllString(line, "<*>")
+	line = normNumbers.ReplaceAllString(line, "<*>")
+	// 去除多余空格
+	line = strings.Join(strings.Fields(line), " ")
+	return line
+}
+
+// hashTemplate 计算模板串的 FNV-1a hash，用作稳定模板 ID。
+func hashTemplate(s string) string {
+	h := fnv.New32a()
+	h.Write([]byte(s))
+	return strconv.FormatUint(uint64(h.Sum32()), 16)
+}
+
+// extractLevel 从日志行中提取级别字段（INFO / WARN / ERROR / DEBUG / FATAL）。
+func extractLevel(line string) string {
+	upper := strings.ToUpper(line)
+	for _, lvl := range []string{"FATAL", "ERROR", "WARN", "INFO", "DEBUG"} {
+		if strings.Contains(upper, lvl) {
+			return lvl
+		}
+	}
+	return ""
+}
+
+// groupByTemplate 对日志行做模板分组（取前 maxLines 行做聚类）。
+//
+// 算法：
+//  1. 取前 min(len(lines), maxLines) 行
+//  2. 每行做 normalize（参数 -> <*>）得到 pattern
+//  3. 用 pattern 的 fnv32a hash 作为 template ID
+//  4. 按 template ID 聚合行
+//  5. 按 Count 降序排列
+//  6. 每组取最多 3 条示例行
+func groupByTemplate(lines []logRow, maxLines int) []templateGroup {
+	if len(lines) == 0 {
+		return nil
+	}
+	// 1. 截取前 N 行
+	n := len(lines)
+	if n > maxLines {
+		n = maxLines
+	}
+
+	// 2. 聚合：map[templateID] -> *templateGroup
+	type groupAcc struct {
+		template    string
+		count       int
+		sampleLines []string
+		firstSeen   string
+		level       string
+	}
+	m := map[string]*groupAcc{}
+
+	for i := 0; i < n; i++ {
+		rawLine := lines[i].Line
+		pattern := normalizeLine(rawLine)
+		tid := hashTemplate(pattern)
+
+		g, exists := m[tid]
+		if !exists {
+			m[tid] = &groupAcc{
+				template:    pattern,
+				count:       1,
+				sampleLines: []string{rawLine},
+				firstSeen:   rawLine,
+				level:       extractLevel(rawLine),
+			}
+		} else {
+			g.count++
+			if len(g.sampleLines) < 3 {
+				g.sampleLines = append(g.sampleLines, rawLine)
+			}
+		}
+	}
+
+	// 3. 转切片并排序
+	groups := make([]templateGroup, 0, len(m))
+	for tid, acc := range m {
+		groups = append(groups, templateGroup{
+			TemplateID:  tid,
+			Template:    acc.template,
+			Count:       acc.count,
+			SampleLines: acc.sampleLines,
+			FirstSeen:   acc.firstSeen,
+			Level:       acc.level,
+		})
+	}
+
+	// 按 Count 降序排序
+	sort.Slice(groups, func(i, j int) bool {
+		return groups[i].Count > groups[j].Count
+	})
+
+	return groups
 }
