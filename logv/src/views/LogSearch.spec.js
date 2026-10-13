@@ -12,7 +12,7 @@ vi.mock('@/api/logs', () => ({
   queryItemsByClient: vi.fn(() => Promise.resolve({ data: { data: [] } })),
   queryLogs: vi.fn(() => Promise.resolve({ data: new Blob(), headers: {} })),
   searchLogs: vi.fn(() => Promise.resolve({
-    data: { code: '200', data: { list: [], total: 0, truncated: false, taskNo: 'T001' } },
+    data: { code: 0, data: { list: [], total: 0, truncated: false, taskNo: 'T001' } },
   })),
 }))
 
@@ -110,7 +110,7 @@ describe('LogSearch.vue', () => {
 
   it('搜索结果为空时组件处于 "未找到匹配行" 状态', async () => {
     searchLogs.mockResolvedValueOnce({
-      data: { code: '200', data: { list: [], total: 0, truncated: false, taskNo: 'T001' } },
+      data: { code: 0, data: { list: [], total: 0, truncated: false, taskNo: 'T001' } },
     })
     const wrapper = mountComponent()
     await vi.dynamicImportSettled()

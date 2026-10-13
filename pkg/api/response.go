@@ -1,15 +1,15 @@
 // Package api 提供统一的 API 响应封装。
 //
-// 响应格式遵循统一规范：
+// 响应格式遵循统一规范（PRD V2.1 FR-1405 统一响应中间件）：
 //
 //	{
-//	  "code": "200",       // 业务状态码，字符串类型
+//	  "code": 0,            // 业务状态码，数字类型；0 = 成功，非 0 = 错误
 //	  "message": "success", // 提示信息
 //	  "data": {},           // 业务数据（可选）
 //	  "traceId": "xxx"      // 链路追踪 ID（可选）
 //	}
 //
-// 业务码与 HTTP 状态码通过 codeToHTTPStatus / httpStatusToCode 双向映射。
+// 所有 v2 接口使用该结构，code 为数字类型消除历史双风格隐患。
 package api
 
 import (
@@ -18,26 +18,26 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// ResponseCode 业务响应码，字符串类型便于前端精确匹配。
+// ResponseCode 业务响应码，int 类型。
 //
-// 命名规则：Code + HTTP 语义，值与 HTTP 状态码保持一致，方便双向转换。
-type ResponseCode string
+// 0 表示成功；非 0 为错误码，值与 HTTP 状态码对应。
+type ResponseCode int
 
 const (
 	// CodeSuccess 请求成功
-	CodeSuccess ResponseCode = "200"
+	CodeSuccess ResponseCode = 0
 	// CodeBadRequest 请求参数错误
-	CodeBadRequest ResponseCode = "400"
+	CodeBadRequest ResponseCode = 400
 	// CodeUnauthorized 未认证（未登录或 token 失效）
-	CodeUnauthorized ResponseCode = "401"
+	CodeUnauthorized ResponseCode = 401
 	// CodeForbidden 权限不足
-	CodeForbidden ResponseCode = "403"
+	CodeForbidden ResponseCode = 403
 	// CodeNotFound 资源不存在
-	CodeNotFound ResponseCode = "404"
+	CodeNotFound ResponseCode = 404
 	// CodeServerError 服务内部错误
-	CodeServerError ResponseCode = "500"
+	CodeServerError ResponseCode = 500
 	// CodeTimeout 网关超时
-	CodeTimeout ResponseCode = "504"
+	CodeTimeout ResponseCode = 504
 )
 
 // Response 统一 API 响应结构体。
@@ -111,9 +111,10 @@ func FailWithData(c *gin.Context, code ResponseCode, msg string, data interface{
 // Error 兼容以 HTTP 状态码为入参的旧接口格式。
 //
 // 新代码应优先使用 Fail / FailWithData，以业务码驱动响应。
+// HTTP 状态码直接作为业务码（非 0 错误码 = HTTP 状态码本身）。
 func Error(c *gin.Context, httpStatus int, msg string) {
 	c.JSON(httpStatus, Response{
-		Code:    httpStatusToCode(httpStatus),
+		Code:    ResponseCode(httpStatus),
 		Message: msg,
 		Data:    nil,
 		TraceID: getTraceID(c),
@@ -184,20 +185,11 @@ func codeToHTTPStatus(code ResponseCode) int {
 	}
 }
 
-// httpStatusToCode HTTP 状态码转响应码
+// httpStatusToCode HTTP 状态码转响应码。
+// 成功（200）返回 0；其余 HTTP 状态码直接作为业务错误码。
 func httpStatusToCode(status int) ResponseCode {
-	switch status {
-	case http.StatusOK:
+	if status == http.StatusOK {
 		return CodeSuccess
-	case http.StatusBadRequest:
-		return CodeBadRequest
-	case http.StatusUnauthorized:
-		return CodeUnauthorized
-	case http.StatusForbidden:
-		return CodeForbidden
-	case http.StatusNotFound:
-		return CodeNotFound
-	default:
-		return CodeServerError
 	}
+	return ResponseCode(status)
 }

@@ -217,7 +217,7 @@ async function onTrace() {
       item: form.item,
       regex: form.regex,
     })
-    if (data.code && data.code !== '200') {
+    if (data.code && data.code !== 0) {
       ElMessage.error(data.msg || '追踪失败')
       return
     }

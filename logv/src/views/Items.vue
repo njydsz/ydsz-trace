@@ -199,7 +199,7 @@ async function load() {
   loading.value = true
   try {
     const { data } = await queryItems(page.value, limit.value)
-    if (data.code === '200' && data.data) {
+    if (data.code === 0 && data.data) {
       list.value = data.data.list || []
       total.value = data.data.totalCount || 0
     }
@@ -250,7 +250,7 @@ async function save() {
   try {
     const payload = { ...form }
     const { data } = isEdit.value ? await updateItem(payload) : await addItem(payload)
-    if (data.code === '200') {
+    if (data.code === 0) {
       ElMessage.success(data.msg)
       dialogVisible.value = false
       load()
@@ -276,7 +276,7 @@ async function remove(row) {
     return
   }
   const { data } = await deleteItem(row.id)
-  if (data.code === '200') {
+  if (data.code === 0) {
     ElMessage.success('删除成功')
     load()
   } else {

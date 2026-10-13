@@ -91,9 +91,11 @@
         <div class="nav-group">
           <div class="nav-group-title">关于我们</div>
           <el-menu
+            :default-active="activeMenu"
             background-color="transparent"
             text-color="var(--text-aside)"
             active-text-color="var(--text-aside-active)"
+            router
           >
             <el-menu-item index="/dashboard">
               <div class="nav-icon-wrap"><el-icon><DataLine /></el-icon></div>

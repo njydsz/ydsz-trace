@@ -109,6 +109,7 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	r.GET("/logs/queryClients", logs.QueryClient)
 	r.GET("/logs/queryItems", logs.QueryItem)
 	r.GET("/logs/tasks/:taskNo", logs.QueryTask)
+	r.GET("/logs/tasks/:taskNo/progress", logs.QueryTaskProgress)
 	r.GET("/logs/tasks", logs.ListTasks)
 	r.GET("/logs/context/:itemId", logs.Context)
 	r.GET("/logs/alerts/rules", alert.ListRules)
@@ -131,6 +132,8 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	r.POST("/logs/trace/waterfall", pkgauth.RequireOperator(), logs.TraceWaterfall)
 	r.POST("/logs/stream", pkgauth.RequireOperator(), logs.Stream)
 	r.POST("/logs/tail", pkgauth.RequireOperator(), logs.Tail)
+	// NL2DSL 自然语言转结构化检索参数（FR-501）
+	r.POST("/logs/nl2dsl/parse", pkgauth.RequireOperator(), logs.Nl2DslParse)
 	r.POST("/logs/tasks/:taskNo/retry", pkgauth.RequireOperator(), logs.RetryTask)
 	r.DELETE("/logs/tasks/:taskNo", pkgauth.RequireOperator(), logs.DeleteTask)
 	r.POST("/logs/alerts/rules", pkgauth.RequireOperator(), alert.AddRule)

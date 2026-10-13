@@ -268,7 +268,7 @@ async function load() {
     if (searchText.value.trim()) params.keyword = searchText.value.trim()
     if (capabilityFilter.value) params.capability = capabilityFilter.value
     const { data } = await listModelCapabilities(params)
-    if (data.code === '200' && data.data) {
+    if (data.code === 0 && data.data) {
       list.value = data.data.list || []
       total.value = data.data.total || 0
     }
@@ -329,7 +329,7 @@ async function save() {
     }
     const apiFn = isEdit.value ? updateModelCapability : addModelCapability
     const { data } = await apiFn(payload)
-    if (data.code === '200' || data.code === '0' || data.code === 0) {
+    if (data.code === 0) {
       ElMessage.success(data.message || '保存成功')
       dialogVisible.value = false
       load()
@@ -345,7 +345,7 @@ async function toggleStatus(row) {
   const newEnabled = row.enabled === 1 ? 0 : 1
   try {
     const { data } = await toggleModelCapability(row.id, newEnabled)
-    if (data.code === '200' || data.code === '0' || data.code === 0) {
+    if (data.code === 0) {
       ElMessage.success(newEnabled === 1 ? '已启用' : '已禁用')
       row.enabled = newEnabled
     } else {
@@ -363,7 +363,7 @@ async function remove(row) {
     return
   }
   const { data } = await deleteModelCapability(row.id)
-  if (data.code === '200' || data.code === '0' || data.code === 0) {
+  if (data.code === 0) {
     ElMessage.success('删除成功')
     load()
   } else {

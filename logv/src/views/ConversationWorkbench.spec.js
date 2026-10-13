@@ -9,7 +9,27 @@ import { setActivePinia, createPinia } from 'pinia'
 // 模拟 API 依赖
 vi.mock('@/api/logs', () => ({
   searchLogs: vi.fn(() => Promise.resolve({
-    data: { code: '200', data: { list: [], total: 0, truncated: false, taskNo: '' } },
+    data: { code: 0, data: { list: [], total: 0, truncated: false, taskNo: '' } },
+  })),
+}))
+
+// 模拟 NL2DSL 服务（后端自然语言解析）
+vi.mock('@/api/nl2dsl', () => ({
+  nl2dslParse: vi.fn((query) => Promise.resolve({
+    data: {
+      code: 0,
+      data: {
+        userIntent: query,
+        level: /\b(ERROR|WARN|INFO|DEBUG|FATAL)\b/i.test(query) ? query.match(/\b(ERROR|WARN|INFO|DEBUG|FATAL)\b/i)[1].toUpperCase() : '',
+        date: '20261013',
+        startTime: '',
+        endTime: '',
+        key: '',
+        timeRangeDetail: '',
+        dslConditions: '',
+        intentType: 'general',
+      },
+    },
   })),
 }))
 
@@ -66,7 +86,7 @@ describe('ConversationWorkbench.vue', () => {
   it('输入文字后按 Enter 触发发送并构造请求', async () => {
     searchLogs.mockResolvedValueOnce({
       data: {
-        code: '200',
+        code: 0,
         data: {
           list: [
             { line: '[ERROR] 2026-01-01 timeout connecting to upstream' },
@@ -103,7 +123,7 @@ describe('ConversationWorkbench.vue', () => {
   it('搜索结果返回后渲染助手消息气泡', async () => {
     searchLogs.mockResolvedValueOnce({
       data: {
-        code: '200',
+        code: 0,
         data: {
           list: [
             { line: '[ERROR] connection refused' },
@@ -133,7 +153,7 @@ describe('ConversationWorkbench.vue', () => {
   it('搜索无结果时正确展示空结果提示', async () => {
     searchLogs.mockResolvedValueOnce({
       data: {
-        code: '200',
+        code: 0,
         data: { list: [], total: 0, truncated: false, taskNo: '' },
       },
     })

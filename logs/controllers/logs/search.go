@@ -63,6 +63,7 @@ type SearchReq struct {
 // SearchRespExt 扩展分页响应：在 api.Paginated 标准字段上追加 truncated、taskNo 与模板聚类。
 type SearchRespExt struct {
 	TaskNo         string          `json:"taskNo"`
+	NodeTotal      int             `json:"nodeTotal"`
 	List           []logRow        `json:"list"`
 	Total          int             `json:"total"`
 	PageNo         int             `json:"pageNo"`
@@ -225,7 +226,7 @@ func Search(c *gin.Context) {
 		_ = models.TouchTaskFinished(taskNo, status, "", "", taskMatchCount)
 	}()
 
-	lines, truncated := fetchAllLines(c, targets, path, req, maxTotal, perNodeBudget)
+	lines, truncated := fetchAllLines(c, taskNo, targets, path, req, maxTotal, perNodeBudget)
 	taskMatchCount = int64(len(lines))
 
 	// 分页切片
@@ -252,6 +253,7 @@ func Search(c *gin.Context) {
 
 	resp := SearchRespExt{
 		TaskNo:         taskNo,
+		NodeTotal:      len(targets),
 		List:           page,
 		Total:          total,
 		PageNo:         req.PageNo,
@@ -318,13 +320,16 @@ func insertSearchTask(taskNo, userName string, req SearchReq, itemName string, n
 
 // fetchAllLines 并发调用每个 target 的 logc /file/search，按 nodeIdx 稳定聚合。
 // truncated 为 true 表示结果达到了 maxTotal 上限。
-func fetchAllLines(c *gin.Context, targets []targetSpec, path string, req SearchReq, maxTotal, perNodeBudget int) ([]logRow, bool) {
+func fetchAllLines(c *gin.Context, taskNo string, targets []targetSpec, path string, req SearchReq, maxTotal, perNodeBudget int) ([]logRow, bool) {
 	var mu sync.Mutex
 	all := make([]logRow, 0, maxTotal)
 	var wg sync.WaitGroup
 	var truncated atomic.Bool
 	// 请求级别的已聚合行数计数器（避免多 goroutine 全量读取导致内存溢出）。
 	var aggregated atomic.Int64
+	// 已完成节点计数器（用于前端进度感知）。
+	var nodeDone atomic.Int32
+	nodeTotal := int32(len(targets))
 
 	// 限流：并发不超过 20。
 	sem := make(chan struct{}, 20)
@@ -338,15 +343,21 @@ func fetchAllLines(c *gin.Context, targets []targetSpec, path string, req Search
 			// 快速路径：已达上限时跳过剩余节点，省掉不必要的网络往返。
 			if aggregated.Load() >= int64(maxTotal) {
 				truncated.Store(true)
+				nodeDone.Add(1)
 				return
 			}
 
 			lines, err := queryOneLogc(tgt.server, path, req, perNodeBudget)
 			if err != nil {
 				log.Printf("查询节点 %s 失败: %v", tgt.server, err)
+				nodeDone.Add(1)
+				// 更新任务进度（节点完成 + 聚合行数）
+				_ = models.UpdateTaskProgress(taskNo, int(nodeTotal), int(nodeDone.Load()), int(aggregated.Load()))
 				return
 			}
 			if len(lines) == 0 {
+				nodeDone.Add(1)
+				_ = models.UpdateTaskProgress(taskNo, int(nodeTotal), int(nodeDone.Load()), int(aggregated.Load()))
 				return
 			}
 
@@ -362,6 +373,9 @@ func fetchAllLines(c *gin.Context, targets []targetSpec, path string, req Search
 			}
 			mu.Unlock()
 			aggregated.Add(int64(appended))
+			nodeDone.Add(1)
+			// 更新任务进度（实时进度百分比 + 聚合行数）
+			_ = models.UpdateTaskProgress(taskNo, int(nodeTotal), int(nodeDone.Load()), int(aggregated.Load()))
 		}(idx, t)
 	}
 	wg.Wait()
@@ -439,7 +453,18 @@ func queryOneLogc(server, path string, req SearchReq, maxLines int) ([]string, e
 	return result.Lines, nil
 }
 
-// QueryTask 按 taskNo 查询单个检索任务状态。
+// taskProgress 任务进度响应（含进度百分比）。
+type taskProgress struct {
+	TaskNo         string `json:"taskNo"`
+	Status         string `json:"status"`
+	NodeTotal      int    `json:"nodeTotal"`
+	NodeDone       int    `json:"nodeDone"`
+	MatchCount     int64  `json:"matchCount"`
+	ProgressPct    int    `json:"progressPct"`
+	EstimatedTotal int64  `json:"estimatedTotal"`
+}
+
+// QueryTask 按 taskNo 查询单个检索任务状态（含进度百分比）。
 // GET /logs/tasks/:taskNo
 func QueryTask(c *gin.Context) {
 	taskNo := c.Param("taskNo")
@@ -452,7 +477,45 @@ func QueryTask(c *gin.Context) {
 		api.Fail(c, api.CodeNotFound, "任务不存在")
 		return
 	}
-	api.Success(c, "查询成功", task)
+	progress := taskProgress{
+		TaskNo:     task.TaskNo,
+		Status:     task.Status,
+		NodeTotal:  task.NodeTotal,
+		NodeDone:   task.NodeDone,
+		MatchCount: task.MatchCount,
+	}
+	if task.NodeTotal > 0 {
+		progress.ProgressPct = task.NodeDone * 100 / task.NodeTotal
+	}
+	progress.EstimatedTotal = task.MatchCount
+	api.Success(c, "查询成功", progress)
+}
+
+// QueryTaskProgress 轻量进度查询（高频轮询友好）。
+// GET /logs/tasks/:taskNo/progress
+func QueryTaskProgress(c *gin.Context) {
+	taskNo := c.Param("taskNo")
+	if taskNo == "" {
+		api.Fail(c, api.CodeBadRequest, "taskNo 不能为空")
+		return
+	}
+	task, err := models.GetTaskByNo(taskNo)
+	if err != nil || task.ID == 0 {
+		api.Fail(c, api.CodeNotFound, "任务不存在")
+		return
+	}
+	progress := taskProgress{
+		TaskNo:     task.TaskNo,
+		Status:     task.Status,
+		NodeTotal:  task.NodeTotal,
+		NodeDone:   task.NodeDone,
+		MatchCount: task.MatchCount,
+	}
+	if task.NodeTotal > 0 {
+		progress.ProgressPct = task.NodeDone * 100 / task.NodeTotal
+	}
+	progress.EstimatedTotal = task.MatchCount
+	api.Success(c, "查询成功", progress)
 }
 
 // ListTasks 分页查询检索任务列表。

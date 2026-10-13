@@ -35,7 +35,7 @@ func TestSuccess(t *testing.T) {
 		t.Fatalf("响应体非合法 JSON: %v", err)
 	}
 	if body.Code != CodeSuccess {
-		t.Fatalf("code 错误: got %q", body.Code)
+		t.Fatalf("code 错误: got %d want 0", body.Code)
 	}
 	if body.Message != "ok" {
 		t.Fatalf("message 错误: got %q", body.Message)
@@ -66,7 +66,7 @@ func TestError(t *testing.T) {
 	var body Response
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body.Code != CodeBadRequest {
-		t.Fatalf("code 错误: got %q", body.Code)
+		t.Fatalf("code 错误: got %d want %d", body.Code, CodeBadRequest)
 	}
 	if body.Message != "bad" {
 		t.Fatalf("message 错误: got %q", body.Message)
@@ -83,7 +83,7 @@ func TestFail(t *testing.T) {
 	var body Response
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body.Code != CodeForbidden {
-		t.Fatalf("code 错误: got %q", body.Code)
+		t.Fatalf("code 错误: got %d want %d", body.Code, CodeForbidden)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestPaginated(t *testing.T) {
 	var body Response
 	_ = json.Unmarshal(w.Body.Bytes(), &body)
 	if body.Code != CodeSuccess {
-		t.Fatalf("code 错误: got %q", body.Code)
+		t.Fatalf("code 错误: got %d want 0", body.Code)
 	}
 	data, ok := body.Data.(map[string]interface{})
 	if !ok {
@@ -110,19 +110,23 @@ func TestPaginated(t *testing.T) {
 
 // TestHTTPStatusMapping 验证 HTTP 状态码与业务码双向映射。
 func TestHTTPStatusMapping(t *testing.T) {
-	cases := map[int]ResponseCode{
-		http.StatusOK:           CodeSuccess,
+	// 成功：HTTP 200 → code 0
+	if got := httpStatusToCode(http.StatusOK); got != CodeSuccess {
+		t.Fatalf("httpStatusToCode(200) = %d want 0", got)
+	}
+	// 错误：HTTP 状态码 == 业务错误码
+	errorCases := map[int]ResponseCode{
 		http.StatusBadRequest:   CodeBadRequest,
 		http.StatusUnauthorized: CodeUnauthorized,
 		http.StatusForbidden:    CodeForbidden,
 		http.StatusNotFound:     CodeNotFound,
 	}
-	for httpStatus, wantCode := range cases {
+	for httpStatus, wantCode := range errorCases {
 		if got := httpStatusToCode(httpStatus); got != wantCode {
-			t.Fatalf("httpStatusToCode(%d) = %q want %q", httpStatus, got, wantCode)
+			t.Fatalf("httpStatusToCode(%d) = %d want %d", httpStatus, got, wantCode)
 		}
 		if got := codeToHTTPStatus(wantCode); got != httpStatus {
-			t.Fatalf("codeToHTTPStatus(%q) = %d want %d", wantCode, got, httpStatus)
+			t.Fatalf("codeToHTTPStatus(%d) = %d want %d", wantCode, got, httpStatus)
 		}
 	}
 }

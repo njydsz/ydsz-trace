@@ -36,3 +36,9 @@ export function traceWaterfall(payload) {
 export function logContext(itemId, params = {}) {
   return http.get(`/logs/context/${itemId}`, { params })
 }
+
+// queryTaskProgress 轮询检索任务的实时进度（百分比 + 预估总数）。
+// @param {string} taskNo - 任务编号
+export function queryTaskProgress(taskNo) {
+  return http.get(`/logs/tasks/${taskNo}/progress`)
+}

@@ -11,7 +11,7 @@ vi.mock('@/api/logs', () => ({
   queryLogClients: vi.fn(() => Promise.resolve({ data: { data: [] } })),
   queryItemsByClient: vi.fn(() => Promise.resolve({ data: { data: [] } })),
   traceLogs: vi.fn(() => Promise.resolve({
-    data: { code: '200', data: { traceId: 'test-123', Total: 0, Nodes: 0, Results: [] } },
+    data: { code: 0, data: { traceId: 'test-123', Total: 0, Nodes: 0, Results: [] } },
   })),
 }))
 
@@ -89,7 +89,7 @@ describe('TraceView.vue', () => {
 
   it('traceLogs 成功后返回数据结构正确', async () => {
     traceLogs.mockResolvedValueOnce({
-      data: { code: '200', data: { traceId: 'xyz', Total: 5, Nodes: 2, Results: [] } },
+      data: { code: 0, data: { traceId: 'xyz', Total: 5, Nodes: 2, Results: [] } },
     })
     const wrapper = mountComponent()
     await vi.dynamicImportSettled()

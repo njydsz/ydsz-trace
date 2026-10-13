@@ -125,6 +125,7 @@
 import { ref, nextTick } from 'vue'
 import { Promotion, Search, ChatLineRound } from '@element-plus/icons-vue'
 import { searchLogs } from '@/api/logs'
+import { nl2dslParse } from '@/api/nl2dsl'
 import ChatMessage from '@/components/ChatMessage.vue'
 import QueryResultCard from '@/components/QueryResultCard.vue'
 import ExplanationCard from '@/components/ExplanationCard.vue'
@@ -154,6 +155,8 @@ function formatDate(date) {
 }
 
 function parseNaturalLanguage(text) {
+  // 前端轻量级降级解析：当后端 NL2DSL 服务不可用时作为 fallback。
+  // 主路径使用 nl2dslParse() 后端服务。
   const levelPattern = /\b(ERROR|WARN|INFO|DEBUG|FATAL)\b/i
   const levelMatch = text.match(levelPattern)
   const level = levelMatch ? levelMatch[1].toUpperCase() : ''
@@ -179,7 +182,7 @@ function parseNaturalLanguage(text) {
     timeRangeDetail = `${date} - ${formatDate(now)}`
   }
   let key = ''
-  const quotedMatch = text.match(/["'"'"']([^"'"'"']+)["'"'"']/)
+  const quotedMatch = text.match(/["'"'"']([^"'"'"']+)["'"'"']/ )
   if (quotedMatch) {
     key = quotedMatch[1].trim()
   } else {
@@ -239,17 +242,34 @@ function addErrorMessage(text, fallbackQuery) {
 }
 
 async function executeSearch(queryText) {
-  const params = parseNaturalLanguage(queryText)
-  const dslConditions = formatDslConditions(params)
   loading.value = true
+  let params
   try {
+    // Step 1: NL2DSL 解析（后端服务，替换硬编码正则）
+    try {
+      const nlRes = await nl2dslParse(queryText)
+      const nlPayload = nlRes.data || {}
+      if (nlPayload.code === 0 && nlPayload.data) {
+        params = nlPayload.data
+      } else {
+        // NL2DSL 服务异常时降级为前端解析
+        params = parseNaturalLanguage(queryText)
+      }
+    } catch {
+      // 网络异常或 NL2DSL 不可用时降级
+      params = parseNaturalLanguage(queryText)
+    }
+
+    const dslConditions = params.dslConditions || formatDslConditions(params)
+
+    // Step 2: 执行日志检索
     const res = await searchLogs({
       item: 1, date: params.date, key: params.key, level: params.level,
       startTime: params.startTime, endTime: params.endTime,
       pageNo: 1, pageSize: 50,
     })
     const payload = res.data || {}
-    if (payload.code && payload.code !== '200') {
+    if (payload.code && payload.code !== 0) {
       addErrorMessage(payload.msg || '检索失败，请尝试调整关键词', params.key || params.level || '')
       return
     }

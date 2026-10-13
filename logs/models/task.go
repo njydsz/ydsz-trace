@@ -107,6 +107,14 @@ func TouchTaskStarted(taskNo string) error {
 	return err
 }
 
+// UpdateTaskProgress 更新任务进度（节点完成数 + 命中行数）。
+// 在 fetchAllLines 每完成一个节点后调用，支持前端实时进度感知。
+func UpdateTaskProgress(taskNo string, nodeTotal, nodeDone, matchCount int) error {
+	_, err := DB.Exec(`UPDATE t_task SET node_total = ?, node_done = ?, match_count = ? WHERE task_no = ?`,
+		nodeTotal, nodeDone, matchCount, taskNo)
+	return err
+}
+
 // TouchTaskFinished 标记任务完成。
 func TouchTaskFinished(taskNo, status, errMsg, zipPath string, matchCount int64) error {
 	now := time.Now().Format("2006-01-02 15:04:05")

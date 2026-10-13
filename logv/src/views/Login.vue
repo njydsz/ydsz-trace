@@ -95,7 +95,7 @@ async function onSubmit() {
   loading.value = true
   try {
     const { data } = await login(form.value.username, form.value.password)
-    if (data && data.code === '200') {
+    if (data && data.code === 0) {
       auth.setUser(data.data?.username || form.value.username)
       ElMessage.success(data.msg || '登录成功')
       router.push(route.query.redirect || '/conversation')

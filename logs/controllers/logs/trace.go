@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
@@ -201,12 +202,15 @@ type traceSpan struct {
 
 // traceWaterfallResp TraceID 瀑布视图响应体。
 type traceWaterfallResp struct {
-	TraceID     string       `json:"traceId"`
-	TraceFormat string       `json:"traceFormat"` // w3c/b3/skywalking/custom
-	TotalNodes  int          `json:"totalNodes"`
-	Spans       []traceSpan  `json:"spans"`      // 按时间排序
-	ErrorCount  int          `json:"errorCount"`
-	FirstError  *traceSpan   `json:"firstError"` // 首个错误 span
+	TraceID        string       `json:"traceId"`
+	TraceFormat    string       `json:"traceFormat"`    // w3c/b3/skywalking/custom
+	TotalNodes     int          `json:"totalNodes"`
+	Spans          []traceSpan  `json:"spans"`          // 按时间排序
+	ErrorCount     int          `json:"errorCount"`
+	FirstError     *traceSpan   `json:"firstError"`     // 首个错误 span
+	LongestGapMs   int64        `json:"longestGapMs"`   // 相邻 span 间最大时间差（毫秒）
+	LongestSpanIdx int          `json:"longestSpanIdx"` // 最长耗时 span 在 spans 中的索引
+	DurationMs     int64        `json:"durationMs"`     // 总跨度（首尾 span 时间差）
 }
 
 // TraceWaterfall 端点增强：自动识别 TraceID 格式（W3C/B3/SkyWalking/自定义），
@@ -323,9 +327,13 @@ func TraceWaterfall(c *gin.Context) {
 		return allSpans[i].Timestamp < allSpans[j].Timestamp
 	})
 
-	// 统计错误并标记首个错误
+	// 统计错误、首个错误、最长 gap
 	var errorCount int
 	var firstError *traceSpan
+	var longestGapMs int64
+	var longestSpanIdx int
+	var durationMs int64
+	var firstTs, lastTs int64
 	for i := range allSpans {
 		if allSpans[i].IsError {
 			errorCount++
@@ -334,18 +342,42 @@ func TraceWaterfall(c *gin.Context) {
 				firstError = &copy
 			}
 		}
+		ts := spanTimeMillis(allSpans[i].Timestamp)
+		if i == 0 {
+			firstTs = ts
+		}
+		if ts > 0 {
+			lastTs = ts
+		}
+		if i > 0 {
+			prev := spanTimeMillis(allSpans[i-1].Timestamp)
+			if ts > 0 && prev > 0 {
+				gap := ts - prev
+				if gap > longestGapMs {
+					longestGapMs = gap
+					longestSpanIdx = i
+				}
+			}
+		}
+	}
+	durationMs = lastTs - firstTs
+	if durationMs < 0 {
+		durationMs = 0
 	}
 
 	c.JSON(http.StatusOK, api.Response{
 		Code:    api.CodeSuccess,
 		Message: "查询成功",
 		Data: traceWaterfallResp{
-			TraceID:     req.TraceID,
-			TraceFormat: traceFormat,
-			TotalNodes:  int(totalNodes),
-			Spans:       allSpans,
-			ErrorCount:  errorCount,
-			FirstError:  firstError,
+			TraceID:        req.TraceID,
+			TraceFormat:    traceFormat,
+			TotalNodes:     int(totalNodes),
+			Spans:          allSpans,
+			ErrorCount:     errorCount,
+			FirstError:     firstError,
+			LongestGapMs:   longestGapMs,
+			LongestSpanIdx: longestSpanIdx,
+			DurationMs:     durationMs,
 		},
 	})
 }
@@ -371,6 +403,28 @@ func parseTraceSpan(line, node string) traceSpan {
 		Thread:    thread,
 		IsError:   isError,
 	}
+}
+
+// spanTimeMillis 解析 span 时间戳为毫秒数（失败返回 0）。
+func spanTimeMillis(ts string) int64 {
+	if ts == "" {
+		return 0
+	}
+	// 尝试 ISO 8601
+	if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+		return t.UnixMilli()
+	}
+	if t, err := time.Parse(time.RFC3339, ts); err == nil {
+		return t.UnixMilli()
+	}
+	// 尝试 "2006-01-02 15:04:05.000"
+	if t, err := time.Parse("2006-01-02 15:04:05.000", ts); err == nil {
+		return t.UnixMilli()
+	}
+	if t, err := time.Parse("2006-01-02 15:04:05", ts); err == nil {
+		return t.UnixMilli()
+	}
+	return 0
 }
 
 // detectTraceIDFormat 自动识别 TraceID 格式。

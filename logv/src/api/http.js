@@ -33,10 +33,11 @@ function isJsonResponse(response) {
 
 /**
  * 判断业务状态码是否成功。
- * 兼容字符串 "200" 与数字 0 两种后端返回形式。
+ * PRD V2.1 FR-1405：统一响应格式 code 为数字类型，0 = 成功。
+ * 保留字符串兼容以应对过渡期混合部署。
  */
 function isBusinessSuccess(code) {
-  return code === '200' || code === 200 || code === 0 || code === '0'
+  return code === 0 || code === '0'
 }
 
 http.interceptors.response.use(

@@ -131,6 +131,19 @@
           <span v-if="searching" class="flex items-center gap-1 text-brand-500 text-sm">
             <el-icon class="animate-spin"><Loading /></el-icon>搜索中…
           </span>
+
+          <!-- 实时进度条（多节点检索时显示） -->
+          <div v-if="searching && taskNodeTotal > 1" class="flex items-center gap-2 ml-3">
+            <el-progress
+              :percentage="taskProgressPct"
+              :stroke-width="6"
+              style="width: 120px"
+              :format="() => `${taskNodeDone}/${taskNodeTotal}`"
+            />
+            <span v-if="taskEstimatedTotal > 0" class="text-xs text-muted">
+              预估 {{ taskEstimatedTotal.toLocaleString() }} 行
+            </span>
+          </div>
           <el-button v-if="currentTaskNo" :icon="Link" size="small" @click="router.push('/tasks')">任务详情</el-button>
           <el-button v-if="lastSearchMeta" :icon="Download" :loading="downloading" size="small" @click="onDownloadZip">下载 zip</el-button>
           <el-button v-if="lastSearchMeta" :icon="VideoPlay" size="small" @click="gotoTail">定位 Tail</el-button>
@@ -252,11 +265,11 @@
 
 <script setup>
 /** 历史日志检索页 v2.0：选择客户端 + 日志项，按日期和关键词跨节点检索日志。 */
-import { ref, reactive, shallowRef, onMounted } from 'vue'
+import { ref, reactive, shallowRef, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Search, Refresh, Download, Link, VideoPlay, Share, DocumentCopy, Clock, CircleCheckFilled, Loading } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { queryLogClients, queryItemsByClient, queryLogs, searchLogs } from '@/api/logs'
+import { queryLogClients, queryItemsByClient, queryLogs, searchLogs, queryTaskProgress } from '@/api/logs'
 import { queryAllItems } from '@/api/item'
 import LogHistogram from '@/components/LogHistogram.vue'
 import { useSearchHistory } from '@/store/searchHistory'
@@ -285,6 +298,11 @@ const downloading = ref(false)
 const searched = ref(false)
 const lastSearchMeta = ref(null)
 const currentTaskNo = ref('')
+const taskProgressPct = ref(0)
+const taskNodeDone = ref(0)
+const taskNodeTotal = ref(0)
+const taskEstimatedTotal = ref(0)
+const progressTimer = ref(null)
 const hasMore = ref(false)
 const loadingMore = ref(false)
 const router = useRouter()
@@ -402,6 +420,35 @@ function addHistoryToStore() {
   })
 }
 
+// 启动任务进度轮询（每 1.5s 请求一次轻量进度接口）
+function startProgressPolling(taskNo) {
+  stopProgressPolling()
+  if (!taskNo) return
+  taskProgressPct.value = 0
+  taskNodeDone.value = 0
+  taskEstimatedTotal.value = 0
+  progressTimer.value = setInterval(async () => {
+    try {
+      const { data: resp } = await queryTaskProgress(taskNo)
+      const d = resp.data || {}
+      if (typeof d.progressPct === 'number') taskProgressPct.value = Math.min(100, d.progressPct)
+      if (typeof d.nodeDone === 'number') taskNodeDone.value = d.nodeDone
+      if (typeof d.nodeTotal === 'number') taskNodeTotal.value = d.nodeTotal
+      if (typeof d.estimatedTotal === 'number') taskEstimatedTotal.value = d.estimatedTotal
+      if (d.status === 'success' || d.status === 'failed') stopProgressPolling()
+    } catch {
+      // 轮询失败不阻塞搜索，静默忽略
+    }
+  }, 1500)
+}
+
+function stopProgressPolling() {
+  if (progressTimer.value) {
+    clearInterval(progressTimer.value)
+    progressTimer.value = null
+  }
+}
+
 function getLevelTagType(level) {
   switch (level) {
     case 'ERROR':
@@ -442,6 +489,10 @@ async function onSearch() {
   resultTruncated.value = false
   lastSearchMeta.value = null
   searching.value = true
+  taskProgressPct.value = 0
+  taskNodeDone.value = 0
+  taskNodeTotal.value = 0
+  taskEstimatedTotal.value = 0
   try {
     const res = await searchLogs({
       client: form.client || 0,
@@ -458,7 +509,7 @@ async function onSearch() {
       pageSize: pageSize.value,
     })
     const payload = res.data || {}
-    if (payload.code && payload.code !== '200') {
+    if (payload.code && payload.code !== 0) {
       ElMessage.error(payload.msg || '检索失败')
       return
     }
@@ -468,6 +519,9 @@ async function onSearch() {
     resultTruncated.value = !!data.truncated
     hasMore.value = data.total > pageSize.value * pageNo.value
     currentTaskNo.value = data.taskNo || ''
+    if (currentTaskNo.value && data.nodeTotal > 1) {
+      startProgressPolling(currentTaskNo.value)
+    }
     templateGroups.value = data.templateGroups || []
     activeTemplateGroups.value = templateGroups.value.slice(0, 3).map(g => g.templateId)
     expandedTemplates.value = {}
@@ -487,6 +541,7 @@ async function onSearch() {
   } catch {
     ElMessage.error('检索请求失败，请确认服务端已启动')
   } finally {
+    stopProgressPolling()
     searching.value = false
   }
 }
@@ -622,6 +677,10 @@ onMounted(() => {
   loadClients()
   loadItems()
   searchStore.load()
+})
+
+onUnmounted(() => {
+  stopProgressPolling()
 })
 </script>
 
