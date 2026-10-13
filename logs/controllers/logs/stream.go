@@ -2,7 +2,7 @@
 //
 // 提供两个 SSE 端点：
 //   - /logs/stream：多客户端并发搜索，流式返回每个节点的进度
-//   - /logs/tail：代理 logc 的实时跟踪，SSE 推送新增日志行
+//   - /logs/tail：代理 logc 的实时跟踪，SSE 推送新增日志行（支持多节点合并、速率限制、模板提取）
 package logs
 
 import (
@@ -12,8 +12,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
@@ -21,6 +23,85 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// sseTailLine 推送的日志行统一结构（FR-405）。
+type sseTailLine struct {
+	Timestamp    string   `json:"timestamp"`
+	IP           string   `json:"ip"`
+	Port         int      `json:"port"`
+	ClientID     int64    `json:"clientId"`
+	Level        string   `json:"level"`
+	Content      string   `json:"content"`
+	Template     string   `json:"template,omitempty"`
+	Params       []string `json:"params,omitempty"`
+	RateLimited  bool     `json:"rateLimited,omitempty"`
+	DroppedCount int      `json:"droppedCount,omitempty"`
+}
+
+// tokenBucket 简易令牌桶速率限制器。
+type tokenBucket struct {
+	mu       sync.Mutex
+	cap      int
+	tokens   int
+	interval time.Duration
+	rate     int // tokens per interval
+	stopCh   chan struct{}
+}
+
+// newTokenBucket 创建一个令牌桶。
+// rate: 每个 interval 补充的令牌数；cap: 桶的最大容量。
+func newTokenBucket(rate, cap int, interval time.Duration) *tokenBucket {
+	tb := &tokenBucket{
+		cap:      cap,
+		tokens:   cap,
+		interval: interval,
+		rate:     rate,
+		stopCh:   make(chan struct{}),
+	}
+	go tb.refill()
+	return tb
+}
+
+// refill 周期性补充令牌。
+func (tb *tokenBucket) refill() {
+	ticker := time.NewTicker(tb.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			tb.mu.Lock()
+			tb.tokens += tb.rate
+			if tb.tokens > tb.cap {
+				tb.tokens = tb.cap
+			}
+			tb.mu.Unlock()
+		case <-tb.stopCh:
+			return
+		}
+	}
+}
+
+// Stop 停止令牌补充 goroutine。
+func (tb *tokenBucket) Stop() {
+	close(tb.stopCh)
+}
+
+// Allow 尝试消费 n 个令牌，返回实际消费数。
+func (tb *tokenBucket) Allow(n int) int {
+	tb.mu.Lock()
+	defer tb.mu.Unlock()
+	if tb.tokens <= 0 {
+		return 0
+	}
+	if n > tb.tokens {
+		n = tb.tokens
+	}
+	tb.tokens -= n
+	return n
+}
+
+// tailRateLimiter 全局 Tail 端点推送速率限制器：500 行/秒。
+var tailRateLimiter = newTokenBucket(500, 500, time.Second)
 
 // StreamReq 流式搜索请求体（与 LogsReq 对齐）。
 type StreamReq struct {
@@ -165,6 +246,12 @@ func Tail(c *gin.Context) {
 		return
 	}
 
+	// 可选查询参数：提取模式 extract=template|full
+	extract := c.DefaultQuery("extract", "full")
+	if extract != "template" && extract != "full" {
+		extract = "full"
+	}
+
 	item := models.ReadItem(req.Item)
 	if item.Id == 0 {
 		api.Fail(c, api.CodeNotFound, "项目不存在")
@@ -173,11 +260,17 @@ func Tail(c *gin.Context) {
 	path := item.LogPath + item.LogPrefix + req.Date + item.LogSuffix + ".log"
 
 	// 确定要 tail 的客户端
-	var servers []string
+	var servers []serverSpec
 	if req.Client != 0 {
 		cl := models.ReadClient(req.Client)
 		if cl.Id != 0 {
-			servers = []string{cl.Ip + ":" + cl.Port}
+			port, _ := stringToInt(cl.Port)
+			servers = []serverSpec{{
+				address:  cl.Ip + ":" + cl.Port,
+				ip:       cl.Ip,
+				port:     port,
+				clientID: cl.Id,
+			}}
 		}
 	} else {
 		clients, err := models.QueryAllClient()
@@ -186,7 +279,13 @@ func Tail(c *gin.Context) {
 			return
 		}
 		for _, cl := range clients {
-			servers = append(servers, cl.Ip+":"+cl.Port)
+			port, _ := stringToInt(cl.Port)
+			servers = append(servers, serverSpec{
+				address:  cl.Ip + ":" + cl.Port,
+				ip:       cl.Ip,
+				port:     port,
+				clientID: cl.Id,
+			})
 		}
 	}
 
@@ -195,18 +294,26 @@ func Tail(c *gin.Context) {
 		return
 	}
 
-	// 单客户端：直接代理 SSE
+	// 单节点模式：直接代理，封装为统一 sseTailLine 结构
 	if len(servers) == 1 {
-		proxyTailSSE(c, servers[0], path, req.Key, req.Regex, req.Level, req.Line)
+		proxyTailSSE(c, servers[0], path, req.Key, req.Regex, req.Level, req.Line, extract)
 		return
 	}
 
-	// 多客户端：合并 SSE 流
-	mergedTailSSE(c, servers, path, req.Key, req.Regex, req.Level, req.Line)
+	// 多节点模式：合并 SSE 流 + 速率限制 + 时间排序
+	mergedTailSSE(c, servers, path, req.Key, req.Regex, req.Level, req.Line, extract)
 }
 
-// proxyTailSSE 代理单个 logc 的 tail 响应。
-func proxyTailSSE(c *gin.Context, server, path, key string, regex bool, level string, line int64) {
+// serverSpec logc 节点地址信息（含元数据）。
+type serverSpec struct {
+	address  string // ip:port
+	ip       string
+	port     int
+	clientID int64
+}
+
+// proxyTailSSE 代理单个 logc 的 tail 响应，封装为 sseTailLine 结构。
+func proxyTailSSE(c *gin.Context, srv serverSpec, path, key string, regex bool, level string, line int64, extract string) {
 	tailReqBody, _ := json.Marshal(map[string]interface{}{
 		"path":           path,
 		"key":            key,
@@ -216,7 +323,7 @@ func proxyTailSSE(c *gin.Context, server, path, key string, regex bool, level st
 	})
 
 	resp, err := httpClient.Post(
-		"http://"+server+"/file/tail",
+		"http://"+srv.address+"/file/tail",
 		"application/json",
 		bytes.NewReader(tailReqBody),
 	)
@@ -230,24 +337,176 @@ func proxyTailSSE(c *gin.Context, server, path, key string, regex bool, level st
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
+	c.Writer.Flush()
 
-	// 透传 SSE 流
+	// 速率限制器（单节点也限速）
+	dropped := 0
+
 	reader := bufio.NewReader(resp.Body)
 	for {
-		line, err := reader.ReadString('\n')
+		data, err := reader.ReadString('\n')
 		if err != nil {
 			if err != io.EOF {
 				log.Printf("代理读取 SSE 失败: %v", err)
 			}
+			// 推送剩余丢弃汇总
+			if dropped > 0 {
+				emitRateLimited(c, srv, dropped)
+			}
 			return
 		}
-		c.Writer.WriteString(line)
-		c.Writer.Flush()
+		// 解析 SSE data
+		if len(data) > 6 && data[:6] == "data: " {
+			content := strings.TrimRight(data[6:], "\r\n")
+			if len(content) == 0 {
+				continue
+			}
+
+			// 速率限制
+			if tailRateLimiter.Allow(1) == 0 {
+				dropped++
+				continue
+			}
+			// 如果有丢弃，先推送丢弃汇总
+			if dropped > 0 {
+				emitRateLimited(c, srv, dropped)
+				dropped = 0
+			}
+
+			tl := buildTailLine(content, srv.ip, srv.port, srv.clientID, extract)
+			emitTailLine(c, tl)
+		}
 	}
 }
 
-// mergedTailSSE 合并多个 logc server 的 tail 流。
-func mergedTailSSE(c *gin.Context, servers []string, path, key string, regex bool, level string, line int64) {
+// emitRateLimited 推送速率限制丢弃汇总。
+func emitRateLimited(c *gin.Context, srv serverSpec, count int) {
+	tl := sseTailLine{
+		IP:           srv.ip,
+		Port:         srv.port,
+		ClientID:     srv.clientID,
+		Level:        "WARN",
+		Content:      fmt.Sprintf("[rate limited] dropped %d lines", count),
+		RateLimited:  true,
+		DroppedCount: count,
+	}
+	emitTailLine(c, tl)
+}
+
+// emitTailLine 将 sseTailLine 编码为 SSE 事件推送。
+func emitTailLine(c *gin.Context, tl sseTailLine) {
+	b, err := json.Marshal(tl)
+	if err != nil {
+		return
+	}
+	c.Writer.WriteString("event: line\ndata: " + string(b) + "\n\n")
+	c.Writer.Flush()
+}
+
+// buildTailLine 从原始日志构造 sseTailLine（含级别、时间戳提取、模板提取）。
+func buildTailLine(raw, ip string, port int, clientID int64, extract string) sseTailLine {
+	content := raw
+	level := extractLevel(content)
+	timestamp := extractTimestamp(content)
+
+	tl := sseTailLine{
+		Timestamp: timestamp,
+		IP:        ip,
+		Port:      port,
+		ClientID:  clientID,
+		Level:     level,
+		Content:   content,
+	}
+
+	if extract == "template" {
+		tmpl, params := extractTemplateFields(content)
+		tl.Template = tmpl
+		tl.Params = params
+	}
+
+	return tl
+}
+
+// extractTemplateFields 从日志行提取模板字符串与参数列表。
+// 返回：<template_str, params> — 模板中动态参数用 <*> 占位，params 为提取出的具体值。
+func extractTemplateFields(line string) (string, []string) {
+	params := []string{}
+
+	// 记录已匹配的位置避免重叠，按出现顺序收集参数
+	type matchPos struct {
+		start, end int
+		val        string
+	}
+	var allMatches []matchPos
+
+	patterns := []*regexp.Regexp{uuidPattern, ipv4Pattern, pathPattern, hexPattern, numberPattern}
+	for _, re := range patterns {
+		for _, m := range re.FindAllStringIndex(line, -1) {
+			allMatches = append(allMatches, matchPos{m[0], m[1], line[m[0]:m[1]]})
+		}
+	}
+
+	// 按起始位置排序（插入排序，数量通常不多）
+	for i := 1; i < len(allMatches); i++ {
+		for j := i; j > 0 && allMatches[j].start < allMatches[j-1].start; j-- {
+			allMatches[j], allMatches[j-1] = allMatches[j-1], allMatches[j]
+		}
+	}
+
+	// 去重重叠
+	var filtered []matchPos
+	lastEnd := -1
+	for _, m := range allMatches {
+		if m.start >= lastEnd {
+			filtered = append(filtered, m)
+			lastEnd = m.end
+		}
+	}
+
+	// 替换为 <*>
+	var sb strings.Builder
+	prev := 0
+	for _, m := range filtered {
+		sb.WriteString(line[prev:m.start])
+		sb.WriteString("<*>")
+		params = append(params, m.val)
+		prev = m.end
+	}
+	sb.WriteString(line[prev:])
+
+	// 压缩空格
+	template := strings.Join(strings.Fields(sb.String()), " ")
+	return template, params
+}
+
+// 模板提取用正则（包级复用 search.go 的归一化语义）。
+var (
+	uuidPattern    = compilePattern(`\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b`)
+	ipv4Pattern    = compilePattern(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
+	pathPattern    = compilePattern(`(?:/[\w\-\.]+){2,}`)
+	hexPattern     = compilePattern(`\b[0-9a-fA-F]{16,}\b`)
+	numberPattern  = compilePattern(`\b\d+\.\d+\b|\b\d+\b`)
+)
+
+// compilePattern 预编译正则（简化写法）。
+func compilePattern(s string) *regexp.Regexp {
+	return regexp.MustCompile(s)
+}
+
+// stringToInt 将字符串转 int，失败返回 0。
+func stringToInt(s string) (int, error) {
+	n := 0
+	for _, ch := range s {
+		if ch < '0' || ch > '9' {
+			return 0, fmt.Errorf("invalid int: %s", s)
+		}
+		n = n*10 + int(ch-'0')
+	}
+	return n, nil
+}
+
+// mergedTailSSE 合并多个 logc server 的 tail 流，支持速率限制 + 模板提取。
+func mergedTailSSE(c *gin.Context, servers []serverSpec, path, key string, regex bool, level string, line int64, extract string) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
 	c.Header("Connection", "keep-alive")
@@ -257,16 +516,17 @@ func mergedTailSSE(c *gin.Context, servers []string, path, key string, regex boo
 	c.Writer.Flush()
 
 	var wg sync.WaitGroup
-	type logLine struct {
-		Server string `json:"server"`
-		Line   string `json:"line"`
+	// 行通道（携带来源节点信息）
+	type rawLine struct {
+		server serverSpec
+		data   string
 	}
-	lineCh := make(chan logLine, 100)
-	doneCh := make(chan string, len(servers))
+	lineCh := make(chan rawLine, 500)
+	doneCh := make(chan serverSpec, len(servers))
 
-	for _, server := range servers {
+	for _, srv := range servers {
 		wg.Add(1)
-		go func(srv string) {
+		go func(s serverSpec) {
 			defer wg.Done()
 			tailReqBody, _ := json.Marshal(map[string]interface{}{
 				"path":           path,
@@ -277,12 +537,12 @@ func mergedTailSSE(c *gin.Context, servers []string, path, key string, regex boo
 			})
 
 			resp, err := httpClient.Post(
-				"http://"+srv+"/file/tail",
+				"http://"+s.address+"/file/tail",
 				"application/json",
 				bytes.NewReader(tailReqBody),
 			)
 			if err != nil {
-				doneCh <- srv
+				doneCh <- s
 				return
 			}
 			defer resp.Body.Close()
@@ -293,23 +553,20 @@ func mergedTailSSE(c *gin.Context, servers []string, path, key string, regex boo
 				if err != nil {
 					break
 				}
-				// 解析 SSE data
 				if len(data) > 6 && data[:6] == "data: " {
-					content := data[6:]
-					// 去掉末尾换行
-					content = strings.TrimRight(content, "\r\n")
-					if len(content) > 0 {
-						// P0-3 修复：使用 select 监听 ctx.Done()，防止客户端断开后 goroutine 永阻塞在 channel 发送上
-						select {
-						case lineCh <- logLine{Server: srv, Line: content}:
-						case <-c.Request.Context().Done():
-							return
-						}
+					content := strings.TrimRight(data[6:], "\r\n")
+					if len(content) == 0 {
+						continue
+					}
+					select {
+					case lineCh <- rawLine{server: s, data: content}:
+					case <-c.Request.Context().Done():
+						return
 					}
 				}
 			}
-			doneCh <- srv
-		}(server)
+			doneCh <- s
+		}(srv)
 	}
 
 	// 等待所有 goroutine 结束后关闭 channel
@@ -318,26 +575,55 @@ func mergedTailSSE(c *gin.Context, servers []string, path, key string, regex boo
 		close(lineCh)
 	}()
 
+	// 合并推送 + 速率限制
 	finished := 0
+	pendingDropped := 0
+
 	for {
 		select {
-		case ll, ok := <-lineCh:
+		case raw, ok := <-lineCh:
 			if !ok {
+				// 推送剩余丢弃汇总
+				if pendingDropped > 0 {
+					emitMergedRateLimited(c, pendingDropped)
+				}
 				sseEvent(c, "done", map[string]interface{}{"servers": len(servers)})
 				c.Writer.Flush()
 				return
 			}
-			b, _ := json.Marshal(ll)
-			c.Writer.WriteString("data: " + string(b) + "\n\n")
-			c.Writer.Flush()
+
+			// 速率限制
+			if tailRateLimiter.Allow(1) == 0 {
+				pendingDropped++
+				continue
+			}
+			// 推送丢弃汇总
+			if pendingDropped > 0 {
+				emitMergedRateLimited(c, pendingDropped)
+				pendingDropped = 0
+			}
+
+			tl := buildTailLine(raw.data, raw.server.ip, raw.server.port, raw.server.clientID, extract)
+			emitTailLine(c, tl)
+
 		case <-doneCh:
 			finished++
 			if finished >= len(servers) {
 				// 排空 lineCh
-				for ll := range lineCh {
-					b, _ := json.Marshal(ll)
-					c.Writer.WriteString("data: " + string(b) + "\n\n")
-					c.Writer.Flush()
+				for raw := range lineCh {
+					if tailRateLimiter.Allow(1) == 0 {
+						pendingDropped++
+						continue
+					}
+					if pendingDropped > 0 {
+						emitMergedRateLimited(c, pendingDropped)
+						pendingDropped = 0
+					}
+					tl := buildTailLine(raw.data, raw.server.ip, raw.server.port, raw.server.clientID, extract)
+					emitTailLine(c, tl)
+				}
+				if pendingDropped > 0 {
+					emitMergedRateLimited(c, pendingDropped)
 				}
 				sseEvent(c, "done", map[string]interface{}{"servers": len(servers)})
 				c.Writer.Flush()
@@ -347,6 +633,17 @@ func mergedTailSSE(c *gin.Context, servers []string, path, key string, regex boo
 			return
 		}
 	}
+}
+
+// emitMergedRateLimited 多节点模式下的速率限制丢弃汇总推送。
+func emitMergedRateLimited(c *gin.Context, count int) {
+	tl := sseTailLine{
+		Level:        "WARN",
+		Content:      fmt.Sprintf("[rate limited] dropped %d lines", count),
+		RateLimited:  true,
+		DroppedCount: count,
+	}
+	emitTailLine(c, tl)
 }
 
 // sseEvent 发送一个 SSE 事件。

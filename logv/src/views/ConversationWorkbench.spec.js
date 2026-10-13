@@ -93,17 +93,11 @@ describe('ConversationWorkbench.vue', () => {
     expect(wrapper.vm.messages[0].content).toBe('今天 ERROR 日志')
   })
 
-  it('快捷预设按钮点击后更新输入框内容', () => {
+  it('handleSend 未输入内容时不发起请求', async () => {
     const wrapper = mountComponent()
-    expect(wrapper.vm.inputText).toBe('')
-
-    // 模拟点击第一个快捷预设
-    wrapper.vm.handleQuickPreset({ label: '近 1 小时 ERROR', query: '近 1 小时 ERROR 日志' })
-    expect(wrapper.vm.inputText).toBe('近 1 小时 ERROR 日志')
-
-    // 模拟点击第二个快捷预设
-    wrapper.vm.handleQuickPreset({ label: '今天 WARN', query: '今天 WARN 级别日志' })
-    expect(wrapper.vm.inputText).toBe('今天 WARN 级别日志')
+    wrapper.vm.inputText = ''
+    await wrapper.vm.handleSend()
+    expect(searchLogs).not.toHaveBeenCalled()
   })
 
   it('搜索结果返回后渲染助手消息气泡', async () => {

@@ -84,9 +84,24 @@
               <div class="nav-icon-wrap"><el-icon><MagicStick /></el-icon></div>
               <span>模型能力配置</span>
             </el-menu-item>
+          </el-menu>
+        </div>
+
+        <!-- 关于我们 -->
+        <div class="nav-group">
+          <div class="nav-group-title">关于我们</div>
+          <el-menu
+            background-color="transparent"
+            text-color="var(--text-aside)"
+            active-text-color="var(--text-aside-active)"
+          >
             <el-menu-item index="/dashboard">
               <div class="nav-icon-wrap"><el-icon><DataLine /></el-icon></div>
               <span>云顶日志平台</span>
+            </el-menu-item>
+            <el-menu-item @click="onOpenExternal('https://njydsz.com')">
+              <div class="nav-icon-wrap"><el-icon><InfoFilled /></el-icon></div>
+              <span>南京云顶数字</span>
             </el-menu-item>
           </el-menu>
         </div>
@@ -215,6 +230,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   Monitor, DataLine, Cpu, Document, Search, SwitchButton,
   VideoCamera, List, Bell, Share, ChatLineRound, ArrowDown, EditPen, MagicStick,
+  InfoFilled,
 } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage, ElForm, ElFormItem, ElInput } from 'element-plus'
 import { logout, changePassword } from '@/api/auth'
@@ -265,7 +281,10 @@ const breadcrumbHome = computed(() => {
   if (path.startsWith('/alerts') || path.startsWith('/tasks')) {
     return { to: { path: '/alerts' }, label: '监控运维' }
   }
-  if (path.startsWith('/clients') || path.startsWith('/items') || path.startsWith('/model-capability') || path.startsWith('/dashboard')) {
+  if (path.startsWith('/dashboard')) {
+    return { to: { path: '/dashboard' }, label: '关于我们' }
+  }
+  if (path.startsWith('/clients') || path.startsWith('/items') || path.startsWith('/model-capability')) {
     return { to: { path: '/clients' }, label: '系统配置' }
   }
   return { to: { path: '/conversation' }, label: '日志分析' }
@@ -327,6 +346,12 @@ async function submitChangePassword() {
     ElMessage.error(msg)
   } finally {
     passwordLoading.value = false
+  }
+}
+
+function onOpenExternal(url) {
+  if (url) {
+    window.open(url, '_blank', 'noopener,noreferrer')
   }
 }
 

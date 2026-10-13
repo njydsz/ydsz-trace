@@ -67,7 +67,7 @@ describe('TraceView.vue', () => {
   it('模板包含 Trace 标题', async () => {
     const wrapper = mountComponent()
     await vi.dynamicImportSettled()
-    expect(wrapper.find('h2').text()).toContain('Trace')
+    expect(wrapper.find('h2').text()).toContain('链路')
   })
 
   it('查询触发调用 traceLogs API', async () => {

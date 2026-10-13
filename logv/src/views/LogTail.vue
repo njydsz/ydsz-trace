@@ -10,8 +10,8 @@
       </h2>
       <p class="page-header__subtitle">通过 SSE 流式接收实时日志输出，支持正则过滤与日志级别筛选</p>
     </div>
-    <el-card shadow="never" class="max-w-4xl">
-      <el-form :model="form" label-width="100px">
+    <el-card shadow="never" class="!rounded-xl">
+      <el-form :model="form" label-position="top" class="grid-form">
         <el-form-item label="客户端">
           <el-select v-model="form.client" placeholder="选择客户端" style="width: 100%">
             <el-option v-for="c in clients" :key="c.id" :label="`${c.ip}:${c.port}`" :value="c.id" />
@@ -25,34 +25,43 @@
         <el-form-item label="日期">
           <el-date-picker v-model="form.date" type="date" value-format="YYYYMMDD" placeholder="选择日期" style="width: 100%" />
         </el-form-item>
+      </el-form>
+
+      <el-form :model="form" label-position="top">
         <el-form-item label="过滤关键词">
           <el-input v-model="form.key" placeholder="留空则显示全部" clearable />
         </el-form-item>
-        <el-form-item label="正则模式">
-          <el-checkbox v-model="form.regex">启用正则匹配</el-checkbox>
-        </el-form-item>
-        <el-form-item label="日志级别">
-          <el-select v-model="form.level" placeholder="不过滤" clearable style="width: 100%">
-            <el-option label="DEBUG" value="DEBUG" />
-            <el-option label="INFO" value="INFO" />
-            <el-option label="WARN" value="WARN" />
-            <el-option label="ERROR" value="ERROR" />
-            <el-option label="FATAL" value="FATAL" />
-          </el-select>
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :icon="VideoPlay" :disabled="!canStart" @click="startTail">
-            开始追踪
-          </el-button>
-          <el-button :icon="VideoPause" :disabled="!streaming" @click="stopTail">
-            停止追踪
-          </el-button>
-          <el-button :icon="Delete" @click="clearLog">清空</el-button>
-          <el-button :icon="paused ? Check : VideoPause" :disabled="!streaming" @click="togglePause">
-            {{ paused ? '恢复' : '暂停接收' }}
-          </el-button>
-        </el-form-item>
       </el-form>
+
+      <div class="flex flex-wrap items-center gap-3 pb-3">
+        <el-checkbox v-model="form.regex">
+          <span class="text-sm">正则匹配</span>
+        </el-checkbox>
+        <el-select v-model="form.level" placeholder="不过滤级别" clearable style="width: 140px">
+          <el-option label="DEBUG" value="DEBUG" />
+          <el-option label="INFO" value="INFO" />
+          <el-option label="WARN" value="WARN" />
+          <el-option label="ERROR" value="ERROR" />
+          <el-option label="FATAL" value="FATAL" />
+        </el-select>
+        <div class="flex items-center gap-2">
+          <span class="text-sm text-gray-500">模板提取</span>
+          <el-switch v-model="form.extractTemplate" active-text="提取" inactive-text="完整" />
+        </div>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <el-button type="primary" :icon="VideoPlay" :disabled="!canStart" @click="startTail">
+          开始追踪
+        </el-button>
+        <el-button :icon="VideoPause" :disabled="!streaming" @click="stopTail">
+          停止追踪
+        </el-button>
+        <el-button :icon="Delete" @click="clearLog">清空</el-button>
+        <el-button :icon="paused ? Check : VideoPause" :disabled="!streaming" @click="togglePause">
+          {{ paused ? '恢复' : '暂停接收' }}
+        </el-button>
+      </div>
     </el-card>
 
     <el-card shadow="never" class="mt-4">
@@ -64,6 +73,9 @@
               {{ streaming ? (paused ? '已暂停' : '追踪中') : '已停止' }}
             </el-tag>
             <span class="text-gray-400 text-sm">显示行数: {{ displayLines.length }} / 总计 {{ totalCount }}</span>
+            <el-tag v-if="rateLimitedCount > 0" type="warning" size="small" class="ml-2">
+              速率限制丢弃: {{ rateLimitedCount }} 行
+            </el-tag>
           </div>
         </div>
       </template>
@@ -75,7 +87,12 @@
           :class="getLineClass(line)"
         >
           <span class="text-gray-500 mr-2 select-none">{{ sortedIndexStart + idx + 1 }}</span>
-          <span class="log-content">{{ line }}</span>
+          <template v-if="isMultiNode">
+            <span class="text-blue-400 mr-1 text-xs font-mono">{{ line.ip }}:{{ line.port }}</span>
+            <span v-if="line.rateLimited" class="text-yellow-400 mr-1 text-xs">[限速丢弃 {{ line.droppedCount }}]</span>
+            <span v-else-if="line.template && form.extractTemplate" class="text-purple-300 mr-1 text-xs">{{ line.template }}</span>
+          </template>
+          <span class="log-content">{{ line.rateLimited ? line.content : (line.content || line) }}</span>
           <el-button
             :icon="CopyDocument"
             size="small"
@@ -121,6 +138,10 @@ const sortedIndexStart = ref(0)
 // 当前 SSE 连接实例
 let currentSSE = null
 let msgCount = 0
+const rateLimitedCount = ref(0)
+
+// 是否是 client_id=0 的多节点模式
+const isMultiNode = computed(() => form.client === 0)
 
 const form = reactive({
   client: null,
@@ -129,6 +150,7 @@ const form = reactive({
   key: '',
   regex: false,
   level: '',
+  extractTemplate: false,
 })
 
 const canStart = computed(() => form.client && form.item && form.date)
@@ -181,6 +203,7 @@ function startTail() {
       key: form.key,
       regex: form.regex,
       level: form.level,
+      ...(form.extractTemplate ? { extract: 'template' } : {}),
     },
     onMessage: (event, data) => {
       if (!streaming.value) return
@@ -206,10 +229,23 @@ function handleEvent({ event, data }) {
       ElMessage.success('追踪已连接')
       break
     case 'line':
-      msgCount++
-      totalCount.value = msgCount
-      if (!paused.value) {
-        appendToRing(data)
+      try {
+        const parsed = JSON.parse(data)
+        msgCount++
+        totalCount.value = msgCount
+        if (!paused.value) {
+          appendToRing(parsed)
+        }
+        if (parsed.rateLimited && parsed.droppedCount) {
+          rateLimitedCount.value += parsed.droppedCount
+        }
+      } catch {
+        // 兼容旧格式（纯字符串行）
+        msgCount++
+        totalCount.value = msgCount
+        if (!paused.value) {
+          appendToRing(data)
+        }
       }
       break
     case 'error':
@@ -263,11 +299,14 @@ function clearLog() {
   msgCount = 0
   totalCount.value = 0
   sortedIndexStart.value = 0
+  rateLimitedCount.value = 0
 }
 
 function getLineClass(line) {
   if (!line) return ''
-  const upper = line.toUpperCase()
+  const text = typeof line === 'object' ? (line.content || '') : String(line)
+  if (line.rateLimited) return 'text-yellow-500 italic'
+  const upper = text.toUpperCase()
   if (upper.includes('ERROR') || upper.includes('FATAL')) return 'text-red-400'
   if (upper.includes('WARN')) return 'text-yellow-400'
   if (upper.includes('DEBUG')) return 'text-gray-400'
@@ -310,6 +349,24 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* 横向铺满表单 */
+.grid-form {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0 20px;
+}
+.grid-form :deep(.el-form-item__label) {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary, #6b7280);
+  padding-bottom: 4px;
+}
+@media (max-width: 768px) {
+  .grid-form {
+    grid-template-columns: 1fr;
+  }
+}
+
 .log-viewer::-webkit-scrollbar {
   width: 6px;
 }

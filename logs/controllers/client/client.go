@@ -244,10 +244,21 @@ func extractClientIP(c *gin.Context) string {
 }
 
 // shouldAutoCreateClient 判断是否允许自注册时自动创建客户端。
-// 默认返回 false（强制预注册）。仅当环境变量 YDSZ_AUTO_CREATE_CLIENT=true 时开启。
+// 优先级：环境变量 YDSZ_AUTO_CREATE_CLIENT > 配置文件 auto_create_client > 默认 false。
 // 符合 PRD §1.2 的注册安全要求（防止恶意节点自注册）。
-func shouldAutoCreateClient() bool {
-	return os.Getenv("YDSZ_AUTO_CREATE_CLIENT") == "true"
+func shouldAutoCreateClient(c *gin.Context) bool {
+	if os.Getenv("YDSZ_AUTO_CREATE_CLIENT") == "true" {
+		return true
+	}
+	cfg, exists := c.Get("cfg")
+	if exists {
+		if conf, ok := cfg.(*config.Config); ok {
+			if v := conf.StringOr("auto_create_client", ""); v == "true" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Register 接收 logc 代理自注册请求。
@@ -324,7 +335,7 @@ func handleTraditionalRegister(c *gin.Context, ip, port, vKey, localLogcPort str
 			return
 		}
 		log.Printf("[register] 传统客户端上线 ip=%s port=%s id=%d", ip, port, client.Id)
-	} else if shouldAutoCreateClient() {
+	} else if shouldAutoCreateClient(c) {
 		// 兼容性开关开启时允许自建（仅限开发/测试场景）
 		nowS := nowStr()
 		newClient := &models.TClient{

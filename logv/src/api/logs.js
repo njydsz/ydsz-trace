@@ -29,3 +29,10 @@ export function traceLogs(payload) {
 export function traceWaterfall(payload) {
   return http.post('/logs/trace/waterfall', payload)
 }
+
+// logContext 获取日志行上下文（命中前后 N 行）。
+// @param {number} itemId - 日志项 ID
+// @param {object} params - 查询参数 { clientId, refTime, refLine, before, after, date }
+export function logContext(itemId, params = {}) {
+  return http.get(`/logs/context/${itemId}`, { params })
+}

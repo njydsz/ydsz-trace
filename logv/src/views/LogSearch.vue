@@ -47,8 +47,6 @@
           </el-form-item>
         </el-form>
 
-        <el-divider class="!my-4" />
-
         <el-form :model="form" label-position="top">
           <el-form-item label="关键词">
             <div class="relative w-full">
@@ -105,8 +103,6 @@
             />
           </div>
         </div>
-
-        <el-divider class="!my-4" />
 
         <div class="flex items-center gap-3">
           <el-button type="primary" :icon="Search" :loading="searching" @click="onSearch">

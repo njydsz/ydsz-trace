@@ -42,7 +42,7 @@ function mountComponent() {
         'el-form-item': { template: '<div><slot /></div>' },
         'el-select': { template: '<select><slot /></select>', props: ['modelValue'] },
         'el-option': { template: '<option />', props: ['label', 'value'] },
-        'el-input': { template: '<input />', props: ['modelValue'] },
+        'el-input': { template: '<div><input /></div>', props: ['modelValue', 'placeholder', 'type', 'rows', 'autosize'] },
         'el-input-number': { template: '<input type="number" />', props: ['modelValue'] },
         'el-checkbox': { template: '<input type="checkbox" />', props: ['modelValue'] },
         'el-date-picker': { template: '<input />', props: ['modelValue'] },

@@ -12,7 +12,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -35,26 +34,6 @@ import (
 
 // 默认速率限制器在 pkg/ratelimit 包中初始化（进程内存版）。
 // 多副本部署时，应在 main 中调用 ratelimit.SetDefault 切换为 Redis 版本。
-
-// extractClientIP 从 gin 上下文中提取客户端真实 IP。
-func extractClientIP(c *gin.Context) string {
-	// 优先从 X-Forwarded-For 取（反向代理场景）
-	if xff := c.Request.Header.Get("X-Forwarded-For"); xff != "" {
-		ips := strings.Split(xff, ",")
-		if len(ips) > 0 {
-			return strings.TrimSpace(ips[0])
-		}
-	}
-	if xrip := c.Request.Header.Get("X-Real-IP"); xrip != "" {
-		return strings.TrimSpace(xrip)
-	}
-	// 直连场景
-	ip, _, err := net.SplitHostPort(c.Request.RemoteAddr)
-	if err != nil {
-		return c.Request.RemoteAddr
-	}
-	return ip
-}
 
 // User 用户登录凭证（请求体）。
 type User struct {
@@ -108,6 +87,27 @@ func getAdminPassword(cfg *config.Config) string {
 		return v
 	}
 	return cfg.StringOr("password", "change_me_production")
+}
+
+// extractClientIP 从 gin 上下文提取客户端真实 IP（供登录速率限制使用）。
+// 仅在 YDSZ_TRUSTED_PROXY 设置时信任代理头，防止 IP 伪造攻击。
+func extractClientIP(c *gin.Context) string {
+	if os.Getenv("YDSZ_TRUSTED_PROXY") != "" {
+		if xff := c.GetHeader("X-Forwarded-For"); xff != "" {
+			if idx := strings.Index(xff, ","); idx > 0 {
+				return strings.TrimSpace(xff[:idx])
+			}
+			return strings.TrimSpace(xff)
+		}
+		if xrip := c.GetHeader("X-Real-IP"); xrip != "" {
+			return strings.TrimSpace(xrip)
+		}
+	}
+	addr := c.Request.RemoteAddr
+	if idx := strings.LastIndex(addr, ":"); idx > 0 {
+		return addr[:idx]
+	}
+	return addr
 }
 
 // logvRoot 前端构建产物根目录（环境变量 YDSZ_LOGV_ROOT > 默认 logv/dist）。

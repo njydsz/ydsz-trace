@@ -12,7 +12,7 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    port: 2022,
     proxy: {
       '/admin': { target: 'http://localhost:2021', changeOrigin: true },
       '/client': { target: 'http://localhost:2021', changeOrigin: true },

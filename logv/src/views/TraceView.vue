@@ -10,9 +10,9 @@
       </h2>
       <p class="page-header__subtitle">根据 TraceId 跨节点聚合调用链日志，支持分组视图与瀑布视图</p>
     </div>
-    <el-card shadow="never" class="max-w-3xl">
-      <el-form :model="form" label-width="100px">
-        <el-form-item label="Trace ID">
+    <el-card shadow="never" class="!rounded-xl">
+      <el-form :model="form" label-position="top" class="grid-form">
+        <el-form-item label="Trace ID" class="span-2">
           <el-input
             v-model="form.traceId"
             placeholder="输入要追踪的 traceId"
@@ -49,17 +49,20 @@
             <el-option v-for="it in items" :key="it.id" :label="it.itemName" :value="it.id" />
           </el-select>
         </el-form-item>
-        <el-form-item label="模式">
-          <el-checkbox v-model="form.regex">正则匹配</el-checkbox>
-          <span class="text-gray-400 text-sm ml-2">把 traceId 作为正则表达式</span>
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :icon="Link" :loading="loading" @click="onTrace">
-            追踪调用链
-          </el-button>
-          <el-button :icon="Refresh" @click="resetForm">清空</el-button>
-        </el-form-item>
       </el-form>
+
+      <div class="flex flex-wrap items-center gap-3 py-3">
+        <el-checkbox v-model="form.regex">
+          <span class="text-sm">正则匹配<span class="text-gray-400 ml-1">把 traceId 作为正则表达式</span></span>
+        </el-checkbox>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <el-button type="primary" :icon="Link" :loading="loading" @click="onTrace">
+          追踪调用链
+        </el-button>
+        <el-button :icon="Refresh" @click="resetForm">清空</el-button>
+      </div>
     </el-card>
 
     <el-card v-if="result" shadow="never" class="mt-6">
@@ -243,6 +246,30 @@ function getLineClass(line) {
 </script>
 
 <style scoped>
+/* 横向铺满表单 */
+.grid-form {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0 20px;
+}
+.grid-form .span-2 {
+  grid-column: span 2;
+}
+.grid-form :deep(.el-form-item__label) {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary, #6b7280);
+  padding-bottom: 4px;
+}
+@media (max-width: 768px) {
+  .grid-form {
+    grid-template-columns: 1fr;
+  }
+  .grid-form .span-2 {
+    grid-column: span 1;
+  }
+}
+
 .log-line {
   white-space: pre-wrap;
   word-break: break-all;

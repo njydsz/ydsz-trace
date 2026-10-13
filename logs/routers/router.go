@@ -11,7 +11,9 @@
 package routers
 
 import (
+	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -57,9 +59,9 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	// 会话中间件：为每个请求加载/创建会话。
 	r.Use(sessionMgr.Middleware())
 
-	// CORS 白名单从 YDSZ_CORS_ORIGINS 环境变量读取。
+	// CORS 白名单：环境变量 > 本地开发放行所有 localhost 端口。
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     getCORSOrigins(),
+		AllowOriginFunc:  isAllowedOrigin,
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Authorization", "Content-Type", "X-Token", "X-Requested-With"},
 		ExposeHeaders:    []string{"Content-Length", "Content-Type"},
@@ -108,6 +110,7 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	r.GET("/logs/queryItems", logs.QueryItem)
 	r.GET("/logs/tasks/:taskNo", logs.QueryTask)
 	r.GET("/logs/tasks", logs.ListTasks)
+	r.GET("/logs/context/:itemId", logs.Context)
 	r.GET("/logs/alerts/rules", alert.ListRules)
 	r.GET("/logs/alerts/rules/:id", alert.GetRule)
 	r.GET("/logs/alerts/events", alert.ListEvents)
@@ -181,13 +184,42 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	return r
 }
 
-// getCORSOrigins 从 YDSZ_CORS_ORIGINS 环境变量解析 CORS 白名单。
-func getCORSOrigins() []string {
-	origins := os.Getenv("YDSZ_CORS_ORIGINS")
-	if origins == "" {
-		return []string{"http://localhost:*", "http://127.0.0.1:*"}
+// localOriginPattern 匹配 http(s)://localhost:port 和 http(s)://127.0.0.1:port。
+var localOriginPattern = regexp.MustCompile(`^https?://(localhost|127\.0\.0\.1)(:\d+)?$`)
+
+// allowedExplicitOrigins 缓存从 YDSZ_CORS_ORIGINS 环境变量解析的精确白名单。
+var allowedExplicitOrigins = func() map[string]bool {
+	env := os.Getenv("YDSZ_CORS_ORIGINS")
+	m := make(map[string]bool)
+	if env == "" {
+		return m
 	}
-	return strings.Split(origins, ",")
+	for _, o := range strings.Split(env, ",") {
+		if t := strings.TrimSpace(o); t != "" {
+			m[t] = true
+		}
+	}
+	return m
+}()
+
+// isAllowedOrigin 校验 CORS 请求来源是否被允许。
+// 1) 未设置 YDSZ_CORS_ORIGINS 时：放行所有 localhost/127.0.0.1（含任意端口），便于本地开发调试。
+// 2) 已设置 YDSZ_CORS_ORIGINS 时：仅放行白名单中的精确 origin。
+func isAllowedOrigin(origin string) bool {
+	if len(allowedExplicitOrigins) > 0 {
+		return allowedExplicitOrigins[origin]
+	}
+	// 未配置白名单时，额外校验 localhost 形式（防止直接放行了其他 origin）
+	if localOriginPattern.MatchString(origin) {
+		return true
+	}
+	// 兜底：校验 host 部分（无端口模式的变体）
+	if u, err := url.Parse(origin); err == nil {
+		if u.Hostname() == "localhost" || u.Hostname() == "127.0.0.1" {
+			return true
+		}
+	}
+	return false
 }
 
 // publicPaths 是不需要鉴权的公开路径白名单。
