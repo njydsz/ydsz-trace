@@ -85,7 +85,7 @@ func DashboardInsightHandler(c *gin.Context) {
 func queryTemplateTrends(itemID int64, timeRange string) []TemplateTrendItem {
 	if itemID <= 0 {
 		// 未指定 item 时使用第 1 个可用 item
-		items := models.ReadAllItems()
+		items, _ := models.QueryAllItem()
 		if len(items) > 0 {
 			itemID = items[0].Id
 		}
@@ -108,27 +108,30 @@ func queryTemplateTrends(itemID int64, timeRange string) []TemplateTrendItem {
 	return items
 }
 
-// queryErrorTimeline 查询近 1 小时 ERROR 事件时间线（5min 桶聚合）。
+// queryErrorTimeline 查询近 1 小时事件时间线（5min 桶聚合）。
 func queryErrorTimeline() []ErrorTimelinePoint {
 	bucketStart := time.Now().Add(-1 * time.Hour)
-	minute := (bucketStart.Minute() / 5) * 5
-	bucket := strconv.Itoa(bucketStart.Year()) +
-		strconv.Itoa(int(bucketStart.Month())) +
-		strconv.Itoa(bucketStart.Day()) +
-		strconv.Itoa(bucketStart.Hour()) +
-		strconv.Itoa(minute)
+	var bucketStr string
+	if b, err := models.TimeBucket(bucketStart.Format("2006-01-02 15:04:05")); err == nil {
+		bucketStr = b
+	} else {
+		return []ErrorTimelinePoint{}
+	}
 
 	var rows []struct {
 		TimeBucket string `db:"time_bucket"`
-		Count     int    `db:"count"`
+		Count      int    `db:"count"`
 	}
+	// 按 error 关键词过滤：sample 中含 ERROR 视为异常事件。
 	err := models.DB.Select(&rows,
 		`SELECT time_bucket, SUM(count) AS count
 		 FROM t_pattern_stat
-		 WHERE time_bucket >= ?
+		 WHERE time_bucket >= ? AND (
+		 	sample LIKE '%ERROR%' OR sample LIKE '%FATAL%'
+		 )
 		 GROUP BY time_bucket
 		 ORDER BY time_bucket ASC`,
-		bucket)
+		bucketStr)
 	if err != nil {
 		return []ErrorTimelinePoint{}
 	}
@@ -136,17 +139,38 @@ func queryErrorTimeline() []ErrorTimelinePoint {
 	for _, r := range rows {
 		points = append(points, ErrorTimelinePoint{
 			TimeBucket: formatBucket(r.TimeBucket),
-			Count:     r.Count,
+			Count:      r.Count,
 		})
 	}
 	return points
+}
+
+// queryRecentTasksStats 查询最近 N 条任务统计。
+func queryRecentTasksStats(limit int) TasksRecentStat {
+	stat := TasksRecentStat{}
+	// QueryTasks 按 id 倒序，取第一页
+	page := models.QueryTasks(1, limit, "")
+	tasks, ok := page.List.([]models.TTask)
+	if !ok {
+		return stat
+	}
+	for _, t := range tasks {
+		stat.Total++
+		switch t.Status {
+		case models.TaskStatusSuccess:
+			stat.Success++
+		case models.TaskStatusFailed:
+			stat.Failed++
+		}
+	}
+	return stat
 }
 
 // queryServiceHealth 查询服务健康度。
 func queryServiceHealth() ServiceHealthInfo {
 	health := ServiceHealthInfo{}
 
-	clients := models.QueryAllClientSafe()
+	clients, _ := models.QueryAllClient()
 	health.TotalClients = len(clients)
 	for _, cl := range clients {
 		online := cl.Online == "1"
@@ -160,19 +184,9 @@ func queryServiceHealth() ServiceHealthInfo {
 		})
 	}
 
-	items := models.ReadAllItems()
+	items, _ := models.QueryAllItem()
 	health.TotalItems = len(items)
-
-	tasks := models.QueryRecentTasks(100)
-	for _, t := range tasks {
-		health.TasksRecent.Total++
-		switch t.Status {
-		case models.TaskStatusSuccess:
-			health.TasksRecent.Success++
-		case models.TaskStatusFailed:
-			health.TasksRecent.Failed++
-		}
-	}
+	health.TasksRecent = queryRecentTasksStats(100)
 
 	return health
 }

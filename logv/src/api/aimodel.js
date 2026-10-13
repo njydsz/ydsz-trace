@@ -32,3 +32,9 @@ export function deleteModelCapability(id) {
 export function toggleModelCapability(id, enabled) {
   return http.post('/admin/model-capability/toggle', { id, enabled })
 }
+
+// selfCheckModelCapability 连通性自检：探测指定模型是否可达并返回延迟。
+// @param {number} id - 模型能力配置 ID
+export function selfCheckModelCapability(id) {
+  return http.post('/admin/model-capability/selfcheck', { id })
+}

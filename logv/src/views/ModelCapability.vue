@@ -75,6 +75,19 @@
             />
           </template>
         </el-table-column>
+        <el-table-column label="连通性" width="90" align="center">
+          <template #default="{ row }">
+            <el-button
+              link
+              size="small"
+              :type="row._selfCheckStatus === 'ok' ? 'success' : row._selfCheckStatus === 'fail' ? 'danger' : 'info'"
+              :loading="row._selfChecking"
+              @click="handleSelfCheck(row)"
+            >
+              {{ selfCheckLabel(row) }}
+            </el-button>
+          </template>
+        </el-table-column>
         <el-table-column label="操作" width="160" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" :icon="Edit" @click="openEdit(row)">编辑</el-button>
@@ -183,6 +196,7 @@ import {
   updateModelCapability,
   deleteModelCapability,
   toggleModelCapability,
+  selfCheckModelCapability,
 } from '@/api/aimodel'
 
 const list = ref([])
@@ -368,6 +382,40 @@ async function remove(row) {
     load()
   } else {
     ElMessage.error(data.message || data.msg || '删除失败')
+  }
+}
+
+// selfCheckLabel 根据自检状态返回按钮文本。
+function selfCheckLabel(row) {
+  if (row._selfChecking) return '检测中'
+  if (row._selfCheckStatus === 'ok') return '✓ 可达'
+  if (row._selfCheckStatus === 'fail') return '✗ 不可达'
+  return '自检'
+}
+
+// handleSelfClick 执行连通性自检并展示结果提示。
+async function handleSelfCheck(row) {
+  row._selfChecking = true
+  try {
+    const { data } = await selfCheckModelCapability(row.id)
+    if (data.code === 0 && data.data) {
+      const reachable = data.data.reachable
+      row._selfCheckStatus = reachable ? 'ok' : 'fail'
+      const latency = data.data.latencyMs !== undefined && data.data.latencyMs !== null ? ` (${data.data.latencyMs}ms)` : ''
+      if (reachable) {
+        ElMessage.success(`模型「${row.name}」可达${latency}：${data.data.message}`)
+      } else {
+        ElMessage.error(`模型「${row.name}」不可达：${data.data.message}`)
+      }
+    } else {
+      row._selfCheckStatus = 'fail'
+      ElMessage.error(data.message || '自检失败')
+    }
+  } catch (err) {
+    row._selfCheckStatus = 'fail'
+    ElMessage.error('自检请求失败：' + (err?.message || err))
+  } finally {
+    row._selfChecking = false
   }
 }
 

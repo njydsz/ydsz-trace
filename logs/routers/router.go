@@ -112,6 +112,7 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	r.GET("/logs/tasks/:taskNo/progress", logs.QueryTaskProgress)
 	r.GET("/logs/tasks", logs.ListTasks)
 	r.GET("/logs/context/:itemId", logs.Context)
+	r.GET("/logs/dashboard/insight", logs.DashboardInsightHandler)
 	r.GET("/logs/alerts/rules", alert.ListRules)
 	r.GET("/logs/alerts/rules/:id", alert.GetRule)
 	r.GET("/logs/alerts/events", alert.ListEvents)
@@ -179,6 +180,7 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 		adm.PUT("/model-capability", admin.UpdateModelCapability)
 		adm.POST("/model-capability/toggle", admin.ToggleModelCapability)
 		adm.POST("/model-capability/delete", admin.DeleteModelCapability)
+		adm.POST("/model-capability/selfcheck", admin.SelfCheckModelCapability)
 	}
 
 	// SPA 回退：未命中 API 的 GET/HEAD 请求回退到 index.html。

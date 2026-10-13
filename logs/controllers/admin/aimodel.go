@@ -7,7 +7,11 @@
 package admin
 
 import (
+	"context"
+	"io"
+	"net/http"
 	"strconv"
+	"time"
 
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
@@ -306,6 +310,167 @@ func ToggleModelCapability(c *gin.Context) {
 		return
 	}
 	api.Success(c, "操作成功", nil)
+}
+
+// modelCapabilitySelfCheckReq 连通性自检请求体。
+type modelCapabilitySelfCheckReq struct {
+	ID int64 `json:"id" binding:"required"`
+}
+
+// selfCheckResult 自检结果。
+type selfCheckResult struct {
+	Reachable bool   `json:"reachable"`
+	LatencyMs int64  `json:"latencyMs"`
+	Message   string `json:"message"`
+}
+
+// @Summary 连通性自检
+// @Description 对指定模型能力配置进行一次轻量级 API 探测，返回是否可达、往返延迟与提示信息。
+// @Tags ModelCapability
+// @Accept json
+// @Produce json
+// @Param body body modelCapabilitySelfCheckReq true "配置 ID"
+// @Success 200 {object} api.Response "自检结果"
+// @Failure 400 {object} api.Response "参数错误"
+// @Failure 401 {object} api.Response "未登录"
+// @Failure 404 {object} api.Response "配置不存在"
+// @Router /admin/model-capability/selfcheck [post]
+func SelfCheckModelCapability(c *gin.Context) {
+	var req modelCapabilitySelfCheckReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		api.Fail(c, api.CodeBadRequest, "请求参数错误: ID 必填")
+		return
+	}
+	if req.ID <= 0 {
+		api.Fail(c, api.CodeBadRequest, "无效的配置 ID")
+		return
+	}
+
+	cfg, err := models.GetModelCapabilityByID(req.ID)
+	if err != nil {
+		api.Fail(c, api.CodeNotFound, "模型能力配置不存在")
+		return
+	}
+
+	result := performSelfCheck(cfg)
+	api.Success(c, "自检完成", result)
+}
+
+// performSelfCheck 根据能力类型选择合适的探测方式。
+func performSelfCheck(cfg *models.LogModelCapability) selfCheckResult {
+	switch cfg.Capability {
+	case "embedding":
+		return selfCheckEmbedding(cfg)
+	case "rerank":
+		return selfCheckRerank(cfg)
+	default:
+		return selfCheckChat(cfg)
+	}
+}
+
+// selfCheckChat 对话模型：请求 /v1/models 或 chat/completions 接口。
+func selfCheckChat(cfg *models.LogModelCapability) selfCheckResult {
+	url := resolveURL(cfg, "/v1/models")
+	if url == "" {
+		return selfCheckResult{Reachable: false, Message: "无法构造 API 端点，请检查 baseUrl"}
+	}
+	return httpPing(url, cfg)
+}
+
+// selfCheckEmbedding 嵌入模型：调用 /v1/embeddings 接口发送一个 token 检测连通性。
+func selfCheckEmbedding(cfg *models.LogModelCapability) selfCheckResult {
+	url := resolveURL(cfg, "/v1/embeddings")
+	if url == "" {
+		return selfCheckResult{Reachable: false, Message: "无法构造 API 端点，请检查 baseUrl"}
+	}
+	return httpPing(url, cfg)
+}
+
+// selfCheckRerank 重排序模型：尝试 POST 一个轻量请求到 /rerank 路径。
+func selfCheckRerank(cfg *models.LogModelCapability) selfCheckResult {
+	url := resolveURL(cfg, "/rerank")
+	if url == "" {
+		return selfCheckResult{Reachable: false, Message: "无法构造 API 端点，请检查 baseUrl"}
+	}
+	return httpPing(url, cfg)
+}
+
+// resolveURL 拼接完整 API 端点 URL。
+func resolveURL(cfg *models.LogModelCapability, path string) string {
+	base := cfg.BaseUrl
+	if base == "" {
+		// 默认 OpenAI 兼容端点
+		switch cfg.Provider {
+		case "openai":
+			base = "https://api.openai.com"
+		case "anthropic":
+			base = "https://api.anthropic.com"
+		case "ollama":
+			base = "http://localhost:11434"
+		default:
+			return ""
+		}
+	}
+	// 去除末尾斜杠后拼接
+	if len(base) > 0 && base[len(base)-1] == '/' {
+		base = base[:len(base)-1]
+	}
+	return base + path
+}
+
+// httpPing 发送轻量 GET 请求测试可达性，返回延迟和状态。
+func httpPing(url string, cfg *models.LogModelCapability) selfCheckResult {
+	return probeEndpoint(url, cfg, false)
+}
+
+// probeEndpointProbeTimeout 探测请求超时。
+const probeEndpointProbeTimeout = 10 * time.Second
+
+// probeEndpoint 执行实际 HTTP 探测。
+func probeEndpoint(url string, cfg *models.LogModelCapability, fullTest bool) selfCheckResult {
+	ctx, cancel := context.WithTimeout(context.Background(), probeEndpointProbeTimeout)
+	defer cancel()
+
+	method := http.MethodGet
+	var body io.Reader
+	if fullTest && (cfg.Capability == "embedding" || cfg.Capability == "rerank") {
+		method = http.MethodPost
+		body = nil
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	if err != nil {
+		return selfCheckResult{Reachable: false, Message: "构造探测请求失败: " + err.Error()}
+	}
+	if cfg.ApiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.ApiKey)
+	}
+	req.Header.Set("User-Agent", "YdszTrace/2.0 self-check")
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	latency := time.Since(start).Milliseconds()
+	if err != nil {
+		return selfCheckResult{Reachable: false, LatencyMs: latency, Message: "连接失败: " + err.Error()}
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 500 {
+		return selfCheckResult{
+			Reachable: true,
+			LatencyMs: latency,
+			Message:   "OK (HTTP " + strconv.Itoa(resp.StatusCode) + ")",
+		}
+	}
+	return selfCheckResult{
+		Reachable: false,
+		LatencyMs: latency,
+		Message:   "异常响应 (HTTP " + strconv.Itoa(resp.StatusCode) + ")",
+	}
 }
 
 // isValidCapability 校验能力类型是否合法。

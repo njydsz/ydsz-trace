@@ -42,3 +42,9 @@ export function logContext(itemId, params = {}) {
 export function queryTaskProgress(taskNo) {
   return http.get(`/logs/tasks/${taskNo}/progress`)
 }
+
+// dashboardInsight 获取洞察看板数据（模板趋势/异常事件时间线/服务健康度）。
+// @param {object} params - { timeRange, itemId }
+export function dashboardInsight(params = {}) {
+  return http.get('/logs/dashboard/insight', { params })
+}

@@ -13,67 +13,8 @@
       </div>
     </div>
 
-    <!-- 统计卡片 -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-      <!-- 客户端总数 -->
-      <div class="stat-card stat-card--primary rounded-xl p-5">
-        <div class="flex items-start justify-between">
-          <div>
-            <div class="stat-label">客户端总数</div>
-            <div class="stat-value mt-2">
-              <el-skeleton :rows="0" animated v-if="loading" style="width: 80px; height: 40px;" />
-              <span v-else>{{ stats.clients }}</span>
-            </div>
-          </div>
-          <div class="stat-icon stat-icon--primary flex items-center justify-center rounded-xl">
-            <el-icon :size="22"><Cpu /></el-icon>
-          </div>
-        </div>
-        <div class="stat-footer mt-3">
-          <span class="stat-footer-text">已注册节点</span>
-        </div>
-      </div>
-
-      <!-- 在线客户端 -->
-      <div class="stat-card stat-card--success rounded-xl p-5">
-        <div class="flex items-start justify-between">
-          <div>
-            <div class="stat-label">在线客户端</div>
-            <div class="stat-value mt-2">
-              <el-skeleton :rows="0" animated v-if="loading" style="width: 80px; height: 40px;" />
-              <span v-else>{{ stats.online }}</span>
-            </div>
-          </div>
-          <div class="stat-icon stat-icon--success flex items-center justify-center rounded-xl">
-            <el-icon :size="22"><Connection /></el-icon>
-          </div>
-        </div>
-        <div class="stat-footer mt-3">
-          <span class="stat-badge" :class="stats.online > 0 ? 'stat-badge--online' : 'stat-badge--offline'">
-            {{ stats.online > 0 ? '运行中' : '无连接' }}
-          </span>
-        </div>
-      </div>
-
-      <!-- 日志项总数 -->
-      <div class="stat-card stat-card--info rounded-xl p-5">
-        <div class="flex items-start justify-between">
-          <div>
-            <div class="stat-label">日志项总数</div>
-            <div class="stat-value mt-2">
-              <el-skeleton :rows="0" animated v-if="loading" style="width: 80px; height: 40px;" />
-              <span v-else>{{ stats.items }}</span>
-            </div>
-          </div>
-          <div class="stat-icon stat-icon--info flex items-center justify-center rounded-xl">
-            <el-icon :size="22"><Document /></el-icon>
-          </div>
-        </div>
-        <div class="stat-footer mt-3">
-          <span class="stat-footer-text">可检索日志源</span>
-        </div>
-      </div>
-    </div>
+    <!-- 洞察看板（模板趋势 / 异常事件时间线 / 服务健康度总览） -->
+    <DashboardInsight />
 
     <!-- 快捷操作 + 关于 -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -165,47 +106,21 @@
 
 <script setup>
 /**
- * 控制台首页 v2.0 — 展示统计卡片（客户端/在线数/日志项总数）、快捷操作面板和平台信息。
- * 增强版：添加品牌色卡片、彩色图标背景、快捷操作按钮、技术栈标签。
+ * 控制台首页 v2.0 — 洞察看板（模板趋势 + 异常事件时间线 + 服务健康度总览）
+ * + 快捷操作面板 + 平台关于信息。
  */
-import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  Cpu, Document, Connection, Search, Share, Bell,
+  Search, Share, Bell,
   ChatLineRound, Lightning, InfoFilled, DataAnalysis, Position,
 } from '@element-plus/icons-vue'
-import { queryAllClients } from '@/api/client'
-import { queryAllItems } from '@/api/item'
+import DashboardInsight from '@/components/DashboardInsight.vue'
 
 const router = useRouter()
-const stats = ref({ clients: 0, online: 0, items: 0 })
-const loading = ref(true)
-
-async function loadStats() {
-  try {
-    const c = await queryAllClients()
-    const arr = Array.isArray(c.data) ? c.data : c.data?.data || []
-    stats.value.clients = arr.length
-    stats.value.online = arr.filter((x) => x.online === '1').length
-  } catch {
-    /* 忽略统计错误 */
-  }
-  try {
-    const i = await queryAllItems()
-    const arr = Array.isArray(i.data) ? i.data : i.data?.data || []
-    stats.value.items = arr.length
-  } catch {
-    /* 忽略统计错误 */
-  } finally {
-    loading.value = false
-  }
-}
 
 function go(path) {
   router.push(path)
 }
-
-onMounted(loadStats)
 </script>
 
 <style scoped>
@@ -241,74 +156,6 @@ onMounted(loadStats)
   border-radius: 20px;
   align-items: center;
   justify-content: center;
-}
-
-/* ===== 统计卡片 ===== */
-.stat-card {
-  background: var(--bg-card);
-  border: 1px solid var(--border-card);
-  box-shadow: var(--shadow-card);
-  transition: box-shadow var(--transition-fast), transform var(--transition-fast);
-}
-.stat-card:hover {
-  box-shadow: var(--shadow-card-hover);
-  transform: translateY(-2px);
-}
-.stat-label {
-  font-size: 13px;
-  color: var(--text-secondary);
-  font-weight: 500;
-}
-.stat-value {
-  font-size: 36px;
-  font-weight: 700;
-  color: var(--text-primary);
-  line-height: 1;
-}
-
-/* 图标背景 */
-.stat-icon {
-  width: 48px;
-  height: 48px;
-  color: white;
-}
-.stat-icon--primary {
-  background: linear-gradient(135deg, var(--brand-500), var(--brand-700));
-  box-shadow: 0 4px 10px rgba(37, 99, 235, 0.25);
-}
-.stat-icon--success {
-  background: linear-gradient(135deg, #10b981, #059669);
-  box-shadow: 0 4px 10px rgba(16, 185, 129, 0.25);
-}
-.stat-icon--info {
-  background: linear-gradient(135deg, #6366f1, #4f46e5);
-  box-shadow: 0 4px 10px rgba(99, 102, 241, 0.25);
-}
-
-/* 卡片底部 */
-.stat-footer {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.stat-footer-text {
-  font-size: 12px;
-  color: var(--text-muted);
-}
-.stat-badge {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 8px;
-  border-radius: var(--radius-full);
-  line-height: 20px;
-}
-.stat-badge--online {
-  background: var(--success-light);
-  color: #059669;
-}
-.stat-badge--offline {
-  background: var(--danger-light);
-  color: #dc2626;
 }
 
 /* ===== 快捷操作 ===== */
