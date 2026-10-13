@@ -26,6 +26,7 @@ import (
 	pkgauth "ydsz-trace/pkg/auth"
 	"ydsz-trace/pkg/config"
 	"ydsz-trace/pkg/metrics"
+	"ydsz-trace/pkg/middleware"
 	"ydsz-trace/pkg/session"
 
 	"github.com/gin-contrib/cors"
@@ -43,6 +44,9 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	r := gin.New()
 	// 访问日志 + panic 恢复。
 	r.Use(gin.Logger(), gin.Recovery())
+
+	// TraceId 注入（PRD FR-1405）：为每个请求生成/透传 traceId。
+	r.Use(middleware.TraceID())
 
 	// 配置注入：下游 handler 通过 c.MustGet("cfg") 获取配置。
 	r.Use(func(c *gin.Context) {
@@ -76,7 +80,7 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	r.GET("/admin/exit", admin.Exit)
 	r.POST("/admin/exit", admin.Exit)
 
-	// 控制台（SPA 入口，由 Vite 构建的 web/dist 提供）
+	// 控制台（SPA 入口，由 Vite 构建的 logv/dist 提供）
 	r.GET("/admin/console", admin.Console)
 
 	// logc 代理注册接口（代理调用，无 session，需放行）
@@ -86,103 +90,89 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	// viewer：只读查询（可浏览资源与搜索日志）
 	// operator：写操作（增删改资源、触发检索任务 / 告警配置）
 	// admin：用户/角色管理（预留，当前仅一个管理账号，全部对应到 admin）
-	auth := r.Group("")
-	auth.Use(filterAuth)
-	auth.Use(csrfProtection)
+	//
+	// 注意：不使用 r.Group("") 模式，Gin 1.12 中该模式会导致部分注册路由
+	// 在运行阶段回落到 NoRoute handler。改为直接注册在 r 上 + 路径感知中间件。
+
+	// 鉴权中间件：对非公开路径统一应用 filterAuth + csrfProtection。
+	r.Use(authBlockMiddleware)
+
+	// ━━ viewer 级别（只读）━━
+	r.GET("/client/query", client.Query)
+	r.GET("/client/queryAll", client.QueryAll)
+	r.GET("/client/queryPage", client.QueryPage)
+	r.GET("/item/query", item.Query)
+	r.GET("/item/queryAll", item.QueryAll)
+	r.GET("/item/queryPage", item.QueryPage)
+	r.GET("/logs/queryClients", logs.QueryClient)
+	r.GET("/logs/queryItems", logs.QueryItem)
+	r.GET("/logs/tasks/:taskNo", logs.QueryTask)
+	r.GET("/logs/tasks", logs.ListTasks)
+	r.GET("/logs/alerts/rules", alert.ListRules)
+	r.GET("/logs/alerts/rules/:id", alert.GetRule)
+	r.GET("/logs/alerts/events", alert.ListEvents)
+	r.GET("/logs/alerts/quota", alert.Quota)
+
+	// ━━ operator 级别（可写资源 + 触发查询）━━
+	r.POST("/client/add", pkgauth.RequireOperator(), client.Add)
+	r.POST("/client/delete", pkgauth.RequireOperator(), client.Delete)
+	r.POST("/client/update", pkgauth.RequireOperator(), client.Update)
+	r.POST("/client/changeStatus", pkgauth.RequireOperator(), client.ChangeClientStatus)
+	r.POST("/item/add", pkgauth.RequireOperator(), item.Add)
+	r.POST("/item/delete", pkgauth.RequireOperator(), item.Delete)
+	r.POST("/item/update", pkgauth.RequireOperator(), item.Update)
+	r.POST("/item/changeStatus", pkgauth.RequireOperator(), item.ChangeItemStatus)
+	r.POST("/logs/query", pkgauth.RequireOperator(), logs.Query)
+	r.POST("/logs/search", pkgauth.RequireOperator(), logs.Search)
+	r.POST("/logs/trace", pkgauth.RequireOperator(), logs.Trace)
+	r.POST("/logs/trace/waterfall", pkgauth.RequireOperator(), logs.TraceWaterfall)
+	r.POST("/logs/stream", pkgauth.RequireOperator(), logs.Stream)
+	r.POST("/logs/tail", pkgauth.RequireOperator(), logs.Tail)
+	r.POST("/logs/tasks/:taskNo/retry", pkgauth.RequireOperator(), logs.RetryTask)
+	r.DELETE("/logs/tasks/:taskNo", pkgauth.RequireOperator(), logs.DeleteTask)
+	r.POST("/logs/alerts/rules", pkgauth.RequireOperator(), alert.AddRule)
+	r.PUT("/logs/alerts/rules/:id", pkgauth.RequireOperator(), alert.UpdateRule)
+	r.DELETE("/logs/alerts/rules/:id", pkgauth.RequireOperator(), alert.DeleteRule)
+	r.POST("/logs/alerts/rules/toggle", pkgauth.RequireOperator(), alert.ToggleRule)
+	r.POST("/logs/alerts/rules/test", pkgauth.RequireOperator(), alert.TestFire)
+	r.DELETE("/logs/alerts/events/:id", pkgauth.RequireOperator(), alert.DeleteEvent)
+
+	// 自助修改密码（任何已登录用户可操作）
+	r.POST("/admin/users/change-password", admin.ChangePassword)
+
+	// 模型能力配置—只读操作（已登录用户可查看）。
+	r.GET("/admin/model-capability/list", admin.ListModelCapabilities)
+	r.GET("/admin/model-capability/:id", admin.GetModelCapability)
+
+	// ━━ admin 级别（用户 / 角色管理）━━
+	adm := r.Group("/admin")
+	adm.Use(pkgauth.RequireRole(pkgauth.RoleAdmin))
 	{
-			// @Tags Client
-		// ━━ viewer 级别（只读）━━
-		auth.GET("/client/query", client.Query)
-		auth.GET("/client/queryAll", client.QueryAll)
-		auth.GET("/client/queryPage", client.QueryPage)
-		// @Tags Item
-		auth.GET("/item/query", item.Query)
-		auth.GET("/item/queryAll", item.QueryAll)
-		auth.GET("/item/queryPage", item.QueryPage)
+		// @Tags Admin
+		adm.GET("/users", admin.ListUsers)
+		adm.POST("/users", admin.CreateUser)
+		adm.PUT("/users/:id", admin.UpdateUser)
+		adm.DELETE("/users/:id", admin.DisableUser)
 
-		// @Tags LogSearch
-		auth.GET("/logs/queryClients", logs.QueryClient)
-		auth.GET("/logs/queryItems", logs.QueryItem)
-		auth.GET("/logs/tasks/:taskNo", logs.QueryTask)
-		auth.GET("/logs/tasks", logs.ListTasks)
-		auth.GET("/logs/alerts/rules", alert.ListRules)
-		auth.GET("/logs/alerts/rules/:id", alert.GetRule)
-		auth.GET("/logs/alerts/events", alert.ListEvents)
-		auth.GET("/logs/alerts/quota", alert.Quota)
+		// 审计日志（仅 admin 可查看）
+		adm.GET("/audit/logs", audit.ListAuditLogs)
+		adm.GET("/audit/stats", audit.GetAuditStats)
 
-		// ━━ operator 级别（可写资源 + 触发查询）━━
-		op := auth.Group("")
-		op.Use(pkgauth.RequireRole(pkgauth.RoleOperator))
-		{
-			// @Tags Client
-			op.POST("/client/add", client.Add)
-			op.POST("/client/delete", client.Delete)
-			op.POST("/client/update", client.Update)
-			op.POST("/client/changeStatus", client.ChangeClientStatus)
+		// 统计与异常检测（仅 admin 可查看）
+		adm.GET("/stats/patterns", admin.StatsPatterns)
+		adm.GET("/stats/anomalies", admin.StatsAnomalyEvents)
+		adm.GET("/stats/baseline", admin.StatsBaseline)
 
-			// @Tags Item
-			op.POST("/item/add", item.Add)
-			op.POST("/item/delete", item.Delete)
-			op.POST("/item/update", item.Update)
-			op.POST("/item/changeStatus", item.ChangeItemStatus)
-
-			// @Tags LogSearch
-			op.POST("/logs/query", logs.Query)
-			op.POST("/logs/search", logs.Search)
-			op.POST("/logs/trace", logs.Trace)
-			op.POST("/logs/trace/waterfall", logs.TraceWaterfall)
-			op.POST("/logs/stream", logs.Stream)
-			op.POST("/logs/tail", logs.Tail)
-			op.POST("/logs/tasks/:taskNo/retry", logs.RetryTask)
-			op.DELETE("/logs/tasks/:taskNo", logs.DeleteTask)
-
-			// @Tags Alert
-			op.POST("/logs/alerts/rules", alert.AddRule)
-			op.PUT("/logs/alerts/rules/:id", alert.UpdateRule)
-			op.DELETE("/logs/alerts/rules/:id", alert.DeleteRule)
-			op.POST("/logs/alerts/rules/toggle", alert.ToggleRule)
-			op.POST("/logs/alerts/rules/test", alert.TestFire)
-			op.DELETE("/logs/alerts/events/:id", alert.DeleteEvent)
-		}
-
-		// 自助修改密码（任何已登录用户可操作）
-		auth.POST("/admin/users/change-password", admin.ChangePassword)
+		// 迁移工具：v1 -> v2 schema 就绪确认（仅 admin）
+		adm.POST("/migration/run", migration.Run)
+		adm.GET("/migration/status", migration.StatusHandler)
 
 		// @Tags ModelCapability
-		// 模型能力配置—只读操作（已登录用户可查看）。
-		auth.GET("/admin/model-capability/list", admin.ListModelCapabilities)
-		auth.GET("/admin/model-capability/:id", admin.GetModelCapability)
-
-		// ━━ admin 级别（用户 / 角色管理）━━
-		adm := auth.Group("/admin")
-		adm.Use(pkgauth.RequireRole(pkgauth.RoleAdmin))
-		{
-			// @Tags Admin
-			adm.GET("/users", admin.ListUsers)
-			adm.POST("/users", admin.CreateUser)
-			adm.PUT("/users/:id", admin.UpdateUser)
-			adm.DELETE("/users/:id", admin.DisableUser)
-
-			// 审计日志（仅 admin 可查看）
-			adm.GET("/audit/logs", audit.ListAuditLogs)
-			adm.GET("/audit/stats", audit.GetAuditStats)
-
-			// 统计与异常检测（仅 admin 可查看）
-			adm.GET("/stats/patterns", admin.StatsPatterns)
-			adm.GET("/stats/anomalies", admin.StatsAnomalyEvents)
-			adm.GET("/stats/baseline", admin.StatsBaseline)
-
-			// 迁移工具：v1 -> v2 schema 就绪确认（仅 admin）
-			adm.POST("/migration/run", migration.Run)
-			adm.GET("/migration/status", migration.StatusHandler)
-
-			// @Tags ModelCapability
-			// 模型能力配置—写操作（仅 admin）。
-			adm.POST("/model-capability", admin.AddModelCapability)
-			adm.PUT("/model-capability", admin.UpdateModelCapability)
-			adm.POST("/model-capability/toggle", admin.ToggleModelCapability)
-			adm.POST("/model-capability/delete", admin.DeleteModelCapability)
-		}
+		// 模型能力配置—写操作（仅 admin）。
+		adm.POST("/model-capability", admin.AddModelCapability)
+		adm.PUT("/model-capability", admin.UpdateModelCapability)
+		adm.POST("/model-capability/toggle", admin.ToggleModelCapability)
+		adm.POST("/model-capability/delete", admin.DeleteModelCapability)
 	}
 
 	// SPA 回退：未命中 API 的 GET/HEAD 请求回退到 index.html。
@@ -200,29 +190,53 @@ func getCORSOrigins() []string {
 	return strings.Split(origins, ",")
 }
 
-// csrfProtection 防护中间件：拒绝缺少 X-Requested-With 头的非安全方法请求。
-// 浏览器 CORS 策略禁止跨域页面发送自定义头，因此第三方站点无法伪造 POST/DELETE。
-func csrfProtection(c *gin.Context) {
-	method := c.Request.Method
-	if method == "GET" || method == "HEAD" || method == "OPTIONS" {
+// publicPaths 是不需要鉴权的公开路径白名单。
+//
+// 注意：此表不包含由 ServeStatic（r.NoRoute）处理的 SPA 路由 / 静态资产，
+// 因为 ServeStatic 仅在路由未匹配时触发，中间件不会重复执行。
+// 此处仅列出需要显式跳过认证中间件的 API 路径。
+var publicPaths = map[string]bool{
+	"/":               true,
+	"/health":         true,
+	"/ready":          true,
+	"/metrics":        true,
+	"/admin/login":    true,
+	"/admin/exit":     true,
+	"/admin/console":  true,
+	"/client/register": true,
+}
+
+// authBlockMiddleware 对非公开 API 路径统一应用 filterAuth + csrfProtection。
+//
+// 处理顺序：
+//  1. 公开路径直接放行（登录、健康检查、静态资源）
+//  2. 非安全方法（POST/PUT/DELETE）校验 X-Requested-With 头（CSRF 防护）
+//  3. 校验会话中的 username（登录鉴权）
+//
+// 背景：Gin 1.12 中 r.Group("") 模式会导致部分注册路由在运行时无法匹配
+// （回落到 NoRoute handler），因此改为在 r.Use() 上应用路径感知的鉴权中间件。
+func authBlockMiddleware(c *gin.Context) {
+	if publicPaths[c.Request.URL.Path] {
 		c.Next()
 		return
 	}
-	if c.GetHeader("X-Requested-With") == "" {
-		api.Fail(c, api.CodeForbidden, "CSRF 校验失败：缺少 X-Requested-With 请求头")
-		c.Abort()
-		return
-	}
-	c.Next()
-}
 
-// filterAuth 鉴权中间件：未登录返回 401 并 abort。
-func filterAuth(c *gin.Context) {
-	username := session.GetString(c, "username")
-	if username == "" {
+	// CSRF 防护（非安全方法）
+	method := c.Request.Method
+	if method != "GET" && method != "HEAD" && method != "OPTIONS" {
+		if c.GetHeader("X-Requested-With") == "" {
+			api.Fail(c, api.CodeForbidden, "CSRF 校验失败：缺少 X-Requested-With 请求头")
+			c.Abort()
+			return
+		}
+	}
+
+	// 鉴权
+	if username := session.GetString(c, "username"); username == "" {
 		api.Fail(c, api.CodeUnauthorized, "未登录或登录已过期")
 		c.Abort()
 		return
 	}
+
 	c.Next()
 }

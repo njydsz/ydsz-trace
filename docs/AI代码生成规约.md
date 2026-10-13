@@ -135,7 +135,7 @@ Level 3: 架构变更（≥ 5 文件，跨模块）
   - (原有 pkg 子包保留)
 - logs/         → v2.0 服务端（端口 2021，含列式存储引擎 + 语义服务）
 - logc/         → v2.0 客户端代理（端口 2020，含采集管道 + 端侧索引）
-- web/          → v2.0 前端控制台（对话式工作台为默认首页）
+- logv/        → v2.0 前端控制台（对话式工作台为默认首页）
 - mcp/          → v2.0 MCP Server 入口
 - sqls/         → DDL 脚本
 - deploy/       → Docker/K8s 配置
@@ -144,7 +144,7 @@ Level 3: 架构变更（≥ 5 文件，跨模块）
 - logs/main.go       → 服务端启动入口
 - logc/main.go       → 客户端启动入口
 - mcp/serve.go       → v2.0 MCP Server 入口
-- web/src/main.js    → 前端挂载入口
+- logv/src/main.js   → 前端挂载入口
 ```
 
 ### 3.3 核心约定速查
@@ -168,7 +168,7 @@ Go 项目约定：
 - 组件：<script setup> + Composition API + PascalCase 文件名
 - Store：Pinia 组合式语法 + useXxx() 导出
 - API：统一 axios 实例（api/http.js），业务域按文件拆分（新增 api/conversations.js、api/dsl.js）
-- 路径别名：@ → web/src/
+- 路径别名：@ → logv/src/
 - 路由：camelCase name + kebab-case path
 - v2.0 默认首页：Chat（对话式工作台）；v1 页面移入次级导航
 - v2.0 组合式函数：useNLQuery()、useAgentConversation()、useAnomalyTimeline()

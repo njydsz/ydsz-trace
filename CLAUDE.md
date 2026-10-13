@@ -11,7 +11,7 @@
 - **后端**: Go 1.26.5 + Gin 1.12 + sqlx + SQLite (modernc.org)
 - **前端**: Vue 3.5 + Vite 6 + Element Plus 2.9 + Tailwind CSS 3.4
 - **状态**: Pinia 2.3（组合式 setup store，**必须使用 `useXxxStorage` 命名**）
-- **HTTP**: Axios 1.7（统一实例 `web/src/api/http.js`）
+- **HTTP**: Axios 1.7（统一实例 `logv/src/api/http.js`）
 - **构建**: Makefile (build/test/lint/fmt/ci)
 - **质量**: golangci-lint + gofmt + ESLint + Prettier
 
@@ -22,7 +22,7 @@ pkg/        公共库（无业务依赖，不得依赖 logs/logc）
 logs/       服务端（端口 2021）
 logc/       客户端代理（端口 2020）
 mcp/        v2.0 MCP Server 入口（待实现）
-web/        前端控制台（对话式工作台为 v2.0 默认首页）
+logv/       Vue 3 前端控制台（对话式工作台为 v2.0 默认首页）
 sqls/       DDL 脚本
 deploy/     Docker/K8s 配置
 ```
@@ -72,8 +72,8 @@ make build              # 编译全部模块
 make test               # 运行测试
 make lint               # golangci-lint + go vet
 make ci                 # lint + test + build
-cd web && npm run build # 前端构建
-cd web && npm run lint  # ESLint
+cd logv && npm run build # 前端构建
+cd logv && npm run lint  # ESLint
 ```
 
 ## 详细规范

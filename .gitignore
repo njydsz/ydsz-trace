@@ -20,9 +20,9 @@ dist/
 # ---------- Node / 前端 ----------
 node_modules/
 # 构建输出
-web/dist/
-web/.dist/
-web/dist.zip
+logv/dist/
+logv/.dist/
+logv/dist.zip
 
 # ---------- 运行时日志 / 配置 ----------
 *.log

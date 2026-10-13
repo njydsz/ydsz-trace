@@ -1,9 +1,9 @@
 # ========== 前端构建阶段 ==========
-FROM node:22-alpine AS web-builder
-WORKDIR /web
-COPY web/package*.json ./
+FROM node:22-alpine AS logv-builder
+WORKDIR /logv
+COPY logv/package*.json ./
 RUN npm install
-COPY web/ ./
+COPY logv/ ./
 RUN npm run build
 
 # ========== 后端构建阶段 ==========
@@ -23,10 +23,10 @@ RUN apk add --no-cache ca-certificates tzdata \
     && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && echo "Asia/Shanghai" > /etc/timezone
 WORKDIR /app
-RUN mkdir -p /app/data /app/temp/logs /app/web/dist
+RUN mkdir -p /app/data /app/temp/logs /app/logv/dist
 COPY --from=builder /app/ydsz-trace-logs /app/ydsz-trace-logs
 COPY logs/conf/app.conf /app/conf/app.conf
-COPY --from=web-builder /web/dist /app/web/dist
+COPY --from=logv-builder /logv/dist /app/logv/dist
 # 初始化时执行 schema（首次启动自动建表）
 COPY sqls/sqlite.sql /app/sqls/sqlite.sql
 EXPOSE 2021

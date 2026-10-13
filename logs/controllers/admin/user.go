@@ -110,12 +110,12 @@ func getAdminPassword(cfg *config.Config) string {
 	return cfg.StringOr("password", "change_me_production")
 }
 
-// webRoot 前端构建产物根目录（环境变量 YDSZ_WEB_ROOT > 默认 web/dist）。
-func webRoot() string {
-	if v := os.Getenv("YDSZ_WEB_ROOT"); v != "" {
+// logvRoot 前端构建产物根目录（环境变量 YDSZ_LOGV_ROOT > 默认 logv/dist）。
+func logvRoot() string {
+	if v := os.Getenv("YDSZ_LOGV_ROOT"); v != "" {
 		return v
 	}
-	return "web/dist"
+	return "logv/dist"
 }
 
 // Index 控制台 SPA 入口，返回 index.html。
@@ -130,12 +130,12 @@ func Console(c *gin.Context) {
 
 // serveIndex 返回 Vite 构建产物 index.html；未构建时返回部署指引文本。
 func serveIndex(c *gin.Context) {
-	root := webRoot()
+	root := logvRoot()
 	indexFile := filepath.Join(root, "index.html")
 	if _, err := os.Stat(indexFile); err != nil {
 		c.String(http.StatusOK,
-			"Ydsz Trace console. 前端尚未构建：请在 web/ 目录执行 `npm install && npm run build`，"+
-				"并将产物 web/dist 置于可访问路径（环境变量 YDSZ_WEB_ROOT 可指定）。")
+			"Ydsz Trace console. 前端尚未构建：请在 logv/ 目录执行 `npm install && npm run build`，"+
+				"并将产物 logv/dist 置于可访问路径（环境变量 YDSZ_LOGV_ROOT 可指定）。")
 		return
 	}
 	c.File(indexFile)
@@ -147,7 +147,7 @@ func serveIndex(c *gin.Context) {
 //   - 文件存在直接返回，否则回退到 index.html
 func ServeStatic(c *gin.Context) {
 	if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
-		c.JSON(http.StatusNotFound, gin.H{"code": "404", "msg": "not found"})
+		api.Fail(c, api.CodeNotFound, "not found")
 		return
 	}
 
@@ -156,14 +156,14 @@ func ServeStatic(c *gin.Context) {
 	apiPrefixes := []string{"/admin", "/client", "/item", "/logs", "/health", "/ready"}
 	for _, p := range apiPrefixes {
 		if strings.HasPrefix(reqPath, p) {
-			c.JSON(http.StatusNotFound, gin.H{"code": "404", "msg": "not found"})
+			api.Fail(c, api.CodeNotFound, "not found")
 			return
 		}
 	}
 
-	root := webRoot()
+	root := logvRoot()
 	if _, err := os.Stat(root); err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"code": "404", "msg": "web frontend not found"})
+		api.Fail(c, api.CodeNotFound, "frontend not found")
 		return
 	}
 

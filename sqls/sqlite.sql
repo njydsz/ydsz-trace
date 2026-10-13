@@ -163,6 +163,28 @@ CREATE TABLE t_pattern_stat (
 CREATE INDEX IF NOT EXISTS idx_pattern_stat_lookup ON t_pattern_stat(item_id, client_id, time_bucket);
 CREATE INDEX IF NOT EXISTS idx_pattern_stat_template ON t_pattern_stat(template_hash);
 
+-- ==================== 模型能力配置表 ====================
+DROP TABLE IF EXISTS t_model_capability;
+CREATE TABLE t_model_capability (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    name          TEXT    NOT NULL UNIQUE,          -- 模型配置名称（如 GPT-4、本地 Embedding）
+    provider      TEXT    NOT NULL,                 -- 提供商：openai / anthropic / ollama / custom
+    model_id      TEXT    NOT NULL,                 -- 模型标识（如 gpt-4o、text-embedding-ada-002）
+    api_key       TEXT    DEFAULT '',               -- API 密钥（加密存储，回显时脱敏）
+    base_url      TEXT    DEFAULT '',               -- API 端点（空则使用提供商默认）
+    temperature   REAL    DEFAULT 0.7,              -- 采样温度
+    max_tokens    INTEGER DEFAULT 4096,             -- 最大输出 token 数
+    enabled       INTEGER DEFAULT 1,                -- 是否启用：1-启用 0-禁用
+    capability    TEXT    NOT NULL DEFAULT 'chat',  -- 能力类型：chat / embedding / rerank
+    created_by    TEXT    DEFAULT '',
+    created_time  TEXT    DEFAULT (datetime('now', 'localtime')),
+    updated_time  TEXT    DEFAULT (datetime('now', 'localtime'))
+);
+
+-- 模型能力配置表索引
+CREATE INDEX IF NOT EXISTS idx_model_capability_provider ON t_model_capability(provider);
+CREATE INDEX IF NOT EXISTS idx_model_capability_enabled ON t_model_capability(enabled);
+
 -- ==================== 审计日志表 ====================
 DROP TABLE IF EXISTS t_audit_log;
 CREATE TABLE t_audit_log (

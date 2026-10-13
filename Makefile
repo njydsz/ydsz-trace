@@ -104,10 +104,10 @@ run-logc-k8s:
 
 # ==================== Frontend ====================
 frontend:
-	cd web && npm install && npm run build
+	cd logv && npm install && npm run build
 
 frontend-dev:
-	cd web && npm install && npm run dev
+	cd logv && npm install && npm run dev
 
 # ==================== Docker Build ====================
 docker-logs:

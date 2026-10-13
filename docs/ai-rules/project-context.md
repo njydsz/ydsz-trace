@@ -6,13 +6,13 @@
 
 Go Workspace 三模块（`go.work`）+ 独立 Vite 前端工程。
 三模块：`pkg`（公共库）、`logs`：服务端（端口 2021）、`logc`：客户端代理（端口 2020）。
-前端：Vue 3 + Vite + Element Plus + Pinia，路径别名 `@` → `web/src/`。
+前端：Vue 3 + Vite + Element Plus + Pinia，路径别名 `@` → `logv/src/`。
 
 ## 入口文件
 
 - `logs/main.go` → 服务端启动
 - `logc/main.go` → 客户端启动
-- `web/src/main.js` → 前端挂载
+- `logv/src/main.js` → 前端挂载
 
 ## 关键封装
 
@@ -32,7 +32,7 @@ code 为字符串，业务成功：`"200"`；前端拦截器已兼容字符串/�
 
 ## 前端 API 层
 
-- 统一 Axios 实例：`web/src/api/http.js`
+- 统一 Axios 实例：`logv/src/api/http.js`
 - 拦截器职责：仅处理 HTTP 层（401/403/5xx）；业务 `code` 非 200 时 Toast warning 但不 reject
 - API 模块按业务域拆分：`logs.js`、`client.js`、`item.js`、`auth.js`、`tasks.js`、`alert.js`
 - 路径规范：v1 `/client/add`, `/client/queryPage`；v2.0 `/api/v2/*`（待实现）
@@ -45,7 +45,7 @@ code 为字符串，业务成功：`"200"`；前端拦截器已兼容字符串/�
 4. 包级 DB 句柄使用 `models.DB`，不新建连接
 5. Pinia store 导出名 `useXxxStorage`，包装函数 `useXxx()`
 6. localStorage key 固定为 `ydsz_username`（auth）、`ydsz-theme-preference`（theme）
-7. 路径别名 `@` → `web/src/`，构建失败先检查 import 路径
+7. 路径别名 `@` → `logv/src/`，构建失败先检查 import 路径
 8. 前端 `v-model` 直接绑定搜索关键词也需 debounce（300ms）
 
 ## 不要使用的 API/模式

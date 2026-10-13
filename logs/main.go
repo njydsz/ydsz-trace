@@ -3,7 +3,7 @@
 // 职责：
 //   - 管理客户端（logc agent）注册、心跳状态维护
 //   - 接收前端查询请求，并发拉取各客户端日志并合并返回
-//   - 提供 Web 控制台（SPA 托管）
+//   - 提供前端控制台（SPA 托管，前端工程位于 logv/）
 //
 // 启动流程：加载配置 → 初始化数据库 → 启动定时任务 → 清理临时文件 → 启动 HTTP 服务
 //
@@ -58,10 +58,19 @@ var defaultWeakPasswords = map[string]bool{
 	"qwerty":               true,
 }
 
-// enforceProductionSecurity 生产模式下强制校验：拒绝弱口令 + 未哈希密码启动。
+// jwtDefaultSecret JWT 模块内置的出厂默认密钥。
+// 与 enforceProductionSecurity 配合，在生产模式下检测并拒绝弱密钥启动。
+const jwtDefaultSecret = "ydsz-trace-jwt-secret-change-in-production"
+
+// enforceProductionSecurity 生产模式下强制校验：拒绝弱口令 + 默认 JWT 密钥启动。
 //
 // 仅在 runmode != "dev" 时生效，开发模式跳过以保留零配置体验。
 // 发现安全问题时直接 log.Fatalf 拒绝启动，避免带病上线。
+// 符合 PRD FR-1310（JWT 安全增强）与编码规范 §9.1。
+//
+// 校验项：
+//   - admin 密码不得为已知弱口令/出厂默认
+//   - JWT 签名密钥不得使用出厂默认（生产必须通过 YDSZ_JWT_SECRET 注入）
 func enforceProductionSecurity(cfg *config.Config) {
 	runmode := cfg.StringOr("runmode", "dev")
 	if runmode == "dev" {
@@ -76,6 +85,16 @@ func enforceProductionSecurity(cfg *config.Config) {
 	if defaultWeakPasswords[adminPassword] {
 		log.Fatalf("[security] 拒绝启动：生产模式检测到弱口令/出厂默认密码。\n" +
 			"请通过 YDSZ_ADMIN_PASSWORD 环境变量注入强密码（建议 16 位以上随机字符）。")
+	}
+
+	// JWT 密钥不得使用出厂默认（防令牌伪造）
+	jwtSecret := os.Getenv("YDSZ_JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = cfg.StringOr("jwt_secret", "")
+	}
+	if jwtSecret == "" || jwtSecret == jwtDefaultSecret {
+		log.Fatalf("[security] 拒绝启动：生产模式检测到 JWT 使用出厂默认密钥。\n" +
+			"请通过 YDSZ_JWT_SECRET 环境变量注入强密钥（建议 32 字节以上随机字符串）。")
 	}
 }
 

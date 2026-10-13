@@ -142,7 +142,7 @@ ydsz-trace/
 │   ├── source/        数据源抽象层（文件/Docker/K8s）
 │   └── util/          通用工具（HTTP 客户端/Zip/环境变量）
 │
-├── web/             Vue 3 前端控制台
+├── logv/            Vue 3 前端控制台
 │   ├── src/api/       按域划分为 7 个模块（auth/client/item/logs/tasks/alert）
 │   ├── src/views/     8 大页面（Dashboard/Clients/Items/LogSearch/LogTail/Alerts/Tasks/TraceView）
 │   ├── src/store/     Pinia 状态管理
@@ -177,7 +177,7 @@ git clone https://github.com/njydsz/ydsz-trace.git
 cd ydsz-trace
 
 # 2. 构建前端（首次必须；不构建时控制台首页会提示）
-make frontend        # 等价于 cd web && npm install && npm run build
+make frontend        # 等价于 cd logv && npm install && npm run build
 
 # 3. 启动服务端（首次启动自动建库建表）
 make run-logs        # 默认监听 2021，控制台访问 http://localhost:2021
@@ -191,7 +191,7 @@ make run-logc        # 默认监听 2020，自动注册到服务端并保持心�
 ### 方式二：Docker Compose（推荐内网/信创交付）
 
 ```bash
-# 构建并启动全部服务（包含 logs + logc + web 前端）
+# 构建并启动全部服务（包含 logs + logc + logv 前端）
 docker compose up -d --build
 
 # 查看运行状态
@@ -234,7 +234,7 @@ make remove-k8s                    # 卸载
 | `make run-logc` | 运行 logc 客户端 |
 | `make run-logc-docker` | logc 以 Docker 模式运行（自动发现容器） |
 | `make run-logc-k8s` | logc 以 K8s 模式运行（自动发现 Pod） |
-| `make frontend` | 构建前端（输出到 `web/dist/`） |
+| `make frontend` | 构建前端（输出到 `logv/dist/`） |
 | `make frontend-dev` | 启动前端开发服务器（Vite HMR 热更新） |
 | `make docker-logs` / `make docker-logc` | 构建单模块 Docker 镜像 |
 | `make ci` | 完整 CI 流水线（lint + test + build） |
@@ -276,7 +276,7 @@ v2 定义三档部署形态，同一份二进制与同一套配置格式，通�
 | `dbpath` | SQLite 数据库文件路径 | ./data/ydsz.db | `YDSZ_DB_PATH` |
 | `temppath` | 日志检索临时目录 | ./temp/logs/ | `YDSZ_TEMP_PATH` |
 | `cron` | 客户端在线探测间隔（cron 表达式） | `0 */5 * * * *` | `YDSZ_CRON` |
-| `webroot` | 前端构建产物根目录 | ./web/dist | `YDSZ_WEB_ROOT` |
+| `webroot` | 前端构建产物根目录 | ./logv/dist | `YDSZ_LOGV_ROOT` |
 
 ### 客户端 (`logc/conf/app.conf`)
 
@@ -294,7 +294,7 @@ v2 定义三档部署形态，同一份二进制与同一套配置格式，通�
 | `YDSZ_ADMIN_USER` | logs | 管理员用户名 | 配置文件 `username` |
 | `YDSZ_ADMIN_PASSWORD` | logs | 管理员密码（生产务必使用） | 配置文件 `password` |
 | `YDSZ_DB_PATH` | logs | SQLite 数据库文件路径 | 配置文件 `dbpath` |
-| `YDSZ_WEB_ROOT` | logs | 前端构建产物根目录 | `web/dist` |
+| `YDSZ_LOGV_ROOT` | logs | 前端构建产物根目录 | `logv/dist` |
 | `YDSZ_LOG_SOURCE` | logc | 日志源类型：`file` / `docker` / `k8s` | file |
 | `YDSZ_LOG_SERVER` | logc | 日志服务端地址 | 配置文件 `logs` |
 | `YDSZ_CLIENT_KEY` | logc | 客户端认证密钥 | 配置文件 `key` |
@@ -584,10 +584,10 @@ scrape_configs:
 make test
 
 # 前端测试
-cd web && npm run test
+cd logv && npm run test
 
 # 前端 E2E 测试（v2 引入 Playwright）
-cd web && npx playwright test
+cd logv && npx playwright test
 
 # 完整 CI
 make ci
