@@ -2,6 +2,12 @@
 //
 // 支持管道式与类 SQL WHERE 子句两种语法，可将自然 DSL 文本转换为
 // logs.controllers.SearchReq 兼容的查询计划结构。
+//
+// 当前状态（V2.1-08 标注）：本包为 FR-401「统一 DSL」的预留实现
+// （lexer / parser / AST / compiler 已完整），尚未接入检索主链路。
+// 接入点在 V2.3：NL2DSL 输出统一改为 DSL，再由本包编译为 QueryPlan。
+//
+// 在此之前不应从检索路径删除——它是 FR-401 的唯一实现载体。
 package dsl
 
 import "strings"

@@ -2,13 +2,13 @@
   <div class="logs-page">
     <!-- 统一页面头部 -->
     <div class="page-header mb-5">
-      <h2 class="page-header__title">
+      <h2 class="page-header__title" data-testid="log-search-title">
         <span class="page-header__icon" style="background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 2px 8px rgba(16, 185, 129, 0.2);">
           <el-icon :size="18"><Search /></el-icon>
         </span>
         历史日志检索
       </h2>
-      <p class="page-header__subtitle">选择客户端与日志项，跨节点检索日志</p>
+      <p class="page-header__subtitle" data-testid="log-search-subtitle">选择客户端与日志项，跨节点检索日志</p>
     </div>
 
     <!-- 检索表单卡片 -->
@@ -54,18 +54,42 @@
                 v-model="form.key"
                 placeholder="要检索的关键字或正则表达式"
                 size="default"
+                data-testid="log-search-keyword"
                 @focus="handleKeywordFocus"
                 @blur="handleKeywordBlur"
+                @input="onTemplateInput"
               />
+              <!-- 模板自动补全下拉 -->
+              <div
+                v-if="templateSuggestionsVisible && templateSuggestions.length > 0"
+                class="template-autocomplete absolute left-0 right-0 top-full z-20 mt-1 max-h-60 overflow-y-auto rounded-lg border border-light bg-card shadow-lg"
+                data-testid="log-search-template-suggestions"
+              >
+                <div
+                  v-for="(tpl, i) in templateSuggestions"
+                  :key="tpl.templateId || i"
+                  class="template-autocomplete__item cursor-pointer border-b border-light px-3 py-2 transition-colors last:border-b-0"
+                  data-testid="log-search-template-item"
+                  @mousedown.prevent="selectTemplateSuggestion(tpl)"
+                >
+                  <code class="block text-xs font-mono text-secondary leading-5 break-all">{{ tpl.templateText || tpl.sampleLine }}</code>
+                  <div class="mt-1 flex items-center gap-2">
+                    <el-tag v-if="tpl.level" size="small" :type="getLevelTagType(tpl.level)">{{ tpl.level }}</el-tag>
+                    <span class="text-xs text-muted">命中 {{ tpl.totalCount || 0 }} 次</span>
+                  </div>
+                </div>
+              </div>
               <button
                 class="history-btn absolute right-2 top-1/2 -translate-y-1/2 flex items-center text-muted hover:text-brand-600 transition-colors"
                 title="搜索历史"
+                data-testid="log-search-history-btn"
                 @mousedown.prevent="handleKeywordFocus"
               >
                 <el-icon><Clock /></el-icon>
               </button>
               <SearchHistoryDropdown
                 ref="historyDropdownRef"
+                data-testid="log-search-history-dropdown"
                 @select="handleHistorySelect"
               />
             </div>
@@ -105,11 +129,11 @@
         </div>
 
         <div class="flex items-center gap-3">
-          <el-button type="primary" :icon="Search" :loading="searching" @click="onSearch">
+          <el-button type="primary" :icon="Search" :loading="searching" data-testid="log-search-submit" @click="onSearch">
             开始检索
           </el-button>
-          <el-button :icon="Refresh" @click="resetForm">清空</el-button>
-          <el-button text :icon="Clock" @click="toggleHistoryDropdown">搜索历史</el-button>
+          <el-button :icon="Refresh" data-testid="log-search-reset" @click="resetForm">清空</el-button>
+          <el-button text :icon="Clock" data-testid="log-search-toggle-history" @click="toggleHistoryDropdown">搜索历史</el-button>
         </div>
       </div>
     </el-card>
@@ -144,6 +168,14 @@
               预估 {{ taskEstimatedTotal.toLocaleString() }} 行
             </span>
           </div>
+
+          <!-- 圆环进度（单节点检索时显示，避免与上方进度条重复） -->
+          <TaskProgressRing
+            v-if="searching && taskNodeTotal <= 1"
+            :percent="taskProgressPct"
+            :size="26"
+            class="ml-2"
+          />
           <el-button v-if="currentTaskNo" :icon="Link" size="small" @click="router.push('/tasks')">任务详情</el-button>
           <el-button v-if="lastSearchMeta" :icon="Download" :loading="downloading" size="small" @click="onDownloadZip">下载 zip</el-button>
           <el-button v-if="lastSearchMeta" :icon="VideoPlay" size="small" @click="gotoTail">定位 Tail</el-button>
@@ -214,31 +246,46 @@
         @update="handleHistogramUpdate"
       />
 
-      <!-- 日志表格 -->
-      <el-table
+      <!-- 日志列表（虚拟滚动） -->
+      <div
         v-if="viewMode === 'flat' || templateGroups.length === 0"
-        :data="rows"
-        stripe
-        size="small"
-        max-height="480"
-        style="width: 100%"
+        class="log-virtual-list"
       >
-        <el-table-column type="index" label="#" width="55" />
-        <el-table-column prop="source" label="来源" width="160" show-overflow-tooltip />
-        <el-table-column prop="line" label="日志行" min-width="400">
-          <template #default="{ row, $index }">
-            <div class="log-cell">
-              <code class="whitespace-pre-wrap break-all text-xs log-cell-content">{{ row.line }}</code>
+        <!-- 表头 -->
+        <div class="log-virtual-header">
+          <span class="col-index">#</span>
+          <span class="col-source">来源</span>
+          <span class="col-line">日志行</span>
+        </div>
+        <RecycleScroller
+          class="log-scroller"
+          :items="rows"
+          :item-size="ROW_HEIGHT"
+          key-field="__rowKey"
+          v-slot="{ item, index }"
+        >
+          <div class="log-virtual-row">
+            <span class="col-index text-muted">{{ index + 1 }}</span>
+            <span class="col-source text-secondary">{{ item.source || '—' }}</span>
+            <div class="col-line log-cell">
+              <code class="whitespace-pre-wrap break-all text-xs log-cell-content">{{ item.line }}</code>
+              <el-button
+                :icon="MagicStick"
+                size="small"
+                class="log-similar-btn"
+                title="语义找相似"
+                @click.stop="onFindSimilar(item.line)"
+              />
               <el-button
                 :icon="DocumentCopy"
                 size="small"
                 class="log-copy-btn"
-                @click.stop="handleCopy($index)"
+                @click.stop="handleCopy(index)"
               />
             </div>
-          </template>
-        </el-table-column>
-      </el-table>
+          </div>
+        </RecycleScroller>
+      </div>
 
       <!-- 加载更多 -->
       <div v-if="hasMore && !searching" class="mt-4 flex justify-center">
@@ -260,6 +307,35 @@
       </div>
       <el-empty v-if="!searching && rows.length === 0 && searched" description="未找到匹配行" />
     </el-card>
+
+    <!-- 语义检索结果弹窗 -->
+    <el-dialog
+      v-model="semanticDialogVisible"
+      title="语义相似检索"
+      width="640px"
+      :close-on-click-modal="true"
+    >
+      <div class="mb-3">
+        <span class="text-sm text-muted">查询：</span>
+        <code class="text-xs bg-muted-bg px-2 py-1 rounded font-mono break-all">{{ semanticQuery }}</code>
+      </div>
+      <div v-loading="semanticSearching">
+        <div v-if="semanticResults.length > 0" class="space-y-2">
+          <div
+            v-for="(r, i) in semanticResults"
+            :key="i"
+            class="semantic-result-item p-3 rounded-lg border border-light hover:border-brand-300 transition-colors"
+          >
+            <div class="flex items-center justify-between mb-1">
+              <span class="text-xs text-muted">{{ r.targetType }}: {{ r.targetId?.slice(0, 16) }}...</span>
+              <el-tag size="small" type="success">相似度 {{ (r.score * 100).toFixed(1) }}%</el-tag>
+            </div>
+            <code class="text-xs font-mono text-secondary break-all leading-5">{{ r.metadata?.template_text || r.metadata?.sample_line || '—' }}</code>
+          </div>
+        </div>
+        <el-empty v-else-if="!semanticSearching" description="未找到相似模板（可能需要更多日志写入以建立向量索引）" />
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -267,13 +343,20 @@
 /** 历史日志检索页 v2.0：选择客户端 + 日志项，按日期和关键词跨节点检索日志。 */
 import { ref, reactive, shallowRef, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { Search, Refresh, Download, Link, VideoPlay, Share, DocumentCopy, Clock, CircleCheckFilled, Loading } from '@element-plus/icons-vue'
+import { useRouteQuery } from '@/composables/useRouteQuery'
+import TaskProgressRing from '@/components/TaskProgressRing.vue'
+import { Search, Refresh, Download, Link, VideoPlay, Share, DocumentCopy, Clock, CircleCheckFilled, Loading, MagicStick } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { queryLogClients, queryItemsByClient, queryLogs, searchLogs, queryTaskProgress } from '@/api/logs'
+import { RecycleScroller } from 'vue-virtual-scroller'
+import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
+import { queryLogClients, queryItemsByClient, queryLogs, searchLogs, queryTaskProgress, searchSemantic, searchTemplates } from '@/api/logs'
 import { queryAllItems } from '@/api/item'
 import LogHistogram from '@/components/LogHistogram.vue'
 import { useSearchHistory } from '@/store/searchHistory'
 import SearchHistoryDropdown from '@/components/SearchHistoryDropdown.vue'
+
+// 虚拟滚动行高（px）
+const ROW_HEIGHT = 28
 
 const clients = ref([])
 const items = ref([])
@@ -306,6 +389,17 @@ const progressTimer = ref(null)
 const hasMore = ref(false)
 const loadingMore = ref(false)
 const router = useRouter()
+
+// 语义检索弹窗状态
+const semanticDialogVisible = ref(false)
+const semanticSearching = ref(false)
+const semanticQuery = ref('')
+const semanticResults = ref([])
+
+// 模板自动补全状态
+const templateSuggestions = ref([])
+const templateSuggestionsVisible = ref(false)
+const templateSearchTimer = ref(null)
 
 const form = reactive({
   client: 0,
@@ -379,8 +473,42 @@ function handleKeywordFocus() {
 function handleKeywordBlur() {
   setTimeout(() => {
     showHistoryDropdown.value = false
+    templateSuggestionsVisible.value = false
     if (historyDropdownRef.value) historyDropdownRef.value.hide()
   }, 150)
+}
+
+// onTemplateInput 模板自动补全输入处理（防抖 300ms）。
+function onTemplateInput() {
+  if (templateSearchTimer.value) clearTimeout(templateSearchTimer.value)
+  const kw = form.key?.trim() || ''
+  if (kw.length < 2) {
+    templateSuggestions.value = []
+    templateSuggestionsVisible.value = false
+    return
+  }
+  templateSearchTimer.value = setTimeout(async () => {
+    try {
+      const { data } = await searchTemplates(kw, 8)
+      if (data && data.code === 0 && data.data?.list?.length > 0) {
+        templateSuggestions.value = data.data.list
+        templateSuggestionsVisible.value = true
+      } else {
+        templateSuggestions.value = []
+        templateSuggestionsVisible.value = false
+      }
+    } catch {
+      templateSuggestions.value = []
+      templateSuggestionsVisible.value = false
+    }
+  }, 300)
+}
+
+// selectTemplateSuggestion 选中模板建议，填入关键词并搜索。
+function selectTemplateSuggestion(tpl) {
+  form.key = tpl.templateText || tpl.sampleLine || form.key
+  templateSuggestionsVisible.value = false
+  onSearch()
 }
 
 function toggleHistoryDropdown() {
@@ -460,6 +588,27 @@ function getLevelTagType(level) {
   }
 }
 
+// 语义检索：基于向量相似度查找相似日志模板（FR-601）。
+async function onFindSimilar(line) {
+  if (!line) return
+  semanticQuery.value = line
+  semanticResults.value = []
+  semanticDialogVisible.value = true
+  semanticSearching.value = true
+  try {
+    const { data } = await searchSemantic({ query: line, type: 'template', topK: 10 })
+    if (data && data.code === 0) {
+      semanticResults.value = data.data?.results || []
+    } else {
+      ElMessage.error(data?.msg || '语义检索失败')
+    }
+  } catch {
+    ElMessage.error('语义检索请求失败')
+  } finally {
+    semanticSearching.value = false
+  }
+}
+
 function resetForm() {
   form.client = 0
   form.item = null
@@ -514,7 +663,10 @@ async function onSearch() {
       return
     }
     const data = payload.data || {}
-    rows.value = data.list || []
+    rows.value = (data.list || []).map((row, i) => ({
+      ...row,
+      __rowKey: `${Date.now()}_${i}_${row.line?.slice(0, 20) || ''}`,
+    }))
     resultTotal.value = data.total || 0
     resultTruncated.value = !!data.truncated
     hasMore.value = data.total > pageSize.value * pageNo.value
@@ -572,9 +724,16 @@ async function fetchPage(append = false) {
     const payload = res.data || {}
     const data = payload.data || {}
     if (append) {
-      rows.value = rows.value.concat(data.list || [])
+      const newRows = (data.list || []).map((row, i) => ({
+        ...row,
+        __rowKey: `${Date.now()}_${rows.value.length + i}_${row.line?.slice(0, 20) || ''}`,
+      }))
+      rows.value = rows.value.concat(newRows)
     } else {
-      rows.value = data.list || []
+      rows.value = (data.list || []).map((row, i) => ({
+        ...row,
+        __rowKey: `${Date.now()}_${i}_${row.line?.slice(0, 20) || ''}`,
+      }))
     }
     resultTotal.value = data.total || 0
     resultTruncated.value = !!data.truncated
@@ -673,10 +832,24 @@ async function onDownloadZip() {
   }
 }
 
+// 消费全局搜索跳转携带的 query（V2.1-07）：
+//   ?item=12&key=timeout   → 回填表单
+//   ?item=12&query=level:ERROR → 回填结构化查询
+// 无 query 时不改变用户当前表单状态。
+const { itemID, keyword, queryExpr } = useRouteQuery()
+
 onMounted(() => {
   loadClients()
   loadItems()
   searchStore.load()
+
+  if (itemID.value) form.item = itemID.value
+  if (queryExpr.value) {
+    form.query = queryExpr.value
+    form.key = ''
+  } else if (keyword.value) {
+    form.key = keyword.value
+  }
 })
 
 onUnmounted(() => {
@@ -730,14 +903,79 @@ onUnmounted(() => {
   align-items: flex-start;
   gap: 4px;
 }
-.log-copy-btn {
+.log-copy-btn,
+.log-similar-btn {
   flex-shrink: 0;
   opacity: 0;
   transition: opacity 0.2s;
   padding: 4px;
 }
-.log-cell:hover .log-copy-btn { opacity: 1; }
+.log-cell:hover .log-copy-btn,
+.log-cell:hover .log-similar-btn { opacity: 1; }
+.log-similar-btn { color: var(--brand-primary); }
 .log-cell-content { flex: 1; }
+
+/* ===== 虚拟滚动日志列表 ===== */
+.log-virtual-list {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.log-virtual-header {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 12px;
+  background: var(--bg-card-muted);
+  border-bottom: 1px solid var(--border-light);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.log-virtual-header .col-index { width: 55px; flex-shrink: 0; }
+.log-virtual-header .col-source { width: 160px; flex-shrink: 0; }
+.log-virtual-header .col-line { flex: 1; }
+.log-scroller {
+  height: 480px;
+}
+.log-virtual-row {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-light);
+  font-size: 12.5px;
+  line-height: 28px;
+  overflow: hidden;
+}
+.log-virtual-row:hover {
+  background: var(--bg-card-hover);
+}
+.log-virtual-row .col-index { width: 55px; flex-shrink: 0; }
+.log-virtual-row .col-source {
+  width: 160px;
+  flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.log-virtual-row .col-line { flex: 1; min-width: 0; overflow: hidden; }
+
+/* 语义检索结果 */
+.semantic-result-item {
+  background: var(--bg-card-muted);
+}
+.semantic-result-item:hover {
+  border-color: var(--brand-primary) !important;
+}
+
+/* 模板自动补全 */
+.template-autocomplete__item:hover {
+  background: var(--bg-card-hover);
+}
+.template-autocomplete__item:hover code {
+  color: var(--brand-primary);
+}
 
 /* 背景色 */
 .bg-muted-bg {

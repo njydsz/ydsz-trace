@@ -6,11 +6,12 @@ package task
 
 import (
 	"encoding/json"
-	"io"
+	"fmt"
 	"log"
 	"time"
 
 	"ydsz-trace/logs/models"
+	"ydsz-trace/pkg/api"
 	"ydsz-trace/pkg/config"
 	"ydsz-trace/pkg/metrics"
 	"ydsz-trace/pkg/util"
@@ -18,21 +19,16 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// Resp 客户端在线探测响应体。
-type Resp struct {
-	// Code 业务状态码
-	Code string `json:"code"`
-	// Msg 提示信息
-	Msg string `json:"msg"`
-}
-
 // checkOnlineTask 定时任务：轮询所有客户端 /checkOn，更新在线状态。
+//
+// 重试策略：单个节点探测失败不阻塞整体流程，仅标记该节点离线。
+// 使用 prometheus gauge 同步上报 total/online 到 /metrics 端点。
 func checkOnlineTask() {
-	log.Printf("定时检测客户端是否在线 Time: %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	log.Printf("[task] 定时检测客户端在线状态 time=%s", time.Now().Format("2006-01-02 15:04:05"))
 
 	clients, err := models.QueryAllClient()
 	if err != nil {
-		log.Printf("query all client err: %v", err)
+		log.Printf("[task] 查询客户端列表失败: %v", err)
 		return
 	}
 
@@ -41,44 +37,31 @@ func checkOnlineTask() {
 
 	httpClient := util.NewClientWithTimeout(10 * time.Second)
 	for _, client := range clients {
-		logcServer := client.Ip + ":" + client.Port
-		resp, err := httpClient.Get("http://" + logcServer + "/checkOn")
+		addr := fmt.Sprintf("http://%s:%s/checkOn", client.Ip, client.Port)
+		resp, err := httpClient.Get(addr)
 		if err != nil {
-			log.Printf("check logc Online status err: %v", err)
-			// 探测失败，标记为离线
+			log.Printf("[task] 探测客户端 %s:%s 失败: %v", client.Ip, client.Port, err)
 			updateOnline(client.Id, "0")
 			continue
 		}
 
-		body, readErr := io.ReadAll(resp.Body)
+		var result api.Response
+		dErr := json.NewDecoder(resp.Body).Decode(&result)
 		resp.Body.Close()
-		if readErr != nil {
-			log.Printf("读取探测响应失败: %v", readErr)
+		if dErr != nil {
+			log.Printf("[task] 解析客户端 %s 响应失败: %v", client.Ip, dErr)
 			updateOnline(client.Id, "0")
 			continue
 		}
 
-		var r Resp
-		// 字符串转结构体
-		if err := json.Unmarshal(body, &r); err != nil {
-			log.Printf("解析探测响应失败: %v", err)
-			updateOnline(client.Id, "0")
-			continue
-		}
-
-		if "200" == r.Code {
-			log.Printf("check logc Online status resp code: %v", r.Code)
-			updateOnline(client.Id, "1")
-			online++
-		} else {
-			log.Printf("check logc Online status resp code: %v", r.Code)
-			updateOnline(client.Id, "0")
-		}
+		// 探测成功：HTTP 可达且响应为合法 JSON 即视为在线
+		updateOnline(client.Id, "1")
+		online++
 	}
 
-	// 更新 metrics 中的客户端统计数据
+	// 更新 prometheus gauge
 	metrics.Global().UpdateClientStats(total, online)
-	log.Printf("客户端统计更新完成: total=%d, online=%d\n", total, online)
+	log.Printf("[task] 客户端统计更新完成: total=%d, online=%d", total, online)
 }
 
 // updateOnline 写入客户端在线状态（1=在线，0=离线）。

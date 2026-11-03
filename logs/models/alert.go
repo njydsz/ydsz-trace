@@ -29,6 +29,7 @@ type AlertRule struct {
 	Threshold   int    `json:"threshold" db:"threshold"`
 	IntervalSec int    `json:"intervalSec" db:"interval_sec"`
 	WebhookURL  string `json:"webhookUrl" db:"webhook_url"`
+	Channel     string `json:"channel" db:"channel"`
 	Enabled     int    `json:"enabled" db:"enabled"`
 	LastFired   string `json:"lastFired" db:"last_fired"`
 	CreatedBy   string `json:"createdBy" db:"created_by"`
@@ -72,12 +73,16 @@ func InsertAlertRule(r *AlertRule) (int64, error) {
 	if r.IntervalSec <= 0 {
 		r.IntervalSec = 300
 	}
+	// channel 默认值：未设置时回退 webhook，保持向后兼容。
+	if r.Channel == "" {
+		r.Channel = "webhook"
+	}
 	res, err := DB.Exec(`INSERT INTO t_alert_rule
 		(name, item_id, client_id, key_word, regex, level, threshold,
-		 interval_sec, webhook_url, enabled, created_by, created_time, updated_time)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 interval_sec, webhook_url, channel, enabled, created_by, created_time, updated_time)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.Name, r.ItemID, r.ClientID, r.KeyWord, alertBoolToInt(r.Regex), r.Level,
-		r.Threshold, r.IntervalSec, r.WebhookURL, r.Enabled,
+		r.Threshold, r.IntervalSec, r.WebhookURL, r.Channel, r.Enabled,
 		r.CreatedBy, r.CreatedTime, r.UpdatedTime)
 	if err != nil {
 		log.Printf("insert alert rule err: %v", err)
@@ -89,12 +94,15 @@ func InsertAlertRule(r *AlertRule) (int64, error) {
 // UpdateAlertRule 按 id 更新规则可编辑字段。
 func UpdateAlertRule(r *AlertRule) error {
 	r.UpdatedTime = time.Now().Format("2006-01-02 15:04:05")
+	if r.Channel == "" {
+		r.Channel = "webhook"
+	}
 	_, err := DB.Exec(`UPDATE t_alert_rule SET
 		name = ?, client_id = ?, key_word = ?, regex = ?, level = ?,
-		threshold = ?, interval_sec = ?, webhook_url = ?, enabled = ?, updated_time = ?
+		threshold = ?, interval_sec = ?, webhook_url = ?, channel = ?, enabled = ?, updated_time = ?
 		WHERE id = ?`,
 		r.Name, r.ClientID, r.KeyWord, alertBoolToInt(r.Regex), r.Level,
-		r.Threshold, r.IntervalSec, r.WebhookURL, r.Enabled,
+		r.Threshold, r.IntervalSec, r.WebhookURL, r.Channel, r.Enabled,
 		r.UpdatedTime, r.ID)
 	if err != nil {
 		log.Printf("update alert rule err: %v", err)

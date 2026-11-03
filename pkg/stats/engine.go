@@ -16,7 +16,14 @@ const maxWindowSize = 30
 // AnomalyEngine 异常检测引擎（单实例，并发安全）。
 type AnomalyEngine struct {
 	baselines map[string]*Baseline // key = itemID:templateHash
-	mu        sync.RWMutex
+
+	// 以下三组状态由 anomaly_v2.go 的检测器维护：
+	ewmaStates map[string]*EWMAState        // key = itemID:templateHash
+	periodic   map[string]*PeriodicBaseline // key = itemID:templateHash
+	// seenTemplates 记录首次见到模板的时间，用于新增模式判定。
+	seenTemplates map[string]time.Time
+
+	mu sync.RWMutex
 }
 
 // Baseline 某个模板的周期基线。
@@ -38,6 +45,12 @@ type AnomalyEvent struct {
 	ZScore       float64 `json:"zScore"`
 	Direction    string  `json:"direction"` // "surge" / "drop"
 	Severity     string  `json:"severity"`  // "critical" / "warning"
+
+	// Algorithm 命中的检测算法（z-score / ewma / periodic / new-pattern / disappear）。
+	// 供前端展示与阈值自适应使用。
+	Algorithm string `json:"algorithm,omitempty"`
+	// AnomalyType 异常子类型（spike / new / disappear），未指定时为空。
+	AnomalyType AnomalyType `json:"anomalyType,omitempty"`
 }
 
 // anomalyDirection 方向常量。
@@ -55,7 +68,10 @@ const (
 // NewAnomalyEngine 创建异常检测引擎单例。
 func NewAnomalyEngine() *AnomalyEngine {
 	return &AnomalyEngine{
-		baselines: make(map[string]*Baseline),
+		baselines:     make(map[string]*Baseline),
+		ewmaStates:    make(map[string]*EWMAState),
+		periodic:      make(map[string]*PeriodicBaseline),
+		seenTemplates: make(map[string]time.Time),
 	}
 }
 
@@ -106,6 +122,8 @@ func (e *AnomalyEngine) DetectAnomalies(current map[string]int, timestamp string
 			CurrentCount: count,
 			BaselineMean: round2(mean),
 			ZScore:       round2(zscore),
+			Algorithm:    AlgorithmZScore,
+			AnomalyType:  AnomalyTypeSpike,
 		}
 
 		if float64(count) > threshold && zscore > 3 {

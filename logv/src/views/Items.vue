@@ -39,6 +39,7 @@
         v-loading="loading"
         stripe
         border
+        :row-class-name="rowClassName"
         @selection-change="handleSelectionChange"
         ref="tableRef"
       >
@@ -113,8 +114,9 @@
 
 /** 采集路径配置页：按节点分组管理日志采集路径，增删改查、启用/禁用切换。搜索过滤、批量删除。绑定所属节点必填。 */
 <script setup>
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, nextTick } from 'vue'
 import { Plus, Edit, Delete, Switch, Search, Document } from '@element-plus/icons-vue'
+import { useRouteQuery } from '@/composables/useRouteQuery'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { queryItems, addItem, updateItem, deleteItem, changeItemStatus } from '@/api/item'
 import { queryAllClients } from '@/api/client'
@@ -284,8 +286,39 @@ async function remove(row) {
   }
 }
 
-onMounted(() => {
+// 全局搜索跳转（V2.1-07）：?id=12 时定位并高亮对应行
+const { itemID } = useRouteQuery()
+
+onMounted(async () => {
   loadClients()
-  load()
+  await load()
+  highlightById()
 })
+
+async function highlightById() {
+  if (!itemID.value) return
+  await nextTick()
+  const target = list.value.find((row) => row.id === itemID.value)
+  if (target) {
+    highlightId.value = itemID.value
+    ElMessage.success(`已定位到日志项：${target.itemName || target.id}`)
+    setTimeout(() => { highlightId.value = null }, 4000)
+  }
+}
+
+// highlightId 用于表格行的临时高亮定位。
+const highlightId = ref(null)
+
+// rowClassName 为命中定位的 row 附加高亮类。
+function rowClassName({ row }) {
+  return row.id === highlightId.value ? 'row-highlighted' : ''
+}
 </script>
+
+<style scoped>
+/* 全局搜索定位高亮（V2.1-07） */
+:deep(.row-highlighted) > td {
+  background-color: var(--el-color-primary-light-9) !important;
+  transition: background-color 0.4s ease;
+}
+</style>

@@ -1,6 +1,8 @@
+// 模型能力配置 API—与后端 logs/controllers/admin/aimodel.go 对齐。
+// AI 状态面板 API（L0-L3 四层智能漏斗运行状态）。
 import http from './http'
 
-// 模型能力配置 API—与后端 logs/controllers/admin/aimodel.go 对齐。
+// 模型能力配置 CRUD ============
 
 // listModelCapabilities 查询模型能力配置列表。
 // params: { pageNo, pageSize, keyword, capability }
@@ -37,4 +39,11 @@ export function toggleModelCapability(id, enabled) {
 // @param {number} id - 模型能力配置 ID
 export function selfCheckModelCapability(id) {
   return http.post('/admin/model-capability/selfcheck', { id })
+}
+
+// AI 状态面板 ============
+
+// fetchAIStatus 获取 AI 四层运行状态（L0-L3 智能漏斗）。
+export function fetchAIStatus() {
+  return http.get('/admin/ai/status')
 }

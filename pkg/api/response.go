@@ -36,6 +36,8 @@ const (
 	CodeNotFound ResponseCode = 404
 	// CodeServerError 服务内部错误
 	CodeServerError ResponseCode = 500
+	// CodeNotImplemented 功能尚未实现（用于已规划但未交付的接口，避免伪成功）
+	CodeNotImplemented ResponseCode = 501
 	// CodeTimeout 网关超时
 	CodeTimeout ResponseCode = 504
 )
@@ -176,6 +178,8 @@ func codeToHTTPStatus(code ResponseCode) int {
 		return http.StatusForbidden
 	case CodeNotFound:
 		return http.StatusNotFound
+	case CodeNotImplemented:
+		return http.StatusNotImplemented
 	case CodeServerError:
 		return http.StatusInternalServerError
 	case CodeTimeout:

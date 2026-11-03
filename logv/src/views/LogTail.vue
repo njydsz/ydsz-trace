@@ -79,27 +79,34 @@
           </div>
         </div>
       </template>
-      <div ref="viewerRef" class="log-viewer bg-gray-900 rounded p-3 h-[500px] overflow-y-auto font-mono text-sm">
-        <div
-          v-for="(line, idx) in displayLines"
-          :key="idx"
-          class="log-line hover:bg-gray-800 group relative"
-          :class="getLineClass(line)"
+      <div class="log-viewer bg-gray-900 rounded p-3 h-[500px] overflow-hidden font-mono text-sm">
+        <RecycleScroller
+          ref="scrollerRef"
+          class="log-scroller"
+          :items="displayLines"
+          :item-size="28"
+          key-field="__lineKey"
+          v-slot="{ item, index }"
         >
-          <span class="text-gray-500 mr-2 select-none">{{ sortedIndexStart + idx + 1 }}</span>
-          <template v-if="isMultiNode">
-            <span class="text-blue-400 mr-1 text-xs font-mono">{{ line.ip }}:{{ line.port }}</span>
-            <span v-if="line.rateLimited" class="text-yellow-400 mr-1 text-xs">[限速丢弃 {{ line.droppedCount }}]</span>
-            <span v-else-if="line.template && form.extractTemplate" class="text-purple-300 mr-1 text-xs">{{ line.template }}</span>
-          </template>
-          <span class="log-content">{{ line.rateLimited ? line.content : (line.content || line) }}</span>
-          <el-button
-            :icon="CopyDocument"
-            size="small"
-            class="copy-hover-btn absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity"
-            @click.stop="handleCopy(line)"
-          />
-        </div>
+          <div
+            class="log-line hover:bg-gray-800 group relative"
+            :class="getLineClass(item)"
+          >
+            <span class="text-gray-500 mr-2 select-none">{{ sortedIndexStart + index + 1 }}</span>
+            <template v-if="isMultiNode">
+              <span class="text-blue-400 mr-1 text-xs font-mono">{{ item.ip }}:{{ item.port }}</span>
+              <span v-if="item.rateLimited" class="text-yellow-400 mr-1 text-xs">[限速丢弃 {{ item.droppedCount }}]</span>
+              <span v-else-if="item.template && form.extractTemplate" class="text-purple-300 mr-1 text-xs">{{ item.template }}</span>
+            </template>
+            <span class="log-content">{{ item.rateLimited ? item.content : (item.content || item) }}</span>
+            <el-button
+              :icon="CopyDocument"
+              size="small"
+              class="copy-hover-btn absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity"
+              @click.stop="handleCopy(item)"
+            />
+          </div>
+        </RecycleScroller>
         <div v-if="displayLines.length === 0" class="text-gray-500 text-center py-8">
           点击"开始追踪"查看实时日志
         </div>
@@ -109,15 +116,17 @@
 </template>
 
 <script setup>
-import { ref, reactive, shallowRef, computed, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, shallowRef, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import { VideoPlay, VideoPause, Delete, CopyDocument, Check } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { queryLogClients } from '@/api/logs'
+import { RecycleScroller } from 'vue-virtual-scroller'
+import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
+import { queryLogClients, queryItemsByClient } from '@/api/logs'
 import { createSSE } from '@/api/sse'
 
 // 环形缓冲区最大容量
-const RING_BUFFER_SIZE = 500
+const RING_BUFFER_SIZE = 2000
 
 const clients = ref([])
 const items = ref([])
@@ -125,11 +134,11 @@ const itemsLoading = ref(false)
 const streaming = ref(false)
 const paused = ref(false)
 const totalCount = ref(0)
-const viewerRef = ref(null)
 
 // 用 shallowRef 包裹行数组，避免深度响应式开销（SSE 高频推送）
 // ringBuffer 存储完整的环形缓冲区，用于视图渲染
 const ringBuffer = shallowRef([])
+const scrollerRef = ref(null)
 
 const displayLines = computed(() => ringBuffer.value)
 
@@ -168,7 +177,6 @@ async function loadItems() {
   try {
     itemsLoading.value = true
     if (form.client) {
-      const { queryItemsByClient } = await import('@/api/logs')
       const { data } = await queryItemsByClient(form.client)
       items.value = data.data || []
     }
@@ -262,16 +270,31 @@ function handleEvent({ event, data }) {
 // 环形缓冲区写入 - 使用 splice 避免深度响应
 function appendToRing(line) {
   const buf = ringBuffer.value
+  const lineKey = `${Date.now()}_${msgCount}`
+  // 为每行添加唯一 key 供 RecycleScroller 使用
+  const lineWithKey = (typeof line === 'object' && line !== null)
+    ? { ...line, __lineKey: lineKey }
+    : { content: line, __lineKey: lineKey }
+
   if (buf.length < RING_BUFFER_SIZE) {
     // 未满时直接追加
-    // 触发 shallowRef 响应式更新
-    ringBuffer.value = [...buf, line]
+    ringBuffer.value = [...buf, lineWithKey]
   } else {
     // 满了之后，在新数组中替换最早的元素
     const newArr = buf.slice(1)
-    newArr.push(line)
+    newArr.push(lineWithKey)
     ringBuffer.value = newArr
     sortedIndexStart.value++
+  }
+
+  // 滚动到底部
+  scrollToBottom()
+}
+
+async function scrollToBottom() {
+  await nextTick()
+  if (scrollerRef.value) {
+    scrollerRef.value.scrollTop = scrollerRef.value.scrollHeight
   }
 }
 
@@ -307,9 +330,10 @@ function getLineClass(line) {
   const text = typeof line === 'object' ? (line.content || '') : String(line)
   if (line.rateLimited) return 'text-yellow-500 italic'
   const upper = text.toUpperCase()
-  if (upper.includes('ERROR') || upper.includes('FATAL')) return 'text-red-400'
+  if (upper.includes('FATAL')) return 'text-red-400 font-bold'
+  if (upper.includes('ERROR')) return 'text-red-400 font-semibold'
   if (upper.includes('WARN')) return 'text-yellow-400'
-  if (upper.includes('DEBUG')) return 'text-gray-400'
+  if (upper.includes('DEBUG')) return 'text-gray-500'
   if (upper.includes('INFO')) return 'text-green-400'
   return 'text-gray-200'
 }
@@ -367,18 +391,25 @@ onUnmounted(() => {
   }
 }
 
-.log-viewer::-webkit-scrollbar {
-  width: 6px;
+/* 虚拟滚动日志流 */
+.log-viewer {
+  display: flex;
+  flex-direction: column;
 }
-.log-viewer::-webkit-scrollbar-thumb {
-  background: #555;
-  border-radius: 3px;
+.log-scroller {
+  flex: 1;
+  height: 500px;
 }
 .log-line {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 4px;
   white-space: pre-wrap;
   word-break: break-all;
   line-height: 1.5;
-  padding: 1px 4px;
+  font-size: 12px;
+  overflow: hidden;
 }
 .log-content {
   display: inline;

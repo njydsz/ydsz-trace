@@ -2,12 +2,22 @@
 //
 // 主题：'light' | 'dark' | 'system'
 // 持久化到 localStorage，key = 'ydsz-theme-preference'
+//
+// 设计要点：
+//   - SSR/测试环境下 window 可能不存在，所有 DOM/媒体查询访问均需防御
+//   - 必须在应用启动时调用 init()，否则首屏不会应用已保存的偏好
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 
 const STORAGE_KEY = 'ydsz-theme-preference'
 
+// hasDOM 判断当前是否具备浏览器 DOM 环境。
+function hasDOM() {
+  return typeof window !== 'undefined' && typeof document !== 'undefined'
+}
+
 function readPref() {
+  if (!hasDOM()) return 'system'
   try {
     const v = localStorage.getItem(STORAGE_KEY)
     if (v === 'light' || v === 'dark' || v === 'system') return v
@@ -18,14 +28,16 @@ function readPref() {
 }
 
 function isSystemDark() {
+  if (!hasDOM()) return false
   try {
-    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches
+    return !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)
   } catch {
     return false
   }
 }
 
 function applyToDOM(theme, systemDark) {
+  if (!hasDOM()) return
   const root = document.documentElement
   if (theme === 'dark' || (theme === 'system' && systemDark)) {
     root.setAttribute('data-theme', 'dark')
@@ -34,13 +46,15 @@ function applyToDOM(theme, systemDark) {
   }
 }
 
-// useThemeStore — 主题状态管理 Pinia store。
+// useThemeStorage — 主题状态管理 Pinia store。
 //
 // 偏好：'light' | 'dark' | 'system'；持久化到 localStorage，key = 'ydsz-theme-preference'。
 export const useThemeStorage = defineStore('theme', () => {
   const preference = ref(readPref())
   const systemDark = ref(isSystemDark())
-  const systemDarkMQ = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)')
+  const systemDarkMQ = hasDOM()
+    ? window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)')
+    : null
 
   // resolvedTheme — 将偏好解析为实际生效的 'light' | 'dark'。
   const resolvedTheme = computed(() => {
@@ -52,10 +66,12 @@ export const useThemeStorage = defineStore('theme', () => {
   // setPreference 设置主题偏好并同步到 localStorage + DOM。
   function setPreference(next) {
     preference.value = next
-    try {
-      localStorage.setItem(STORAGE_KEY, next)
-    } catch {
-      /* localStorage 不可用时忽略 */
+    if (hasDOM()) {
+      try {
+        localStorage.setItem(STORAGE_KEY, next)
+      } catch {
+        /* localStorage 不可用时忽略 */
+      }
     }
     applyToDOM(next, systemDark.value)
   }
@@ -66,7 +82,7 @@ export const useThemeStorage = defineStore('theme', () => {
     setPreference(order[preference.value] || 'system')
   }
 
-  // syncSystemDark 响应系统主题变更（仅在偏好为 system 时生效）。
+  // onMQChange 响应系统主题变更（仅在偏好为 system 时生效）。
   function onMQChange(e) {
     systemDark.value = !!e.matches
     applyToDOM(preference.value, systemDark.value)
@@ -74,12 +90,20 @@ export const useThemeStorage = defineStore('theme', () => {
 
   // startWatching 监听系统主题变更；返回取消监听的函数。
   function startWatching() {
-    if (!systemDarkMQ) return () => {}
+    if (!systemDarkMQ || typeof systemDarkMQ.addEventListener !== 'function') {
+      return () => {}
+    }
     systemDarkMQ.addEventListener('change', onMQChange)
-    return () => systemDarkMQ.removeEventListener('change', onMQChange)
+    return () => {
+      if (systemDarkMQ && typeof systemDarkMQ.removeEventListener === 'function') {
+        systemDarkMQ.removeEventListener('change', onMQChange)
+      }
+    }
   }
 
-  // init 应用当前偏好到 DOM 并启动监听。
+  // init 应用当前偏好到 DOM 并启动系统主题监听。
+  //
+  // 必须在应用挂载时调用一次（见 main.js），否则首屏不会应用已保存的偏好。
   function init() {
     applyToDOM(preference.value, systemDark.value)
     return startWatching()

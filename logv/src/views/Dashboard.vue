@@ -1,11 +1,25 @@
 <template>
   <div class="dashboard">
+    <!-- 分时段欢迎问候条 -->
+    <div class="greeting-banner flex items-center gap-3 rounded-xl px-4 py-3 mb-4" data-testid="dashboard-greeting">
+      <el-icon :size="20" class="greeting-icon">
+        <component :is="greetingIcon" />
+      </el-icon>
+      <span class="greeting-text" data-testid="dashboard-greeting-text">{{ greeting }}！欢迎回来，祝您工作顺利</span>
+      <span class="greeting-time ml-auto">{{ new Date().toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', month: 'long', day: 'numeric', weekday: 'long' }) }}</span>
+    </div>
+
+    <!-- AI 四层智能引擎状态 -->
+    <div class="mb-6">
+      <AIStatusPanel />
+    </div>
+
     <!-- 欢迎横幅 -->
     <div class="welcome-banner rounded-2xl p-6 mb-6">
       <div class="flex items-center justify-between">
         <div>
-          <h1 class="welcome-title">欢迎使用 Ydsz Trace</h1>
-          <p class="welcome-desc mt-1">AI 驱动的分布式日志排障定位平台 — 让日志分析更智能、更高效</p>
+          <h1 class="welcome-title" data-testid="dashboard-welcome-title">欢迎使用 Ydsz Trace</h1>
+          <p class="welcome-desc mt-1" data-testid="dashboard-welcome-desc">AI 驱动的分布式日志排障定位平台 — 让日志分析更智能、更高效</p>
         </div>
         <div class="welcome-icon hidden sm:flex">
           <el-icon :size="48"><DataAnalysis /></el-icon>
@@ -14,7 +28,10 @@
     </div>
 
     <!-- 洞察看板（模板趋势 / 异常事件时间线 / 服务健康度总览） -->
-    <DashboardInsight />
+    <div v-if="!insightLoaded" class="mb-6" data-testid="dashboard-insight-skeleton">
+      <SkeletonLoader type="card" :count="2" />
+    </div>
+    <DashboardInsight v-show="insightLoaded" data-testid="dashboard-insight" @loaded="onInsightLoaded" />
 
     <!-- 快捷操作 + 关于 -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -26,38 +43,38 @@
             <span class="font-semibold text-sm">快捷操作</span>
           </div>
         </template>
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <button class="quick-action flex flex-col items-center gap-2 rounded-xl p-4" @click="go('/conversation')">
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3" data-testid="dashboard-quick-actions">
+          <button class="quick-action flex flex-col items-center gap-2 rounded-xl p-4" data-testid="quick-action-conversation" @click="go('/conversation')">
             <div class="quick-action-icon quick-action-icon--primary flex items-center justify-center rounded-xl">
               <el-icon :size="20"><ChatLineRound /></el-icon>
             </div>
             <span class="quick-action-label text-xs font-medium">日志检索助手</span>
           </button>
-          <button class="quick-action flex flex-col items-center gap-2 rounded-xl p-4" @click="go('/clients')">
+          <button class="quick-action flex flex-col items-center gap-2 rounded-xl p-4" data-testid="quick-action-clients" @click="go('/clients')">
             <div class="quick-action-icon quick-action-icon--success flex items-center justify-center rounded-xl">
               <el-icon :size="20"><Cpu /></el-icon>
             </div>
             <span class="quick-action-label text-xs font-medium">日志节点配置</span>
           </button>
-          <button class="quick-action flex flex-col items-center gap-2 rounded-xl p-4" @click="go('/items')">
+          <button class="quick-action flex flex-col items-center gap-2 rounded-xl p-4" data-testid="quick-action-items" @click="go('/items')">
             <div class="quick-action-icon quick-action-icon--info flex items-center justify-center rounded-xl">
               <el-icon :size="20"><Document /></el-icon>
             </div>
             <span class="quick-action-label text-xs font-medium">采集路径配置</span>
           </button>
-          <button class="quick-action flex flex-col items-center gap-2 rounded-xl p-4" @click="go('/logs')">
+          <button class="quick-action flex flex-col items-center gap-2 rounded-xl p-4" data-testid="quick-action-logs" @click="go('/logs')">
             <div class="quick-action-icon quick-action-icon--warning flex items-center justify-center rounded-xl">
               <el-icon :size="20"><Search /></el-icon>
             </div>
             <span class="quick-action-label text-xs font-medium">历史检索</span>
           </button>
-          <button class="quick-action flex flex-col items-center gap-2 rounded-xl p-4" @click="go('/trace')">
+          <button class="quick-action flex flex-col items-center gap-2 rounded-xl p-4" data-testid="quick-action-trace" @click="go('/trace')">
             <div class="quick-action-icon quick-action-icon--danger flex items-center justify-center rounded-xl">
               <el-icon :size="20"><Share /></el-icon>
             </div>
             <span class="quick-action-label text-xs font-medium">日志链路追踪</span>
           </button>
-          <button class="quick-action flex flex-col items-center gap-2 rounded-xl p-4" @click="go('/alerts')">
+          <button class="quick-action flex flex-col items-center gap-2 rounded-xl p-4" data-testid="quick-action-alerts" @click="go('/alerts')">
             <div class="quick-action-icon quick-action-icon--purple flex items-center justify-center rounded-xl">
               <el-icon :size="20"><Bell /></el-icon>
             </div>
@@ -115,15 +132,60 @@ import {
   ChatLineRound, Lightning, InfoFilled, DataAnalysis, Position,
 } from '@element-plus/icons-vue'
 import DashboardInsight from '@/components/DashboardInsight.vue'
+import SkeletonLoader from '@/components/SkeletonLoader.vue'
+import AIStatusPanel from '@/components/AIStatusPanel.vue'
+import { ref, computed } from 'vue'
+import { Sunrise, PartlyCloudy, Sunset, Moon } from '@element-plus/icons-vue'
 
 const router = useRouter()
 
 function go(path) {
   router.push(path)
 }
+
+// 分时段问候
+const hour = computed(() => new Date().getHours())
+const greeting = computed(() => {
+  if (hour.value >= 5 && hour.value < 12) return '早上好'
+  if (hour.value >= 12 && hour.value < 18) return '下午好'
+  if (hour.value >= 18 && hour.value < 22) return '晚上好'
+  return '夜深了'
+})
+const greetingIcon = computed(() => {
+  if (hour.value >= 5 && hour.value < 12) return Sunrise
+  if (hour.value >= 12 && hour.value < 18) return PartlyCloudy
+  if (hour.value >= 18 && hour.value < 22) return Sunset
+  return Moon
+})
+
+// DashboardInsight 加载状态
+const insightLoaded = ref(false)
+function onInsightLoaded() {
+  insightLoaded.value = true
+}
 </script>
 
 <style scoped>
+/* ===== 分时段问候横幅 ===== */
+.greeting-banner {
+  background: linear-gradient(135deg, #eff6ff 0%, #e0f2fe 100%);
+  border: 1px solid #bfdbfe;
+}
+.greeting-banner .greeting-icon {
+  color: #2563eb;
+  flex-shrink: 0;
+}
+.greeting-text {
+  font-size: 14px;
+  font-weight: 500;
+  color: #1e40af;
+}
+.greeting-time {
+  font-size: 12px;
+  color: #6b7280;
+  white-space: nowrap;
+}
+
 /* ===== 欢迎横幅 ===== */
 .welcome-banner {
   background: linear-gradient(135deg, var(--brand-700) 0%, var(--brand-600) 50%, var(--brand-500) 100%);

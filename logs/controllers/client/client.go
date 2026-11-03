@@ -148,31 +148,62 @@ func Update(c *gin.Context) {
 	api.Success(c, "更新客户端成功", nil)
 }
 
+// DefaultRegisterKey 出厂默认注册密钥。
+//
+// 【安全】仅允许 dev 模式使用；runmode != "dev" 时强制拒绝启动。
+// 生产必须通过 YDSZ_REGISTER_KEY 注入 ≥16 字符的强密钥。
+const DefaultRegisterKey = "ydsz-trace-register-2026"
+
 // getRegisterKey 获取注册鉴权密钥。
 // 优先级：环境变量 YDSZ_REGISTER_KEY > 配置文件 register_key > 默认值。
 //
-// 【安全】默认值 "ydsz-trace-register-2026" 仅适用于开发环境，
-// 生产环境务必通过 YDSZ_REGISTER_KEY 注入强密钥（≥16 字符）。
+// 安全策略（V2.1-09）：
+//   - 非 dev 模式检测到默认密钥 → 直接 panic 拒绝启动（不静默降级）
+//   - 每次注册请求校验密钥长度 ≥ 16，不足则走签名启用判断
 func getRegisterKey(c *gin.Context) string {
+	key := DefaultRegisterKey
+
 	if v := os.Getenv("YDSZ_REGISTER_KEY"); v != "" {
-		return v
-	}
-	cfg, exists := c.Get("cfg")
-	if exists {
+		key = v
+	} else if cfg, exists := c.Get("cfg"); exists {
 		if conf, ok := cfg.(*config.Config); ok {
 			if v := conf.StringOr("register_key", ""); v != "" {
-				return v
+				key = v
 			}
 		}
 	}
-	log.Printf("[security] 警告：使用默认注册密钥，生产环境请通过 YDSZ_REGISTER_KEY 环境变量配置强密钥")
-	return "ydsz-trace-register-2026"
+
+	// 生产环境拒绝使用出厂默认密钥（防止带弱密钥上线）
+	if isProductionMode(c) && key == DefaultRegisterKey {
+		panic("[security] 生产模式禁止使用出厂默认注册密钥，请通过 YDSZ_REGISTER_KEY 注入 ≥16 字符的强密钥")
+	}
+
+	if key == DefaultRegisterKey {
+		log.Printf("[security] 警告：使用默认注册密钥，生产环境请通过 YDSZ_REGISTER_KEY 环境变量配置强密钥")
+	}
+
+	return key
+}
+
+// isProductionMode 判断当前是否为生产模式（runmode != "dev"）。
+func isProductionMode(c *gin.Context) bool {
+	cfg, exists := c.Get("cfg")
+	if !exists {
+		return false
+	}
+	conf, ok := cfg.(*config.Config)
+	if !ok {
+		return false
+	}
+	return conf.StringOr("runmode", "dev") != "dev"
 }
 
 // isSignatureEnabled 判断是否启用 HMAC 签名验证。
-// 当注册密钥非默认值且长度 ≥ 16 时启用，使用默认降级密钥时走明文兼容。
+//
+// 策略：密钥非出厂默认且长度 ≥ 16 时强制启用签名；
+// 使用默认密钥（仅 dev）时回退明文常量时间比对，保持零配置体验。
 func isSignatureEnabled(registerKey string) bool {
-	return len(registerKey) >= 16 && registerKey != "ydsz-trace-register-2026"
+	return len(registerKey) >= 16 && registerKey != DefaultRegisterKey
 }
 
 // verifyRegister 验证注册请求的鉴权信息。

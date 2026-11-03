@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"ydsz-trace/pkg/config"
+	"ydsz-trace/pkg/mask"
+	"ydsz-trace/pkg/perf"
 	"ydsz-trace/pkg/source"
 	"ydsz-trace/pkg/util"
 
@@ -134,11 +136,18 @@ func Query(c *gin.Context) {
 		ContextLines: fileReq.Line,
 		Query:        fileReq.Query,
 	}
-	written, err := s.Read(c.Request.Context(), fileReq.Path, scanCfg, &buf)
+	// 端侧采样（V2.2-11）：高流量时按比例丢弃低优先级日志
+	sw := perf.NewSamplingWriter(&buf, sampler())
+	written, err := s.Read(c.Request.Context(), fileReq.Path, scanCfg, sw)
 	if err != nil {
 		log.Printf("Source.Read 失败: %v", err)
 		c.Status(404)
 		return
+	}
+	if f, ok := sw.(*perf.SamplingWriter); ok {
+		if ferr := f.Flush(); ferr != nil {
+			log.Printf("采样缓冲刷新失败: %v", ferr)
+		}
 	}
 	if written == 0 {
 		c.Status(404)
@@ -299,10 +308,16 @@ func Search(c *gin.Context) {
 		ContextLines: fileReq.Line,
 		Query:        fileReq.Query,
 	}
-	if _, err := s.Read(c.Request.Context(), fileReq.Path, scanCfg, &buf); err != nil {
+	sw := perf.NewSamplingWriter(&buf, sampler())
+	if _, err := s.Read(c.Request.Context(), fileReq.Path, scanCfg, sw); err != nil {
 		log.Printf("Source.Read 失败: %v", err)
 		c.Status(404)
 		return
+	}
+	if f, ok := sw.(*perf.SamplingWriter); ok {
+		if ferr := f.Flush(); ferr != nil {
+			log.Printf("采样缓冲刷新失败: %v", ferr)
+		}
 	}
 
 	var lines []string
@@ -310,7 +325,8 @@ func Search(c *gin.Context) {
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line != "" {
-			lines = append(lines, line)
+			// FR-1303：外发脱敏（logc 返回给 logs 前执行）
+			lines = append(lines, mask.MaskAll(line))
 		}
 		// 早停：达到 MaxLines 上限后不再继续扫描，降低内存与网络开销。
 		if fileReq.MaxLines > 0 && len(lines) >= fileReq.MaxLines {

@@ -48,6 +48,7 @@
         v-loading="loading"
         stripe
         border
+        :row-class-name="rowClassName"
         @selection-change="handleSelectionChange"
         ref="tableRef"
         class="clients-table"
@@ -141,8 +142,9 @@
 
 <script setup>
 /** 日志节点配置页 v2.0：列表展示、增删改查、启用/禁用切换。搜索过滤、批量操作。删除前弹确认框。 */
-import { ref, reactive, onMounted, computed } from 'vue'
+import { ref, reactive, onMounted, computed, nextTick } from 'vue'
 import { Plus, Edit, Delete, Switch, Search, Check, Close } from '@element-plus/icons-vue'
+import { useRouteQuery } from '@/composables/useRouteQuery'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   queryClients,
@@ -325,10 +327,40 @@ async function remove(row) {
   }
 }
 
-onMounted(load)
+// 全局搜索跳转（V2.1-07）：?id=12 时定位并高亮对应行
+const { itemID: clientIDFromQuery } = useRouteQuery()
+
+onMounted(async () => {
+  await load()
+  highlightById()
+})
+
+async function highlightById() {
+  if (!clientIDFromQuery.value) return
+  await nextTick()
+  const target = list.value.find((row) => row.id === clientIDFromQuery.value)
+  if (target) {
+    highlightId.value = clientIDFromQuery.value
+    ElMessage.success(`已定位到节点：${target.ip}:${target.port}`)
+    setTimeout(() => { highlightId.value = null }, 4000)
+  }
+}
+
+// highlightId 用于表格行的临时高亮定位。
+const highlightId = ref(null)
+
+function rowClassName({ row }) {
+  return row.id === highlightId.value ? 'row-highlighted' : ''
+}
 </script>
 
 <style scoped>
+/* 全局搜索定位高亮（V2.1-07） */
+:deep(.row-highlighted) > td {
+  background-color: var(--el-color-primary-light-9) !important;
+  transition: background-color 0.4s ease;
+}
+
 /* ===== 操作按钮 ===== */
 .action-btn {
   font-weight: 500 !important;

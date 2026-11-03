@@ -282,6 +282,14 @@ func Query(c *gin.Context) {
 }
 
 // QueryClient 查询所有客户端列表（供前端下拉框使用）。
+//
+// @Summary 客户端列表
+// @Description 查询所有已注册的客户端列表，供前端下拉框使用。
+// @Tags LogSearch
+// @Produce json
+// @Success 200 {object} api.Response{data=[]models.TClient}
+// @Failure 500 {object} api.Response "查询失败"
+// @Router /logs/clients [get]
 func QueryClient(c *gin.Context) {
 	clients, err := models.QueryAllClient()
 	if err != nil {
@@ -292,6 +300,15 @@ func QueryClient(c *gin.Context) {
 }
 
 // QueryItem 根据 client_id 查询其下的日志项列表。
+//
+// @Summary 日志项列表
+// @Description 根据客户端 ID 查询其下的日志项列表。
+// @Tags LogSearch
+// @Produce json
+// @Param client_id query int true "客户端 ID"
+// @Success 200 {object} api.Response{data=[]models.TItem}
+// @Failure 500 {object} api.Response "查询失败"
+// @Router /logs/items [get]
 func QueryItem(c *gin.Context) {
 	clientId, _ := strconv.ParseInt(c.Query("client_id"), 10, 64)
 	items, err := models.QueryItemsByClientId(clientId)

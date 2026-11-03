@@ -16,6 +16,15 @@ vi.mock('@/api/logs', () => ({
   })),
 }))
 
+// 模拟 vue-virtual-scroller
+vi.mock('vue-virtual-scroller', () => ({
+  RecycleScroller: {
+    name: 'RecycleScroller',
+    template: '<div class="recycle-scroller"><slot v-for="(item, index) in items" :item="item" :index="index" /></div>',
+    props: ['items', 'itemSize', 'keyField'],
+  },
+}))
+
 vi.mock('@/api/item', () => ({
   queryAllItems: vi.fn(() => Promise.resolve({ data: { data: [] } })),
 }))

@@ -8,9 +8,12 @@ import (
 type SourceType string
 
 const (
-	SourceTypeFile   SourceType = "file"
-	SourceTypeDocker SourceType = "docker"
-	SourceTypeK8s    SourceType = "k8s"
+	SourceTypeFile     SourceType = "file"
+	SourceTypeDocker   SourceType = "docker"
+	SourceTypeK8s      SourceType = "k8s"
+	SourceTypeJournald SourceType = "journald"
+	SourceTypeSyslog   SourceType = "syslog"
+	SourceTypeHTTPPush SourceType = "http_push"
 )
 
 // FactoryConfig 工厂的通用配置映射。
@@ -33,6 +36,9 @@ type FactoryConfig struct {
 //   - K8sSource: options["node_name"] = "worker-01",
 //     options["namespace"] = "",
 //     options["discovery_anno"] = "ydsz-trace/collect"
+//   - JournaldSource: options["unit"] = "app.service", options["priority"] = "6"
+//   - SyslogSource: options["listen"] = ":5140", options["protocol"] = "udp"
+//   - HTTPPushSource: options["listen"] = ":5141", options["path"] = "/logs"
 //
 // 实现已改为注册表模式：各 Source 类型在 init() 中通过 RegisterSource 注册，
 // 新类型只需注册自身，无需修改本函数。
@@ -74,6 +80,33 @@ func CreateSourceFromEnv() (Source, error) {
 		}
 		if v := os.Getenv("YDSZ_DISCOVERY_ANNOTATION"); v != "" {
 			options["discovery_anno"] = v
+		}
+	case SourceTypeJournald:
+		if v := os.Getenv("YDSZ_JOURNALD_UNIT"); v != "" {
+			options["unit"] = v
+		}
+		if v := os.Getenv("YDSZ_JOURNALD_PRIORITY"); v != "" {
+			options["priority"] = v
+		}
+		if v := os.Getenv("YDSZ_JOURNALD_SINCE"); v != "" {
+			options["since"] = v
+		}
+		if v := os.Getenv("YDSZ_JOURNALD_BIN"); v != "" {
+			options["journalctl"] = v
+		}
+	case SourceTypeSyslog:
+		if v := os.Getenv("YDSZ_SYSLOG_LISTEN"); v != "" {
+			options["listen"] = v
+		}
+		if v := os.Getenv("YDSZ_SYSLOG_PROTOCOL"); v != "" {
+			options["protocol"] = v
+		}
+	case SourceTypeHTTPPush:
+		if v := os.Getenv("YDSZ_HTTP_PUSH_LISTEN"); v != "" {
+			options["listen"] = v
+		}
+		if v := os.Getenv("YDSZ_HTTP_PUSH_PATH"); v != "" {
+			options["path"] = v
 		}
 	}
 

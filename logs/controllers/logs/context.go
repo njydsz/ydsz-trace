@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	accesscontrol "ydsz-trace/logs/middleware"
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
 	"ydsz-trace/pkg/sanitize"
@@ -28,7 +29,23 @@ const (
 )
 
 // Context 上下文回溯接口。
-// GET /logs/context/:itemId?clientId=&before=&after=&refTime=&refLine=&date=
+//
+// @Summary 上下文回溯
+// @Description 给定参考时间或参考行，在日志文件中定位命中行并向前/向后读取指定行数的上下文，便于人工排障。
+// @Tags LogSearch
+// @Produce json
+// @Param itemId path int true "日志项 ID"
+// @Param clientId query int false "客户端 ID"
+// @Param before query int false "向前行数（默认 10，最大 100）"
+// @Param after query int false "向后行数（默认 10，最大 100）"
+// @Param refTime query string false "参考时间（ISO8601）"
+// @Param refLine query string false "参考行原文片段"
+// @Param date query string false "日期 YYYYMMDD（默认从 refTime 提取或今天）"
+// @Success 200 {object} api.Paginated{data=[]string} "list = [refLine, ...beforeLines, ...afterLines]"
+// @Failure 400 {object} api.Response "参数错误（itemId 非法 / refTime 与 refLine 同时为空 / 日期格式非法）"
+// @Failure 404 {object} api.Response "项目不存在"
+// @Failure 500 {object} api.Response "读取日志文件失败"
+// @Router /logs/context/{itemId} [get]
 func Context(c *gin.Context) {
 	itemID, err := strconv.ParseInt(c.Param("itemId"), 10, 64)
 	if err != nil || itemID == 0 {
@@ -60,6 +77,11 @@ func Context(c *gin.Context) {
 
 	if req.RefTime == "" && req.RefLine == "" {
 		api.Fail(c, api.CodeBadRequest, "refTime 与 refLine 至少提供一个")
+		return
+	}
+
+	// 行级 RBAC（V2.1-04）：itemID 来自 path 参数，同样需要校验
+	if !accesscontrol.CheckItem(c, itemID) {
 		return
 	}
 

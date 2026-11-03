@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -373,7 +374,10 @@ func Destroy(c *gin.Context) {
 			return nil
 		}()
 		if backend != nil {
-			_ = backend.Remove(context.Background(), token)
+			// JWT 缓存注销失败仅记录日志，不阻塞登出流程（cookie 已清除）
+			if err := backend.Remove(context.Background(), token); err != nil {
+				log.Printf("[session] JWT 缓存注销失败 token=%s: %v", token[:8], err)
+			}
 		}
 	}
 

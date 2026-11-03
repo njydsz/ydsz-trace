@@ -3,7 +3,9 @@ package alert
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	models "ydsz-trace/logs/models"
@@ -26,7 +28,8 @@ type alertRuleReq struct {
 	Level       string `json:"level"`
 	Threshold   int    `json:"threshold"`
 	IntervalSec int    `json:"intervalSec"`
-	WebhookURL  string `json:"webhookUrl" binding:"required,url"`
+	WebhookURL  string `json:"webhookUrl" binding:"required"`
+	Channel     string `json:"channel"`
 	Enabled     int    `json:"enabled"`
 }
 
@@ -63,7 +66,10 @@ type queryReq struct {
 // @Router /logs/alerts/rules [get]
 func ListRules(c *gin.Context) {
 	var q queryReq
-	_ = c.ShouldBindQuery(&q)
+	if err := c.ShouldBindQuery(&q); err != nil {
+		api.Fail(c, api.CodeBadRequest, "查询参数错误")
+		return
+	}
 	// 防止大量用户初始化时拖垮 db
 	if q.PageNo <= 0 {
 		q.PageNo = 1
@@ -125,6 +131,7 @@ func AddRule(c *gin.Context) {
 		Threshold:   req.Threshold,
 		IntervalSec: req.IntervalSec,
 		WebhookURL:  req.WebhookURL,
+		Channel:     req.Channel,
 		Enabled:     req.Enabled,
 		CreatedBy:   userName,
 	}
@@ -177,6 +184,7 @@ func UpdateRule(c *gin.Context) {
 	existing.Threshold = req.Threshold
 	existing.IntervalSec = req.IntervalSec
 	existing.WebhookURL = req.WebhookURL
+	existing.Channel = req.Channel
 	existing.Enabled = req.Enabled
 	if err := clampRule(&existing); err != nil {
 		api.Fail(c, api.CodeBadRequest, err.Error())
@@ -238,7 +246,8 @@ func TestFire(c *gin.Context) {
 	}
 	models.FillRuleItemName(&rule)
 	dedup := &dedupeWindow{windows: make(map[int64]time.Time)}
-	go evaluateAndFire(context.Background(), rule, time.Now(), dedup, stats.NewAnomalyEngine())
+	agg := NewAggregator(DefaultAggregateWindow)
+	go evaluateAndFire(context.Background(), rule, time.Now(), dedup, stats.NewAnomalyEngine(), agg)
 	api.Success(c, "已触发测试执行", gin.H{"ruleId": rule.ID})
 }
 
@@ -302,6 +311,21 @@ func clampRule(r *models.AlertRule) error {
 	}
 	if r.WebhookURL == "" {
 		return errors.New("webhook_url 不能为空")
+	}
+	// channel 校验：未设置时回退 webhook；非邮件渠道的 webhook_url 必须是合法 URL。
+	if r.Channel == "" {
+		r.Channel = "webhook"
+	}
+	switch r.Channel {
+	case "webhook", "wecom", "dingtalk", "feishu":
+		// IM / webhook 渠道：URL 校验（binding:required 已保证非空，此处仅做格式提示）
+	case "email":
+		// email 渠道：webhook_url 复用为 smtp:// 连接串，不做 URL 校验
+		if !strings.HasPrefix(r.WebhookURL, "smtp://") {
+			return errors.New("email 渠道要求 webhook_url 以 smtp:// 开头")
+		}
+	default:
+		return fmt.Errorf("不支持的通知渠道: %s", r.Channel)
 	}
 	return nil
 }

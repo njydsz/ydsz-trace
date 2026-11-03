@@ -22,14 +22,22 @@ import (
 	"syscall"
 	"time"
 
+	filectl "ydsz-trace/logc/controllers/file"
 	"ydsz-trace/logc/controllers/register"
 	"ydsz-trace/logc/routers"
 	"ydsz-trace/pkg/config"
+	"ydsz-trace/pkg/perf"
 	"ydsz-trace/pkg/source"
 )
 
 // activeSource 全局激活的日志源实例（由工厂创建，中间件注入到请求上下文）。
-var activeSource source.Source
+var (
+	activeSource source.Source
+	// sampler 端侧日志采样器（V2.2-11），nil 时各读取路径直通
+	sampler *perf.Sampler
+	// guardian 资源护栏（V2.2-11）
+	guardian *perf.Guardian
+)
 
 func main() {
 	// 定义变量，用于接收命令行的参数值。
@@ -69,6 +77,23 @@ func main() {
 	activeSource = src
 	log.Printf("[source] 已激活: type=%s description=%s", src.Info().Type, src.Info().Description)
 
+	// 位点定期落盘（V2.2-08，FR-102）：内存位点每 30s 写一次磁盘，
+	// 保证 logc 重启后能断点续读，同时避免每行都写盘。
+	startOffsetFlusher(src)
+
+	// 常驻接收源（V2.2-10，FR-101）：syslog / HTTP push 需要提前监听端口，
+	// 否则检索请求到来时才开始接收会丢失数据。
+	startReceivingSources(src)
+
+	// 端侧资源护栏（V2.2-11，FR-105/106）：高流量时按比例采样低优先级日志，
+	// 内存超阈值时自动降级采样率，避免 Agent 影响业务进程。
+	sampler = perf.NewSampler()
+	filectl.SetSampler(sampler)
+	guardian = perf.NewGuardian(sampler)
+	guardian.Start()
+	log.Printf("[perf] 采样率=%.2f 内存上限=%sMB（0 表示未配置）",
+		sampler.Rate(), os.Getenv("YDSZ_MAX_MEM_MB"))
+
 	// 若配置文件指定了 source
 	if cfgSource := cfg.String("source"); cfgSource != "" && os.Getenv("YDSZ_LOG_SOURCE") == "" {
 		src2, err2 := source.CreateSource(source.FactoryConfig{
@@ -81,12 +106,18 @@ func main() {
 		}
 	}
 
+	// 注册鉴权密钥（与服务端 getRegisterKey 一致）
+	regKey := os.Getenv("YDSZ_REGISTER_KEY")
+	if regKey == "" {
+		regKey = cfg.StringOr("register_key", "")
+	}
+
 	// ===== 基础注册（传统模式的本地 IP 注册）=====
 	log.Printf("logc register -server=%v -vkey=%v\n", server, vkey)
-	register.RegisterLocalIp(server, vkey)
+	register.RegisterLocalIp(server, vkey, regKey)
 
 	// ===== 启动心跳续约 =====
-	register.StartGlobalHeartbeat(server, vkey)
+	register.StartGlobalHeartbeat(server, vkey, regKey)
 
 	// ===== Docker / K8s 模式：启动自动发现与虚拟客户端注册 =====
 	autoRegisterCtx, autoRegisterCancel := context.WithCancel(context.Background())
@@ -195,6 +226,12 @@ func gracefulShutdown(srv *http.Server) {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	log.Println("收到退出信号，正在优雅关闭...")
+
+	// 退出前最后一次落盘读取位点（V2.2-08），确保重启后不重复分析
+	flushOffsetsNow(activeSource)
+
+	// 释放常驻接收端口（V2.2-10）
+	stopReceivingSources(activeSource)
 
 	register.StopGlobalHeartbeat()
 

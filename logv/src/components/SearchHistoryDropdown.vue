@@ -2,6 +2,7 @@
   <div
     v-if="visible"
     class="absolute left-0 top-full mt-1 w-full bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-xl z-50 max-h-80 overflow-y-auto"
+    data-testid="search-history-dropdown-panel"
   >
     <!-- 收藏列表 -->
     <div v-if="store.favorites.length > 0" class="border-b border-gray-100 dark:border-gray-700 p-2">

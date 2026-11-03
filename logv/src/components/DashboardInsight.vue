@@ -64,12 +64,12 @@
 
       <!-- 异常事件时间线 -->
       <div class="panel-card">
-        <h3 class="panel-title">⚠️ 异常事件时间线（近 1h）</h3>
+        <h3 class="panel-title">⚠️ 异常事件时间线（{{ rangeLabel }}）</h3>
         <div v-if="loading" class="flex justify-center py-6">
           <el-icon class="animate-spin text-2xl text-primary-500"><Loading /></el-icon>
         </div>
         <div v-else-if="timeline.length === 0" class="text-center text-muted text-sm py-6">
-          近 1 小时无异常事件
+          {{ rangeLabel }}内无异常事件
         </div>
         <div v-else class="relative pl-4">
           <div class="absolute left-[7px] top-2 bottom-2 w-px bg-gray-200"></div>
@@ -83,6 +83,62 @@
             <div class="timeline-count text-xs">
               <span class="text-danger font-semibold">{{ point.count }}</span> 次异常
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- V2.2-06 异常概览 + 反馈自适应状态 -->
+    <div class="grid grid-cols-2 gap-4">
+      <div class="panel-card">
+        <h3 class="panel-title">📊 异常概览</h3>
+        <div class="flex items-center gap-4 mb-3">
+          <div class="text-2xl font-bold" :class="anomaly.total > 0 ? 'text-danger' : 'text-success'">
+            {{ anomaly.total }}
+          </div>
+          <div class="flex flex-wrap gap-2">
+            <el-tag
+              v-for="(count, type) in anomaly.byType"
+              :key="type"
+              size="small"
+              :type="anomalyTagType(type)"
+            >
+              {{ anomalyTypeLabel(type) }} {{ count }}
+            </el-tag>
+            <span v-if="!anomaly.byType || !Object.keys(anomaly.byType).length" class="text-xs text-muted">
+              无异常
+            </span>
+          </div>
+        </div>
+        <div v-if="anomaly.recent && anomaly.recent.length" class="space-y-1.5">
+          <div
+            v-for="item in anomaly.recent"
+            :key="item.id"
+            class="flex items-start gap-2 text-xs"
+          >
+            <span class="text-muted font-mono shrink-0">{{ formatBriefTime(item.time) }}</span>
+            <span class="truncate" :title="item.description">{{ item.description }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-card">
+        <h3 class="panel-title">🎯 阈值自适应</h3>
+        <p class="text-xs text-muted mb-3">
+          用户标记的误报会自动抬高对应模板的检测阈值，减少同类噪声。
+        </p>
+        <div class="grid grid-cols-3 gap-2 text-center">
+          <div class="rounded bg-amber-50 dark:bg-amber-900/20 py-2">
+            <div class="text-lg font-bold text-amber-600">{{ feedback.falsePositive }}</div>
+            <div class="text-[10px] text-muted">误报标记</div>
+          </div>
+          <div class="rounded bg-green-50 dark:bg-green-900/20 py-2">
+            <div class="text-lg font-bold text-green-600">{{ feedback.truePositive }}</div>
+            <div class="text-[10px] text-muted">确认异常</div>
+          </div>
+          <div class="rounded bg-gray-50 dark:bg-gray-800 py-2">
+            <div class="text-lg font-bold text-gray-500">{{ feedback.ignored }}</div>
+            <div class="text-[10px] text-muted">已忽略</div>
           </div>
         </div>
       </div>
@@ -122,9 +178,11 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { Loading } from '@element-plus/icons-vue'
 import { dashboardInsight } from '@/api/logs'
+
+const emit = defineEmits(['loaded'])
 
 const loading = ref(false)
 const timeRange = ref('24h')
@@ -137,6 +195,29 @@ const health = ref({
   tasksRecent: { total: 0, success: 0, failed: 0 },
   clientHealth: [],
 })
+const anomaly = ref({ total: 0, byType: {}, recent: [] })
+const feedback = ref({ falsePositive: 0, truePositive: 0, ignored: 0 })
+
+const RANGE_LABELS = { '1h': '近 1 小时', '6h': '近 6 小时', '24h': '近 24 小时', '7d': '近 7 天' }
+
+const rangeLabel = computed(() => RANGE_LABELS[timeRange.value] || '近 24 小时')
+
+function formatBriefTime(t) {
+  return t ? String(t).slice(5, 16) : '-'
+}
+
+function anomalyTypeLabel(type) {
+  if (type === 'new') return '新增'
+  if (type === 'disappear') return '消失'
+  if (type === 'spike') return '突增'
+  return type || '-'
+}
+
+function anomalyTagType(type) {
+  if (type === 'new') return 'info'
+  if (type === 'disappear') return 'warning'
+  return 'danger'
+}
 
 async function loadInsight() {
   loading.value = true
@@ -150,11 +231,15 @@ async function loadInsight() {
         tasksRecent: { total: 0, success: 0, failed: 0 },
         clientHealth: [],
       }
+      // V2.2-06 异常概览与反馈统计（后端可能未实现时降级为空）
+      anomaly.value = resp.data.anomalyOverview || { total: 0, byType: {}, recent: [] }
+      feedback.value = resp.data.feedbackStats || { falsePositive: 0, truePositive: 0, ignored: 0 }
     }
   } catch (err) {
     console.error('DashboardInsight 加载失败:', err)
   } finally {
     loading.value = false
+    emit('loaded')
   }
 }
 

@@ -6,6 +6,7 @@ package logs
 
 import (
 	"strconv"
+	"sync"
 	"time"
 
 	models "ydsz-trace/logs/models"
@@ -14,11 +15,40 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// DashboardInsight 响应体：模板趋势 + 异常事件时间线 + 服务健康度。
+// DashboardInsight 响应体：模板趋势 + 错误时间线 + 服务健康度 + 异常概览（V2.2）。
 type DashboardInsight struct {
 	TemplateTrends  []TemplateTrendItem  `json:"templateTrends"`
 	ErrorTimeline   []ErrorTimelinePoint `json:"errorTimeline"`
 	ServiceHealth   ServiceHealthInfo   `json:"serviceHealth"`
+	// AnomalyOverview 异常概览（V2.2-06）：总数 / 按类型分布 / 最近 5 条，
+	// 供首页直接展示异常态势，无需跳转到告警页。
+	AnomalyOverview AnomalyOverview `json:"anomalyOverview"`
+	// FeedbackStats 反馈统计（V2.2-06）：误报/确认/忽略计数，反映阈值自适应状态。
+	FeedbackStats FeedbackSummary `json:"feedbackStats"`
+}
+
+// AnomalyOverview 异常概览。
+type AnomalyOverview struct {
+	Total       int            `json:"total"`
+	ByType      map[string]int `json:"byType"`
+		Recent      []AnomalyBrief `json:"recent"`
+}
+
+// AnomalyBrief 异常摘要（列表项）。
+type AnomalyBrief struct {
+	ID           int64   `json:"id"`
+	Time         string  `json:"time"`
+	TemplateHash string  `json:"templateHash"`
+	Type         string  `json:"type"`
+	Score        float64 `json:"score"`
+	Description  string  `json:"description"`
+}
+
+// FeedbackSummary 反馈统计摘要。
+type FeedbackSummary struct {
+	FalsePositive int `json:"falsePositive"`
+	TruePositive  int `json:"truePositive"`
+	Ignored       int `json:"ignored"`
 }
 
 // TemplateTrendItem 模板趋势条目。
@@ -60,24 +90,58 @@ type ClientHealth struct {
 }
 
 // DashboardInsightHandler 洞察看板数据端点。
-// GET /logs/dashboard/insight?timeRange=24h&itemId=0
+//
+// @Summary 洞察看板
+// @Description 为控制台首页提供模板趋势、异常事件时间线、服务健康度三类洞察数据，一次加载即可渲染全貌。
+// @Tags Dashboard
+// @Produce json
+// @Param timeRange query string false "时间范围（默认 24h，如 1h/6h/24h/7d）"
+// @Param itemId query int false "日志项 ID（0 表示使用第一个可用项）"
+// @Success 200 {object} api.Response{data=DashboardInsight}
+// @Router /logs/dashboard/insight [get]
 func DashboardInsightHandler(c *gin.Context) {
 	timeRange := c.DefaultQuery("timeRange", "24h")
 	itemID, _ := strconv.ParseInt(c.Query("itemId"), 10, 64)
 
-	// 1. 模板趋势：Top 10
-	trends := queryTemplateTrends(itemID, timeRange)
-
-	// 2. 异常事件时间线（近 1 小时 ERROR 桶聚合）
-	timeline := queryErrorTimeline()
-
-	// 3. 服务健康度
-	health := queryServiceHealth()
+	// 三个查询相互独立，使用 sync.WaitGroup 并行执行以降低总体延迟。
+	var (
+		wg       sync.WaitGroup
+		trends   []TemplateTrendItem
+		timeline []ErrorTimelinePoint
+		health   ServiceHealthInfo
+		anomaly  AnomalyOverview
+		feedback FeedbackSummary
+	)
+	wg.Add(5)
+	go func() {
+		defer wg.Done()
+		trends = queryTemplateTrends(itemID, timeRange)
+	}()
+	go func() {
+		defer wg.Done()
+		// 时间线范围跟随 timeRange（V2.2-06：原先固定 1 小时，与看板切换不匹配）
+		timeline = queryErrorTimelineRange(timeRange)
+	}()
+	go func() {
+		defer wg.Done()
+		health = queryServiceHealth()
+	}()
+	go func() {
+		defer wg.Done()
+		anomaly = queryAnomalyOverview(timeRange)
+	}()
+	go func() {
+		defer wg.Done()
+		feedback = queryFeedbackSummary()
+	}()
+	wg.Wait()
 
 	api.Success(c, "查询成功", DashboardInsight{
-		TemplateTrends: trends,
-		ErrorTimeline:  timeline,
-		ServiceHealth:  health,
+		TemplateTrends:  trends,
+		ErrorTimeline:   timeline,
+		ServiceHealth:   health,
+		AnomalyOverview: anomaly,
+		FeedbackStats:   feedback,
 	})
 }
 
@@ -108,9 +172,22 @@ func queryTemplateTrends(itemID int64, timeRange string) []TemplateTrendItem {
 	return items
 }
 
-// queryErrorTimeline 查询近 1 小时事件时间线（5min 桶聚合）。
+// queryErrorTimeline 查询事件时间线（保持向后兼容，默认近 1 小时）。
 func queryErrorTimeline() []ErrorTimelinePoint {
-	bucketStart := time.Now().Add(-1 * time.Hour)
+	return queryErrorTimelineRange("1h")
+}
+
+// queryErrorTimelineRange 按时间范围查询错误时间线（V2.2-06）。
+//
+// 支持 1h / 6h / 24h / 7d；非法值回退 24h。
+// 数据源为 t_pattern_stat（含 ERROR/FATAL 关键词的样本），按 5min 桶聚合。
+func queryErrorTimelineRange(timeRange string) []ErrorTimelinePoint {
+	duration, ok := parseTimeRange(timeRange)
+	if !ok {
+		duration = 24 * time.Hour
+	}
+
+	bucketStart := time.Now().Add(-duration)
 	var bucketStr string
 	if b, err := models.TimeBucket(bucketStart.Format("2006-01-02 15:04:05")); err == nil {
 		bucketStr = b
@@ -143,6 +220,76 @@ func queryErrorTimeline() []ErrorTimelinePoint {
 		})
 	}
 	return points
+}
+
+// parseTimeRange 将 timeRange 字符串解析为时长。
+func parseTimeRange(s string) (time.Duration, bool) {
+	switch s {
+	case "1h":
+		return time.Hour, true
+	case "6h":
+		return 6 * time.Hour, true
+	case "24h":
+		return 24 * time.Hour, true
+	case "7d":
+		return 7 * 24 * time.Hour, true
+	}
+	return 0, false
+}
+
+// queryAnomalyOverview 查询异常概览（V2.2-06）。
+func queryAnomalyOverview(timeRange string) AnomalyOverview {
+	overview := AnomalyOverview{ByType: map[string]int{}}
+
+	duration, ok := parseTimeRange(timeRange)
+	if !ok {
+		duration = 24 * time.Hour
+	}
+	from := time.Now().Add(-duration).Format("2006-01-02 15:04:05")
+	now := time.Now().Format("2006-01-02 15:04:05")
+
+	// 按类型分组计数
+	var typeRows []struct {
+		AnomalyType string `db:"anomaly_type"`
+		Count       int    `db:"count"`
+	}
+	if err := models.DB.Select(&typeRows, `SELECT anomaly_type, COUNT(*) AS count
+		FROM t_anomaly_event WHERE created_time BETWEEN ? AND ?
+		GROUP BY anomaly_type`, from, now); err == nil {
+		for _, r := range typeRows {
+			overview.ByType[r.AnomalyType] = r.Count
+			overview.Total += r.Count
+		}
+	}
+
+	// 最近 5 条异常
+	events, err := models.QueryAnomalyEvents(0, from, now, 5)
+	if err == nil {
+		recent := make([]AnomalyBrief, 0, len(events))
+		for _, ev := range events {
+			recent = append(recent, AnomalyBrief{
+				ID:           ev.Id,
+				Time:         ev.CreatedTime,
+				TemplateHash: ev.TemplateId,
+				Type:         ev.AnomalyType,
+				Score:        ev.Score,
+				Description:  truncateStr(ev.Description, 120),
+			})
+		}
+		overview.Recent = recent
+	}
+
+	return overview
+}
+
+// queryFeedbackSummary 查询反馈统计摘要（V2.2-06）。
+func queryFeedbackSummary() FeedbackSummary {
+	fp, tp, ig := models.QueryAnomalyFeedbackStats()
+	return FeedbackSummary{
+		FalsePositive: fp,
+		TruePositive:  tp,
+		Ignored:       ig,
+	}
 }
 
 // queryRecentTasksStats 查询最近 N 条任务统计。

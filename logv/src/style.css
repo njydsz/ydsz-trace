@@ -128,6 +128,38 @@
   --warning-light: #451a03;
   --danger-light: #450a0a;
   --info-light: #1e1b4b;
+
+  /* ---- Element Plus 暗色覆盖 ---- */
+  --el-color-primary: var(--brand-500);
+  --el-color-primary-light-3: var(--brand-400);
+  --el-color-primary-light-5: var(--brand-300);
+  --el-color-primary-light-7: var(--brand-200);
+  --el-color-primary-light-8: var(--brand-100);
+  --el-color-primary-light-9: var(--brand-50);
+  --el-color-primary-dark-2: var(--brand-600);
+  --el-bg-color: var(--bg-card);
+  --el-bg-color-page: var(--bg-main);
+  --el-bg-color-overlay: var(--bg-card);
+  --el-text-color-primary: var(--text-primary);
+  --el-text-color-regular: var(--text-secondary);
+  --el-text-color-secondary: var(--text-muted);
+  --el-text-color-placeholder: var(--text-muted);
+  --el-border-color: var(--border-card);
+  --el-border-color-light: var(--border-light);
+  --el-border-color-lighter: var(--border-light);
+  --el-border-color-extra-light: #1e293b;
+  --el-border-color-dark: #334155;
+  --el-border-color-darker: #475569;
+  --el-fill-color: var(--bg-card-muted);
+  --el-fill-color-light: var(--bg-card-muted);
+  --el-fill-color-lighter: var(--bg-card-muted);
+  --el-fill-color-extra-light: #0f172a;
+  --el-fill-color-dark: #1e293b;
+  --el-fill-color-darker: #334155;
+  --el-mask-color: rgba(0, 0, 0, 0.6);
+  --el-box-shadow: var(--shadow-card);
+  --el-box-shadow-light: var(--shadow-md);
+  --el-box-shadow-lighter: var(--shadow-sm);
 }
 
 html,

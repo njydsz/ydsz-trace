@@ -1,6 +1,7 @@
-// Package alert 实现日志告警规则与 webhook 推送：
+// Package alert 实现日志告警规则与多渠道路由：
 //   - 周期性评估启用的告警规则（调用 logc /file/search 统计命中行数）
-//   - 命中数达到阈值时，POST JSON payload 到 webhook_url，并记录一次事件
+//   - 命中数达到阈值时，按 channel 字段选择对应 Notifier 投递，并记录一次事件
+//   - 5 分钟聚合窗口内同模板多次触发合并为一条告警（Aggregator）
 //   - 基于模式时序计数的异常检测（突变/骤降）
 //   - 同源异常去重保护（按 ruleID + interval 窗口去重）
 //
@@ -17,6 +18,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -50,7 +52,7 @@ func (d *dedupeWindow) ShouldFire(ruleID int64, cooldownSec int) bool {
 	return false
 }
 
-// Scanner 周期性评估启用的告警规则；命中阈值且不在冷却期时投递 webhook。
+// Scheduler 周期性评估启用的告警规则；命中阈值且不在冷却期时投递告警。
 type Scheduler struct {
 	cron   *cron.Cron
 	mu     sync.Mutex
@@ -60,6 +62,20 @@ type Scheduler struct {
 	dedupe *dedupeWindow
 
 	anomalyEngine *stats.AnomalyEngine
+	aggregator    *Aggregator
+
+	// suppressor 维护期静默窗口（V2.2-02），nil 时视为无静默配置
+	suppressor *Suppressor
+}
+
+// SetSuppressor 注入静默窗口管理器（可选）。
+func (s *Scheduler) SetSuppressor(sup *Suppressor) {
+	s.suppressor = sup
+}
+
+// Suppressor 返回当前静默窗口管理器（未设置时返回 nil）。
+func (s *Scheduler) Suppressor() *Suppressor {
+	return s.suppressor
 }
 
 // probeFunc 实际调 logc 的钩子，便于单测替换。
@@ -107,6 +123,7 @@ func NewScheduler(maxConcurrent int) *Scheduler {
 		cancel:        cancel,
 		dedupe:        &dedupeWindow{windows: make(map[int64]time.Time)},
 		anomalyEngine: stats.NewAnomalyEngine(),
+		aggregator:    NewAggregator(DefaultAggregateWindow),
 	}
 }
 
@@ -118,6 +135,45 @@ func (s *Scheduler) Start() {
 	}
 	s.cron.Start()
 	go s.ScanOnce()
+	// 后台 goroutine：每 30s 检查一次到期聚合 entry 并投递合并告警。
+	go s.flushLoop()
+}
+
+// flushLoop 周期性 flush 到期聚合 entry。
+func (s *Scheduler) flushLoop() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			s.flushExpired()
+		}
+	}
+}
+
+// flushExpired 投递所有已到期聚合 entry。
+func (s *Scheduler) flushExpired() {
+	expired := s.aggregator.FlushExpired(time.Now())
+	for _, e := range expired {
+		result := s.aggregator.FlushEntry(s.ctx, e)
+		status := "ok"
+		errMsg := ""
+		if result.Err != nil {
+			status = "fail"
+			errMsg = result.Err.Error()
+		}
+		if _, err := models.InsertAlertEvent(e.RuleID, e.RuleName, e.WebhookURL, status,
+			result.StatusCode, e.Count, joinSamples(e.Samples), errMsg); err != nil {
+			log.Printf("[alert] 写聚合 event 失败: %v", err)
+		}
+		if err := models.UpdateAlertRuleFired(e.RuleID); err != nil {
+			log.Printf("[alert] 更新 rule last_fired 失败: %v", err)
+		}
+		log.Printf("[alert] 聚合投递: rule=%s template=%s count=%d triggers=%d",
+			e.RuleName, e.TemplateHash, e.Count, e.TriggerCount)
+	}
 }
 
 // Stop 停止后台扫描并取消所有在途评估 goroutine。
@@ -134,6 +190,14 @@ func (s *Scheduler) Stop() {
 func (s *Scheduler) ScanOnce() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// 维护期静默（V2.2-02）：落在任一启用的静默窗口内时跳过本轮全量扫描
+	if s.suppressor != nil {
+		if suppressed, name := s.suppressor.IsSuppressed(time.Now()); suppressed {
+			log.Printf("[alert] 当前处于维护静默窗口 %q，跳过本轮扫描", name)
+			return
+		}
+	}
 
 	rules, err := models.QueryEnabledAlertRules()
 	if err != nil || len(rules) == 0 {
@@ -158,12 +222,12 @@ func (s *Scheduler) ScanOnce() {
 					log.Printf("[alert] 评估规则 %d panic: %v", r.ID, rec)
 				}
 			}()
-			evaluateAndFire(s.ctx, r, t, s.dedupe, s.anomalyEngine)
+			evaluateAndFire(s.ctx, r, t, s.dedupe, s.anomalyEngine, s.aggregator)
 		}(rule, now)
 	}
 }
 
-func evaluateAndFire(ctx context.Context, rule models.AlertRule, now time.Time, dedupe *dedupeWindow, eng *stats.AnomalyEngine) {
+func evaluateAndFire(ctx context.Context, rule models.AlertRule, now time.Time, dedupe *dedupeWindow, eng *stats.AnomalyEngine, agg *Aggregator) {
 	targets, path := resolveAlertTargets(rule.ItemID, rule.ClientID)
 	if len(targets) == 0 || path == "" {
 		return
@@ -209,17 +273,43 @@ func evaluateAndFire(ctx context.Context, rule models.AlertRule, now time.Time, 
 		}
 	}
 
-	// ── FR-802: 异常检测 ──
-	eng.UpdateBaseline(templateHash, rule.ItemID, totalMatches)
-	currentCounts := map[string]int{templateHash: totalMatches }
-	anomalyEvents := eng.DetectAnomalies(currentCounts, ts)
+	// ── FR-802: 异常检测（V2.2-01 多算法编排）──
+	// 检测与学习解耦：先跑四类检测器，再统一更新基线。
+	bucketIdx := BucketIndexFromTime(now)
+	anomalyEvents := DetectOne(eng, templateHash, rule.ItemID, totalMatches, bucketIdx, now)
+
+	// ── V2.2-02 跨算法合并 ──
+	// 同一模板同一桶被多个算法命中时合并为一条，避免重复告警与事件表膨胀
+	anomalyEvents = mergeStatsEvents(anomalyEvents, bucketIdx)
+
+	// ── V2.2-03 自适应阈值过滤 ──
+	// 用户标记过的误报模板会抬高该模板的 score 阈值，此处据此过滤
+	anomalyEvents = FilterByAdaptiveThreshold(anomalyEvents)
+
 	for _, ev := range anomalyEvents {
-		jsonDetail, _ := json.Marshal(ev)
-		if _, err := models.InsertAlertEvent(0, "anomaly:"+ev.TemplateHash, "", "anomaly",
+		// 原始 alert_event（兼容）
+		jsonDetail, err := json.Marshal(ev)
+		if err != nil {
+			log.Printf("[alert] 序列化 anomaly event 失败: %v", err)
+		} else if _, err := models.InsertAlertEvent(0, "anomaly:"+ev.TemplateHash, "", "anomaly",
 			0, ev.CurrentCount, string(jsonDetail), ""); err != nil {
 			log.Printf("[alert] 写 anomaly event 失败: %v", err)
 		}
+
+		// V2.1 新表：t_anomaly_event
+		anomalyType := anomalyTypeOf(ev)
+		desc := fmt.Sprintf("模板 %s %s [%s]: 实际=%d, 基线=%.2f, Z=%.2f",
+			ev.TemplateHash, ev.Direction, ev.Algorithm, ev.CurrentCount, ev.BaselineMean, ev.ZScore)
+		if err := models.RecordAnomalyEvent(
+			ev.TemplateHash, rule.ItemID, rule.ClientID, anomalyType,
+			ev.ZScore, ev.BaselineMean, float64(ev.CurrentCount), 300, desc,
+		); err != nil {
+			log.Printf("[alert] RecordAnomalyEvent 失败: %v", err)
+		}
 	}
+
+	// 学习阶段统一在检测之后进行
+	eng.UpdateBaseline(templateHash, rule.ItemID, totalMatches)
 
 	// ── FR-806: 去重检查，避免同源异常重复投递 ──
 	if dedupe != nil && !dedupe.ShouldFire(rule.ID, rule.IntervalSec) {
@@ -227,7 +317,25 @@ func evaluateAndFire(ctx context.Context, rule models.AlertRule, now time.Time, 
 		return
 	}
 
-	result := FireWebhook(ctx, rule, totalMatches, samples)
+	// ── 聚合降噪：同模板 5 分钟窗口内多次触发合并 ──
+	if agg != nil {
+		shouldFireNow, _ := agg.Aggregate(rule, templateHash, totalMatches, samples)
+		if !shouldFireNow {
+			log.Printf("[alert] rule %d template %s 窗口内已存在告警，累加计数跳过本次投递",
+				rule.ID, templateHash)
+			return
+		}
+	}
+
+	// ── 渠道路由：根据 rule.Channel 选择 Notifier 投递 ──
+	if _, ok := notifierRegistry[rule.Channel]; !ok {
+		logNotifierWarning(rule.Channel)
+	} else {
+		log.Printf("[alert] rule %d 使用渠道 %s 投递", rule.ID, rule.Channel)
+	}
+	notifier := ResolveNotifier(rule.Channel)
+	result := notifier.Send(ctx, rule, totalMatches, samples)
+
 	status := "ok"
 	errMsg := ""
 	if result.Err != nil {

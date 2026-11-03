@@ -11,6 +11,32 @@ vi.mock('@/api/logs', () => ({
   searchLogs: vi.fn(() => Promise.resolve({
     data: { code: 0, data: { list: [], total: 0, truncated: false, taskNo: '' } },
   })),
+  createConversation: vi.fn(() => Promise.resolve({
+    data: { code: 0, data: { convId: 'test_conv_1' } },
+  })),
+  listConversations: vi.fn(() => Promise.resolve({
+    data: { code: 0, data: { list: [] } },
+  })),
+  getConversationMessages: vi.fn(() => Promise.resolve({
+    data: { code: 0, data: [] },
+  })),
+  appendConversationMessage: vi.fn(() => Promise.resolve({ data: { code: 0 } })),
+  deleteConversation: vi.fn(() => Promise.resolve({ data: { code: 0 } })),
+  runAgentReasoning: vi.fn(() => Promise.resolve({
+    data: {
+      code: 0,
+      data: {
+        query: '',
+        hypotheses: [],
+        evidence: [],
+        conclusion: { rootCause: '', suggestions: [], confidence: 0 },
+        steps: 0,
+        toolCalls: [],
+        degraded: true,
+        modelName: '',
+      },
+    },
+  })),
 }))
 
 // 模拟 NL2DSL 服务（后端自然语言解析）
@@ -33,9 +59,15 @@ vi.mock('@/api/nl2dsl', () => ({
   })),
 }))
 
+// 模拟 item API
+vi.mock('@/api/item', () => ({
+  queryAllItems: vi.fn(() => Promise.resolve({ data: { data: [] } })),
+}))
+
 // 模拟 vue-router
 vi.mock('vue-router', () => ({
   useRouter: () => ({ push: vi.fn() }),
+  useRoute: () => ({ query: {}, path: '/conversation' }),
 }))
 
 // 模拟 element-plus

@@ -33,11 +33,32 @@ function isJsonResponse(response) {
 
 /**
  * 判断业务状态码是否成功。
+ *
  * PRD V2.1 FR-1405：统一响应格式 code 为数字类型，0 = 成功。
- * 保留字符串兼容以应对过渡期混合部署。
+ *
+ * 实现策略（V2.1-06）：不再在比较处容忍字符串，而是入口处归一化。
+ * normalizePayload 会把后端可能出现的字符串码转为数字，保证下游一律 number 语义；
+ * 若确实存在历史字符串码（如 '200'），也在此处一并映射为 0，避免双风格继续扩散。
  */
 function isBusinessSuccess(code) {
-  return code === 0 || code === '0'
+  return code === 0
+}
+
+/**
+ * 归一化响应负载中的业务码。
+ *
+ * 规则：
+ *   - 数字 → 原样返回
+ *   - 字符串数字（'0' / '200'）→ 转为对应数字（'200' 视为成功 0）
+ *   - 其他 → 原样返回（交由上层判断为非成功）
+ */
+function normalizePayload(payload) {
+  if (!payload || typeof payload !== 'object') return payload
+  if (typeof payload.code === 'string') {
+    const n = Number(payload.code)
+    payload.code = Number.isFinite(n) ? (n === 200 ? 0 : n) : payload.code
+  }
+  return payload
 }
 
 http.interceptors.response.use(
@@ -45,7 +66,8 @@ http.interceptors.response.use(
     // P1-5 修复：拦截器仅处理 HTTP 层错误，业务状态码由上层判断。
     // 对非成功的业务码给出 Toast 提示但不 reject，保持调用链可控。
     if (isJsonResponse(response) && response.data && 'code' in response.data) {
-      const payload = response.data
+      const payload = normalizePayload(response.data)
+      response.data = payload
       if (!isBusinessSuccess(payload.code)) {
         const msg = payload.message || payload.msg || '请求失败'
         ElMessage.warning(msg)

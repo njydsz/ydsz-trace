@@ -10,18 +10,18 @@
     <div class="login-card-wrapper">
       <div class="login-card">
         <!-- 品牌区 -->
-        <div class="login-brand">
+        <div class="login-brand" data-testid="login-brand">
           <div class="brand-icon flex items-center justify-center rounded-2xl">
             <el-icon :size="28" class="brand-icon-inner"><Monitor /></el-icon>
           </div>
           <div class="brand-text">
-            <h1 class="brand-title">Ydsz Trace</h1>
-            <p class="brand-subtitle">分布式日志追踪检索控制台</p>
+            <h1 class="brand-title" data-testid="login-brand-title">Ydsz Trace</h1>
+            <p class="brand-subtitle" data-testid="login-brand-subtitle">分布式日志追踪检索控制台</p>
           </div>
         </div>
 
         <!-- 表单区 -->
-        <el-form :model="form" label-position="top" @submit.prevent="onSubmit" class="login-form">
+        <el-form :model="form" label-position="top" @submit.prevent="onSubmit" class="login-form" data-testid="login-form">
           <el-form-item>
             <template #label><span class="form-label">用户名</span></template>
             <el-input
@@ -30,6 +30,7 @@
               placeholder="请输入管理员用户名"
               :prefix-icon="User"
               class="login-input"
+              data-testid="login-username"
             />
           </el-form-item>
           <el-form-item>
@@ -43,6 +44,7 @@
               :prefix-icon="Lock"
               @keyup.enter="onSubmit"
               class="login-input"
+              data-testid="login-password"
             />
           </el-form-item>
 
@@ -51,6 +53,7 @@
             size="large"
             class="login-btn w-full"
             :loading="loading"
+            data-testid="login-submit"
             @click="onSubmit"
           >
             登&nbsp;&nbsp;录
@@ -97,6 +100,10 @@ async function onSubmit() {
     const { data } = await login(form.value.username, form.value.password)
     if (data && data.code === 0) {
       auth.setUser(data.data?.username || form.value.username)
+      // 设置用户角色（与后端 session 对齐）
+      if (data.data?.role) {
+        auth.setRole(data.data.role)
+      }
       ElMessage.success(data.msg || '登录成功')
       router.push(route.query.redirect || '/conversation')
     } else {

@@ -130,6 +130,14 @@
             title="全局搜索 (Ctrl+K)"
             @click="openGlobalSearch"
           />
+          <el-button
+            circle
+            text
+            :icon="theme.resolvedTheme === 'dark' ? Sunny : Moon"
+            class="header-icon-btn"
+            :title="theme.resolvedTheme === 'dark' ? '切换浅色主题' : '切换深色主题'"
+            @click="theme.cyclePreference()"
+          />
           <el-divider direction="vertical" class="header-divider" />
           <el-dropdown trigger="click" @command="onUserCommand" class="user-dropdown">
             <div class="user-info flex items-center gap-2">
@@ -227,19 +235,22 @@
  * 顶部 Header：面包屑导航 + 全局搜索 + 用户头像/退出。
  * 右侧 Main：路由视图 + 过渡动画。
  */
-import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Monitor, DataLine, Cpu, Document, Search, SwitchButton,
   VideoCamera, List, Bell, Share, ChatLineRound, ArrowDown, EditPen, MagicStick,
-  InfoFilled,
+  InfoFilled, Sunny, Moon,
 } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage, ElForm, ElFormItem, ElInput } from 'element-plus'
 import { logout, changePassword } from '@/api/auth'
 import { useAuth } from '@/store/auth'
+import { useTheme } from '@/store/theme'
 import GlobalSearchDialog from '@/components/GlobalSearchDialog.vue'
+import { useKeyboardShortcuts } from '@/composables/useKeyboardShortcuts'
 
 const auth = useAuth()
+const theme = useTheme()
 const route = useRoute()
 const router = useRouter()
 const globalSearchRef = ref(null)
@@ -297,23 +308,17 @@ function openGlobalSearch() {
   globalSearchRef.value?.open()
 }
 
-// 全局搜索快捷键 Cmd/Ctrl+K
-function handleGlobalKeydown(e) {
-  const tag = e.target?.tagName?.toLowerCase()
-  if (tag === 'input' || tag === 'textarea' || e.target?.isContentEditable) return
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-    e.preventDefault()
+// 全局快捷键（V2.1-08）：统一走 useKeyboardShortcuts，不再内联实现。
+// 注册一个搜索快捷键直接调用本地方法，其余默认快捷键由 composable 分发。
+const { shortcuts } = useKeyboardShortcuts()
+
+// 将默认的 open-search 映射到本组件的打开方法，避免 document 事件中间层。
+const openSearchShortcut = shortcuts.value.find((s) => s.id === 'open-search')
+if (openSearchShortcut) {
+  openSearchShortcut.handler = () => {
     openGlobalSearch()
   }
 }
-
-onMounted(() => {
-  document.addEventListener('keydown', handleGlobalKeydown)
-})
-
-onBeforeUnmount(() => {
-  document.removeEventListener('keydown', handleGlobalKeydown)
-})
 
 function onUserCommand(cmd) {
   if (cmd === 'changePassword') {

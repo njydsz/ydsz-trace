@@ -31,6 +31,7 @@ type HeartbeatManager struct {
 	mu           sync.Mutex
 	server       string
 	vKey         string
+	regKey       string
 	stopCh       chan struct{}
 	doneCh       chan struct{}
 	isRunning    bool
@@ -39,10 +40,12 @@ type HeartbeatManager struct {
 }
 
 // NewHeartbeatManager 创建指定目标服务地址与密钥的心跳管理器。
-func NewHeartbeatManager(server, vKey string) *HeartbeatManager {
+// regKey 为注册鉴权密钥，与服务端 getRegisterKey 一致。
+func NewHeartbeatManager(server, vKey, regKey string) *HeartbeatManager {
 	return &HeartbeatManager{
 		server: server,
 		vKey:   vKey,
+		regKey: regKey,
 		stopCh: make(chan struct{}),
 		doneCh: make(chan struct{}),
 	}
@@ -105,10 +108,10 @@ func (h *HeartbeatManager) heartbeatLoop() {
 // 这是 P0-1 修复的核心：心跳结果真正反馈到退避逻辑。
 func (h *HeartbeatManager) doRegister() {
 	h.mu.Lock()
-	server, vKey := h.server, h.vKey
+	server, vKey, regKey := h.server, h.vKey, h.regKey
 	h.mu.Unlock()
 
-	_, err := RegisterLocalIp(server, vKey)
+	_, err := RegisterLocalIp(server, vKey, regKey)
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -155,9 +158,10 @@ var (
 )
 
 // StartGlobalHeartbeat 启动全局唯一心跳（仅首次调用生效）。
-func StartGlobalHeartbeat(server, vKey string) {
+// regKey 为注册鉴权密钥，与服务端 getRegisterKey 一致。
+func StartGlobalHeartbeat(server, vKey, regKey string) {
 	heartbeatOnce.Do(func() {
-		globalHeartbeat = NewHeartbeatManager(server, vKey)
+		globalHeartbeat = NewHeartbeatManager(server, vKey, regKey)
 		globalHeartbeat.Start()
 	})
 }

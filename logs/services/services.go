@@ -2,6 +2,12 @@
 //
 // 统一封装模板解析、异常检测、模板聚类等引擎，供 Controller 调用。
 // 所有 Service 实例为并发安全，可在 HTTP Handler 间共享。
+//
+// 当前状态（V2.1-08 标注）：本包为 V2.3「诊断 Agent」的预留地基，
+// 尚未被任何生产代码引用。保留原因：FR-9 的 ReAct 循环需要统一的
+// Parser/Anomaly/Cluster 服务边界，届时直接接入而非重写。
+//
+// 若 V2.3 最终未采用本分层，应在对应版本一并移除，避免长期悬空。
 package services
 
 import (

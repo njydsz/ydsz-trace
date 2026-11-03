@@ -27,9 +27,10 @@ import (
 )
 
 // Resp 通用 JSON 响应结构。
+// Code 为数字类型（0 = 成功），与 pkg/api.Response 保持一致。
 type Resp struct {
-	Code string `json:"code"`
-	Msg  string `json:"msg"`
+	Code int    `json:"code"`
+	Msg  string `json:"message"`
 }
 
 // errRegisterFailed 注册请求失败时的哨兵错误。
@@ -39,17 +40,18 @@ var errRegisterFailed = errors.New("register request failed")
 func Register(c *gin.Context) {
 	cfg := c.MustGet("cfg").(*config.Config)
 	server := config.EnvOrConfig("YDSZ_LOG_SERVER", cfg.String("logs"), "127.0.0.1:2021")
-	cfgKey := getRegisterKey(cfg)
-	if _, err := RegisterLocalIp(server, cfgKey); err != nil {
-		c.JSON(http.StatusOK, Resp{"500", fmt.Sprintf("注册失败: %v", err)})
+	vKey := GetVKey(cfg)
+	regKey := getRegisterKey(cfg)
+	if _, err := RegisterLocalIp(server, vKey, regKey); err != nil {
+		c.JSON(http.StatusOK, Resp{500, fmt.Sprintf("注册失败: %v", err)})
 		return
 	}
-	c.JSON(http.StatusOK, Resp{"200", "注册请求已发送"})
+	c.JSON(http.StatusOK, Resp{200, "注册请求已发送"})
 }
 
 // CheckOnline 返回客户端在线状态（供 logs 定时探测任务调用）。
 func CheckOnline(c *gin.Context) {
-	c.JSON(http.StatusOK, Resp{"200", "客户端在线"})
+	c.JSON(http.StatusOK, Resp{200, "客户端在线"})
 }
 
 // GetVKey 按优先级获取客户端密钥。
@@ -69,8 +71,10 @@ func getRegisterKey(cfg *config.Config) string {
 	if v := os.Getenv("YDSZ_REGISTER_KEY"); v != "" {
 		return v
 	}
-	if v := cfg.StringOr("register_key", ""); v != "" {
-		return v
+	if cfg != nil {
+		if v := cfg.StringOr("register_key", ""); v != "" {
+			return v
+		}
 	}
 	log.Printf("[security] 警告：使用默认注册密钥，生产环境请通过 YDSZ_REGISTER_KEY 环境变量配置强密钥")
 	return "ydsz-trace-register-2026"
@@ -88,6 +92,11 @@ func computeHMAC(secret, vkey string, timestamp int64) string {
 
 // RegisterLocalIp 向 logs 服务端发起一次自注册请求（传统模式）。
 //
+// 参数：
+//   - server  logs 服务端地址（ip:port）
+//   - vKey    客户端预共享密钥（用于 HMAC 签名中的 vkey 字段）
+//   - regKey  注册鉴权密钥（用于 HMAC 签名的 secret 字段，与服务端 getRegisterKey 一致）
+//
 // 返回值：
 //   - 成功时返回 nil
 //   - 网络错误、非 200 响应、服务端业务码非 "200" 时返回 error
@@ -95,18 +104,23 @@ func computeHMAC(secret, vkey string, timestamp int64) string {
 // 签名机制（FR-1308）：
 // 注册请求在 body 中携带 timestamp 与 signature，服务端使用 HMAC-SHA1 验证，
 // 替代原先明文传输 vkey 的方式，防止重放攻击与密钥泄漏。
-func RegisterLocalIp(server string, vKey string) (time.Duration, error) {
+// 签名算法：HMAC-SHA1(secret=regKey, timestamp_decimal + "." + vKey)
+// 与 logs 侧 verifyHMACSignature 保持一致。
+func RegisterLocalIp(server string, vKey string, regKey string) (time.Duration, error) {
 	if server == "" {
 		return 0, fmt.Errorf("server 地址为空")
 	}
+	if regKey == "" {
+		regKey = getRegisterKey(nil)
+	}
 
 	timestamp := time.Now().Unix()
-	signature := computeHMAC(vKey, vKey, timestamp)
+	signature := computeHMAC(regKey, vKey, timestamp)
 
 	body, err := json.Marshal(map[string]interface{}{
-		"key":       vKey,
-		"timestamp": timestamp,
-		"signature": signature,
+		"key":         vKey,
+		"timestamp":   timestamp,
+		"signature":   signature,
 		"source_type": "file",
 	})
 	if err != nil {
@@ -136,10 +150,10 @@ func RegisterLocalIp(server string, vKey string) (time.Duration, error) {
 		return 0, fmt.Errorf("decode register response: %w", err)
 	}
 
-	log.Printf("[register] 传统注册完成 server=%s code=%s msg=%s", server, result.Code, result.Msg)
+	log.Printf("[register] 传统注册完成 server=%s code=%d msg=%s", server, result.Code, result.Msg)
 
-	if result.Code != "200" {
-		return 0, fmt.Errorf("%w: code=%s msg=%s", errRegisterFailed, result.Code, result.Msg)
+	if result.Code != 0 {
+		return 0, fmt.Errorf("%w: code=%d msg=%s", errRegisterFailed, result.Code, result.Msg)
 	}
 
 	return 0, nil

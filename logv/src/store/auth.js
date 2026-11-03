@@ -9,10 +9,13 @@ import { defineStore } from 'pinia'
 
 // STORAGE_KEY localStorage 中持久化用户名的 key。
 const STORAGE_KEY = 'ydsz_username'
+// ROLE_KEY localStorage 中持久化用户角色的 key。
+const ROLE_KEY = 'ydsz_role'
 
 // useAuthStorage — Pinia 组合式 store。
 export const useAuthStorage = defineStore('auth', () => {
   const username = ref(localStorage.getItem(STORAGE_KEY) || '')
+  const role = ref(localStorage.getItem(ROLE_KEY) || 'viewer')
 
   // setUser 设置当前用户并同步写入 localStorage。
   function setUser(name) {
@@ -24,15 +27,23 @@ export const useAuthStorage = defineStore('auth', () => {
     }
   }
 
+  // setRole 设置用户角色并同步写入 localStorage。
+  function setRole(r) {
+    role.value = r || 'viewer'
+    localStorage.setItem(ROLE_KEY, role.value)
+  }
+
   // clear 清除当前用户与 localStorage。
   function clear() {
     setUser('')
+    role.value = 'viewer'
+    localStorage.removeItem(ROLE_KEY)
   }
 
   // loggedIn — 基于 username 是否存在判断。
   const loggedIn = computed(() => !!username.value)
 
-  return { username, setUser, clear, loggedIn }
+  return { username, role, setUser, setRole, clear, loggedIn }
 })
 
 // useAuth — 兼容旧接口：返回 { state, setUser, clear, loggedIn } 形态。
@@ -46,11 +57,17 @@ export function useAuth() {
     setUser(name) {
       return store.setUser(name)
     },
+    setRole(role) {
+      return store.setRole(role)
+    },
     clear() {
       return store.clear()
     },
     get loggedIn() {
       return store.loggedIn
+    },
+    get role() {
+      return store.role
     },
   }
 }

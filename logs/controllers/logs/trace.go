@@ -7,6 +7,7 @@
 package logs
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"regexp"
@@ -16,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	accesscontrol "ydsz-trace/logs/middleware"
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
 
@@ -54,7 +56,17 @@ type traceResp struct {
 }
 
 // Trace 端点：按 traceId 跨节点检索日志，返回按节点分组的调用链片段。
-// POST /logs/trace
+//
+// @Summary 调用链检索
+// @Description 按 traceId 跨节点并发检索日志，返回按节点分组的调用链片段，便于排查跨节点调用链异常。
+// @Tags Trace
+// @Accept json
+// @Produce json
+// @Param body body traceReq true "traceId、date、item 均为必填"
+// @Success 200 {object} api.Response{data=traceResp}
+// @Failure 400 {object} api.Response "参数错误"
+// @Failure 404 {object} api.Response "项目不存在或无可用客户端"
+// @Router /logs/trace [post]
 func Trace(c *gin.Context) {
 	var req traceReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -75,6 +87,11 @@ func Trace(c *gin.Context) {
 	maxPerNode := req.MaxPerNode
 	if maxPerNode <= 0 || maxPerNode > defaultMaxPerNode {
 		maxPerNode = defaultMaxPerNode
+	}
+
+	// 行级 RBAC（V2.1-04）
+	if !accesscontrol.CheckItem(c, req.Item) {
+		return
 	}
 
 	item := models.ReadItem(req.Item)
@@ -99,6 +116,9 @@ func Trace(c *gin.Context) {
 
 	var targets []targetSpec
 	if req.Client != 0 {
+		if !accesscontrol.CheckClient(c, req.Client) {
+			return
+		}
 		cl := models.ReadClient(req.Client)
 		if cl.Id == 0 {
 			api.Fail(c, api.CodeNotFound, "客户端不存在")
@@ -156,6 +176,22 @@ func Trace(c *gin.Context) {
 		}(tgt)
 	}
 	wg.Wait()
+
+	// V2.1 持久化链路节点
+	traceNodes := make([]models.TraceNodeInput, 0, len(results))
+	for _, r := range results {
+		traceNodes = append(traceNodes, models.TraceNodeInput{
+			TraceID:   req.TraceID,
+			SpanID:    r.Node,
+			Service:   r.Node,
+			Operation: "log_search",
+			Status:    "ok",
+			Tags:      map[string]string{"matchCount": fmt.Sprintf("%d", r.Count), "source": "trace"},
+		})
+	}
+	if err := models.SaveTraceNodes(traceNodes); err != nil {
+		log.Printf("[trace] 持久化链路节点失败（不影响响应）: %v", err)
+	}
 
 	c.JSON(http.StatusOK, api.Response{
 		Code:    api.CodeSuccess,
@@ -215,7 +251,17 @@ type traceWaterfallResp struct {
 
 // TraceWaterfall 端点增强：自动识别 TraceID 格式（W3C/B3/SkyWalking/自定义），
 // 并发检索所有节点后按时间排序输出瀑布视图。
-// POST /logs/trace/waterfall
+//
+// @Summary 调用链瀑布视图
+// @Description 自动识别 TraceID 格式，并发检索所有节点后按时间排序输出瀑布视图，包含错误统计与耗时分析。
+// @Tags Trace
+// @Accept json
+// @Produce json
+// @Param body body traceWaterfallReq true "traceId、date、item 均为必填"
+// @Success 200 {object} api.Response{data=traceWaterfallResp}
+// @Failure 400 {object} api.Response "参数错误"
+// @Failure 404 {object} api.Response "项目不存在或无可用客户端"
+// @Router /logs/trace/waterfall [post]
 func TraceWaterfall(c *gin.Context) {
 	var req traceWaterfallReq
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -232,6 +278,11 @@ func TraceWaterfall(c *gin.Context) {
 	maxPerNode := req.MaxPerNode
 	if maxPerNode <= 0 || maxPerNode > defaultMaxPerNode {
 		maxPerNode = defaultMaxPerNode
+	}
+
+	// 行级 RBAC（V2.1-04）
+	if !accesscontrol.CheckItem(c, req.Item) {
+		return
 	}
 
 	item := models.ReadItem(req.Item)
@@ -258,6 +309,9 @@ func TraceWaterfall(c *gin.Context) {
 
 	var targets []targetSpec
 	if req.Client != 0 {
+		if !accesscontrol.CheckClient(c, req.Client) {
+			return
+		}
 		cl := models.ReadClient(req.Client)
 		if cl.Id == 0 {
 			api.Fail(c, api.CodeNotFound, "客户端不存在")
@@ -363,6 +417,28 @@ func TraceWaterfall(c *gin.Context) {
 	durationMs = lastTs - firstTs
 	if durationMs < 0 {
 		durationMs = 0
+	}
+
+	// V2.1 持久化链路节点
+	wfNodes := make([]models.TraceNodeInput, 0, len(allSpans))
+	for i, sp := range allSpans {
+		wfNodes = append(wfNodes, models.TraceNodeInput{
+			TraceID:   req.TraceID,
+			SpanID:    fmt.Sprintf("%s-%d", sp.Node, i),
+			Service:   sp.Service,
+			Operation: sp.Content,
+			StartTs:   sp.Timestamp,
+			Status: func() string {
+				if sp.IsError {
+					return "error"
+				}
+				return "ok"
+			}(),
+			Tags: map[string]string{"level": sp.Level, "node": sp.Node, "content_len": fmt.Sprintf("%d", len(sp.Content))},
+		})
+	}
+	if err := models.SaveTraceNodes(wfNodes); err != nil {
+		log.Printf("[waterfall] 持久化链路节点失败（不影响响应）: %v", err)
 	}
 
 	c.JSON(http.StatusOK, api.Response{

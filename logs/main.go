@@ -28,14 +28,17 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"time"
 
 	"ydsz-trace/logs/controllers/alert"
 	"ydsz-trace/logs/controllers/task"
 	models "ydsz-trace/logs/models"
+	"ydsz-trace/logs/pipeline"
 	"ydsz-trace/logs/routers"
 	"ydsz-trace/pkg/config"
+	"ydsz-trace/pkg/embedding"
 	"ydsz-trace/pkg/ratelimit"
 	"ydsz-trace/pkg/session"
 	"ydsz-trace/pkg/util"
@@ -106,6 +109,106 @@ func getEnv(key, fallback string) string {
 	return fallback
 }
 
+// buildWritePipelineEmbedder 构建写入管线使用的 L2 Embedder。
+//
+// 优先级：环境变量（YDSZ_EMBED_*）→ 数据库能力配置（t_model_capability, capability='embedding'）。
+//
+// 探测失败时返回 (nil, ProviderLocal)，管线据此跳过向量化阶段并降级为 L0+L1，
+// 其余 Drain/模板/统计/异常阶段不受影响（FR-801 可用性隔离）。
+func buildWritePipelineEmbedder() (embedding.Embedder, embedding.Provider) {
+	e, provider, err := embedding.NewFromEnv()
+	if err != nil {
+		log.Printf("[pipeline] L2 嵌入层未启用: %v", err)
+		return nil, embedding.ProviderLocal
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if perr := embedding.Probe(ctx, e); perr != nil {
+		log.Printf("[pipeline] L2 嵌入层探测失败，降级为 L0+L1: %v", perr)
+		return nil, provider
+	}
+
+	log.Printf("[pipeline] L2 嵌入层已启用 provider=%d model=%s dim=%d",
+		provider, os.Getenv(embedding.EnvEmbedModel), e.Dimension())
+	return e, provider
+}
+
+// buildSpoolBuffer 构建管线背压缓冲队列（V2.2-09）。
+//
+// 路径优先级：YDSZ_SPOOL_FILE > YDSZ_DATA_DIR/spool.bin > ./spool.bin
+// 容量默认 10000 条（可通过 YDSZ_SPOOL_CAPACITY 覆盖）。
+func buildSpoolBuffer() (*pipeline.SpoolBuffer, error) {
+	path := os.Getenv("YDSZ_SPOOL_FILE")
+	if path == "" {
+		if dir := os.Getenv("YDSZ_DATA_DIR"); dir != "" {
+			path = filepath.Join(dir, "spool.bin")
+		}
+	}
+
+	capacity := 10000
+	if v := os.Getenv("YDSZ_SPOOL_CAPACITY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			capacity = n
+		}
+	}
+
+	return pipeline.NewSpoolBuffer(path, capacity, 30*time.Second)
+}
+
+// loadMaintenanceWindows 从数据库加载静默窗口并转换为 alert 包的结构。
+//
+// 查询失败或无记录时返回 nil（等价于无静默配置，不影响告警正常运行）。
+func loadMaintenanceWindows() []alert.MaintenanceWindow {
+	rows := models.QueryMaintenanceWindows()
+	if len(rows) == 0 {
+		return nil
+	}
+
+	out := make([]alert.MaintenanceWindow, 0, len(rows))
+	for _, w := range rows {
+		out = append(out, alert.MaintenanceWindow{
+			Name:      w.Name,
+			Start:     parseClockTime(w.StartTime),
+			End:       parseClockTime(w.EndTime),
+			Recurring: w.Recurring,
+			Weekdays:  w.Weekdays,
+			Enabled:   w.Enabled,
+		})
+	}
+	log.Printf("[alert] 已加载 %d 个静默窗口", len(out))
+	return out
+}
+
+// parseClockTime 将 "HH:MM" 转为仅含时分的时间值（用于静默窗口比较）。
+func parseClockTime(hhmm string) time.Time {
+	if len(hhmm) != 5 || hhmm[2] != ':' {
+		return time.Time{}
+	}
+	h, err1 := strconv.Atoi(hhmm[:2])
+	m, err2 := strconv.Atoi(hhmm[3:])
+	if err1 != nil || err2 != nil {
+		return time.Time{}
+	}
+	return time.Date(0, 1, 1, h, m, 0, 0, time.Local)
+}
+
+// embeddingModelVersion 返回向量索引的模型版本标识，用于 t_embedding.model_version。
+//
+// 未显式配置模型名时按 Provider 内置默认推断，保证同一索引内模型版本一致
+// （避免混用不同模型导致余弦相似度无意义）。
+func embeddingModelVersion(e embedding.Embedder) string {
+	if e == nil {
+		return "disabled"
+	}
+	model := os.Getenv(embedding.EnvEmbedModel)
+	if model == "" {
+		model = embedding.DefaultLocalModel
+	}
+	return model
+}
+
 func main() {
 	// 加载配置（日志服务端固定使用 conf/app.conf）。
 	cfg, err := config.Load("conf/app.conf")
@@ -136,6 +239,14 @@ func main() {
 	}
 	defer models.DB.Close()
 
+	// 创建 V2.1 新增表（幂等）：t_user_binding / t_conversation / t_conversation_msg。
+	if err := models.CreateUserBindingTable(); err != nil {
+		log.Printf("[warn] 创建 t_user_binding 表失败: %v", err)
+	}
+	if err := models.CreateConversationTable(); err != nil {
+		log.Printf("[warn] 创建 t_conversation 表失败: %v", err)
+	}
+
 	// 首次启动种子：t_user 为空时使用配置账号创建 admin 用户
 	seedUname := getEnv("YDSZ_ADMIN_USER", cfg.StringOr("username", "admin"))
 	seedPwd := getEnv("YDSZ_ADMIN_PASSWORD", cfg.StringOr("password", "123456"))
@@ -150,8 +261,32 @@ func main() {
 
 	// 后台告警评估调度：按 interval_sec 每分钟扫描 eval 启用的规则。
 	alertScheduler := alert.NewScheduler(5)
+	// 加载数据库中的静默窗口（V2.2 FR-806）：启动时生效，无需手动 sync
+	if sup := alert.NewSuppressor(); sup != nil {
+		sup.ReplaceWindows(loadMaintenanceWindows())
+		alertScheduler.SetSuppressor(sup)
+	}
+	alert.RegisterScheduler(alertScheduler)
+	defer alert.RegisterScheduler(nil)
 	alertScheduler.Start()
 	defer alertScheduler.Stop()
+
+	// 后台写入管线（V2.1）：定时扫描日志 → Drain → 模板/向量/统计/异常落库。
+	// L2 嵌入层按环境变量/能力配置构建；不可达时降级为 L0+L1，管线其余阶段照常运行。
+	embedder, _ := buildWritePipelineEmbedder()
+	writePipeline := pipeline.New(embedder, embeddingModelVersion(embedder))
+
+	// 背压本地缓冲（V2.2-09，FR-103）：下游写入失败时暂存，链路恢复后补传。
+	// 队列文件路径：YDSZ_SPOOL_FILE > YDSZ_DATA_DIR/spool.bin
+	if buf, berr := buildSpoolBuffer(); berr != nil {
+		log.Printf("[pipeline] 背压缓冲未启用: %v", berr)
+	} else {
+		writePipeline.SetSpoolBuffer(buf)
+		defer buf.Stop()
+	}
+
+	writePipeline.Start()
+	defer writePipeline.Stop()
 
 	// 启动时清理残留临时文件（日志查询产生的中间文件，超过 2 小时自动删除）。
 	temppath := cfg.StringOr("temppath", "./temp/logs/")

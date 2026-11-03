@@ -21,6 +21,24 @@ import (
 type FileSource struct {
 	rootDir string // 可选：限制日志必须在 rootDir 下遍历（安全沙箱）
 	info    SourceInfo
+
+	// offsets 读取位点存储（V2.2-08，FR-102）。
+	// nil 时退化为全量读取（向后兼容，不影响既有调用方）。
+	offsets *OffsetStore
+}
+
+// WithOffsetStore 注入位点存储（V2.2-08）。
+func WithOffsetStore(store *OffsetStore) FileSourceOption {
+	return func(fs *FileSource) {
+		fs.offsets = store
+	}
+}
+
+// OffsetStore 返回位点存储实例（可能为 nil）。
+//
+// 供外部（logc 主流程）触发定期落盘与退出时持久化。
+func (fs *FileSource) OffsetStore() *OffsetStore {
+	return fs.offsets
 }
 
 // FileSourceOption FileSource 的可选配置。
@@ -68,7 +86,7 @@ func (fs *FileSource) Read(ctx context.Context, path string, cfg ScanConfig, out
 
 	var total int64
 	for _, p := range candidates {
-		n, err := readOneFile(ctx, p, cfg, output)
+		n, err := fs.readOneFileWithOffset(ctx, p, cfg, output)
 		if err != nil {
 			log.Printf("[source]读取 %s 失败: %v", p, err)
 			continue
@@ -76,6 +94,81 @@ func (fs *FileSource) Read(ctx context.Context, path string, cfg ScanConfig, out
 		total += n
 	}
 	return total, nil
+}
+
+// readOneFileWithOffset 按位点续读单个文件（V2.2-08）。
+//
+// 与 readOneFile 的差异：
+//   - 从位点存储读取上次读取位置
+//   - 通过 inode 与 size 校验判断是否发生轮转/截断
+//   - 读取完成后回写新位点
+//
+// offsets 为 nil 时行为与 readOneFile 完全一致。
+func (fs *FileSource) readOneFileWithOffset(ctx context.Context, path string, cfg ScanConfig, output io.Writer) (int64, error) {
+	if fs.offsets == nil {
+		return readOneFile(ctx, path, cfg, output)
+	}
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		return readOneFile(ctx, path, cfg, output)
+	}
+
+	inode := FileInode(path)
+	var rec *OffsetRecord
+	if r, ok := fs.offsets.Get(path); ok {
+		rec = r
+	}
+
+	startOffset := ResolveResumeOffset(rec, inode, fi.Size())
+	if startOffset > 0 {
+		log.Printf("[source] %s 从位点续读 offset=%d inode=%d", path, startOffset, inode)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		if cerr := f.Close(); cerr != nil {
+			log.Printf("[source] 关闭 %s 失败: %v", path, cerr)
+		}
+	}()
+
+	if startOffset > 0 {
+		if _, serr := f.Seek(startOffset, io.SeekStart); serr != nil {
+			log.Printf("[source] seek %s 失败，回退全量读取: %v", path, serr)
+			if _, rerr := f.Seek(0, io.SeekStart); rerr != nil {
+				return 0, rerr
+			}
+			startOffset = 0
+		}
+	}
+
+	cw := &countingWriter{w: output}
+	if _, err := ScanAndFilter(f, cfg, cw); err != nil {
+		return cw.n, err
+	}
+	if _, werr := cw.Write([]byte("\n")); werr != nil {
+		return cw.n, werr
+	}
+
+	// 回写位点：记录读取结束后的文件位置
+	endOffset, eerr := f.Seek(0, io.SeekCurrent)
+	if eerr != nil {
+		log.Printf("[source] 读取最终偏移失败 %s: %v", path, eerr)
+		return cw.n, nil
+	}
+
+	fs.offsets.Put(&OffsetRecord{
+		Path:     path,
+		Inode:    inode,
+		Size:     fi.Size(),
+		Offset:   endOffset,
+		ModTime: fi.ModTime().UnixNano(),
+	})
+
+	return cw.n, nil
 }
 
 // resolveCandidates 根据单文件 / glob 展开多个候选文件。
@@ -373,11 +466,17 @@ func init() {
 		log.SetFlags(log.Ltime | log.Lshortfile)
 	}
 	// 注册 FileSource 工厂，让 CreateSource 按需构造。
+	//
+	// V2.2-08：为 FileSource 注入位点存储，实现重启续读（FR-102）。
+	// 位点文件路径支持通过 FactoryConfig.Options["offset_file"] 覆盖，
+	// 缺省时由 NewOffsetStore 按环境变量解析。
 	RegisterSource(SourceTypeFile, func(cfg FactoryConfig) (Source, error) {
 		opts := []FileSourceOption{}
 		if v, ok := cfg.Options["root_dir"]; ok {
 			opts = append(opts, WithRootDir(v))
 		}
+		offsetFile, _ := cfg.Options["offset_file"]
+		opts = append(opts, WithOffsetStore(NewOffsetStore(offsetFile)))
 		return NewFileSource(opts...), nil
 	})
 }

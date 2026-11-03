@@ -48,14 +48,44 @@ const router = createRouter({
   routes,
 })
 
+// roleRouteRules 角色 → 允许访问的路由路径前缀。
+// viewer: 只读（可查看日志、检索、对话等，但不可配置资源）
+// operator: 运维（可管理客户端、日志项、发起查询，但不可配置模型能力）
+// admin: 全部权限
+const roleRouteRules = {
+  viewer: [
+    '/conversation', '/trace', '/logs', '/tail', '/alerts', '/tasks', '/dashboard',
+  ],
+  operator: [
+    '/conversation', '/trace', '/logs', '/tail', '/alerts', '/tasks',
+    '/clients', '/items', '/dashboard',
+  ],
+  admin: [
+    '/conversation', '/trace', '/logs', '/tail', '/alerts', '/tasks',
+    '/clients', '/items', '/model-capability', '/dashboard',
+  ],
+}
+
+// hasRouteAccess 检查指定角色是否有权访问目标路径。
+function hasRouteAccess(role, path) {
+  const rules = roleRouteRules[role] || roleRouteRules.viewer
+  return rules.some(prefix => path === prefix || path.startsWith(prefix + '/'))
+}
+
 router.beforeEach((to) => {
-  const { loggedIn } = useAuth()
+  const { loggedIn, role } = useAuth()
   // 未登录访问非公开路由：跳登录页，保留 redirect query 用于登录后回跳。
   if (!to.meta.public && !loggedIn) {
     return { name: 'login', query: { redirect: to.fullPath } }
   }
   if (to.name === 'login' && loggedIn) {
     return { name: 'dashboard' }
+  }
+  // 角色权限校验：已登录用户访问受限页面时重定向到首页
+  if (loggedIn && !to.meta.public && to.path !== '/') {
+    if (!hasRouteAccess(role, to.path)) {
+      return { name: 'conversation' }
+    }
   }
   return true
 })

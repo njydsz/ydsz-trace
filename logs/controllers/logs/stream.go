@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	accesscontrol "ydsz-trace/logs/middleware"
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
 	"ydsz-trace/pkg/sanitize"
@@ -125,6 +126,16 @@ type StreamReq struct {
 //   - done：{ "success": N, "fail": N } —— 全部完成
 //
 // 注意：流式模式下不直接下载 zip，仅推送进度与汇总结果下载链接。
+//
+// @Summary 流式搜索进度
+// @Description 多客户端并发搜索的 SSE 进度推送端点，实时推送每个节点的搜索状态。
+// @Tags LogSearch
+// @Accept json
+// @Produce text/event-stream
+// @Param body body StreamReq true "检索条件：item + date 必填；key 与 query 不可同时为空"
+// @Success 200 {string} string "SSE 事件流（connected / progress / done）"
+// @Failure 400 {object} api.Response "参数错误"
+// @Router /logs/stream [post]
 func Stream(c *gin.Context) {
 	var req StreamReq
 	data, err := c.GetRawData()
@@ -154,6 +165,11 @@ func Stream(c *gin.Context) {
 		return
 	}
 
+	// 行级 RBAC（V2.1-04）
+	if !accesscontrol.CheckItem(c, req.Item) {
+		return
+	}
+
 	item := models.ReadItem(req.Item)
 	if item.Id == 0 {
 		sseError(c, "项目不存在")
@@ -163,6 +179,9 @@ func Stream(c *gin.Context) {
 
 	var clients []models.TClient
 	if req.Client != 0 {
+		if !accesscontrol.CheckClient(c, req.Client) {
+			return
+		}
 		clients = []models.TClient{models.ReadClient(req.Client)}
 	} else {
 		clients, err = models.QueryAllClient()
@@ -252,6 +271,11 @@ func Tail(c *gin.Context) {
 		extract = "full"
 	}
 
+	// 行级 RBAC（V2.1-04）
+	if !accesscontrol.CheckItem(c, req.Item) {
+		return
+	}
+
 	item := models.ReadItem(req.Item)
 	if item.Id == 0 {
 		api.Fail(c, api.CodeNotFound, "项目不存在")
@@ -262,6 +286,9 @@ func Tail(c *gin.Context) {
 	// 确定要 tail 的客户端
 	var servers []serverSpec
 	if req.Client != 0 {
+		if !accesscontrol.CheckClient(c, req.Client) {
+			return
+		}
 		cl := models.ReadClient(req.Client)
 		if cl.Id != 0 {
 			port, _ := stringToInt(cl.Port)

@@ -59,8 +59,9 @@
               />
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="280" fixed="right">
+          <el-table-column label="操作" width="360" fixed="right">
             <template #default="{ row }">
+              <el-button link :icon="MagicStick" size="small" type="success" @click="onAIDiagnose(row)">AI 诊断</el-button>
               <el-button link :icon="Promotion" size="small" type="primary" @click="onTestFire(row)">测试触发</el-button>
               <el-button link :icon="Edit" size="small" @click="onEditRule(row)">编辑</el-button>
               <el-button link :icon="Delete" size="small" type="danger" @click="onDeleteRule(row)">删除</el-button>
@@ -126,6 +127,14 @@
           />
         </div>
       </el-tab-pane>
+
+      <el-tab-pane label="异常时间线" name="timeline">
+        <AnomalyTimeline @drill-down="onTimelineDrillDown" />
+      </el-tab-pane>
+
+      <el-tab-pane label="静默窗口" name="maintenance">
+        <MaintenanceWindowConfig />
+      </el-tab-pane>
     </el-tabs>
 
     <!-- 新增/编辑规则 dialog -->
@@ -163,8 +172,29 @@
         <el-form-item label="评估间隔(秒)">
           <el-input-number v-model="form.intervalSec" :min="60" :max="86400" />
         </el-form-item>
+        <el-form-item label="通知渠道">
+          <el-select v-model="form.channel" placeholder="选择渠道" style="width: 100%">
+            <el-option v-for="ch in channels" :key="ch.id" :label="ch.name" :value="ch.id">
+              <span>{{ ch.name }}</span>
+              <span class="text-xs text-muted ml-2">{{ ch.desc }}</span>
+            </el-option>
+          </el-select>
+        </el-form-item>
         <el-form-item label="Webhook" required>
-          <el-input v-model="form.webhookUrl" placeholder="https://your-webhook/hook" />
+          <el-input v-model="form.webhookUrl" placeholder="https://your-webhook/hook">
+            <template #append>
+              <el-button
+                :loading="channelTesting"
+                :disabled="!form.webhookUrl || !form.channel"
+                @click="onTestChannel"
+              >
+                测试
+              </el-button>
+            </template>
+          </el-input>
+          <p class="text-xs text-muted mt-1">
+            钉钉/企微开启加签时，在 URL 后附加 <code>&secret=SECxxx</code>
+          </p>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -180,12 +210,15 @@
  * 智能日志预警页：规则管理 (CRUD / toggle / test-fire) + 投递事件历史。
  */
 import { onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { Refresh, Plus, Promotion, Delete, Edit, Bell } from '@element-plus/icons-vue'
+import { Refresh, Plus, Promotion, Delete, Edit, Bell, MagicStick } from '@element-plus/icons-vue'
 import {
   listRules, addRule, updateRule, deleteRule, toggleRule, testFireRule,
-  listEvents, deleteEvent, getQuota,
+  listEvents, deleteEvent, getQuota, listChannels, testChannel,
 } from '@/api/alert'
+import AnomalyTimeline from '@/components/AnomalyTimeline.vue'
+import MaintenanceWindowConfig from '@/components/MaintenanceWindowConfig.vue'
 
 const activeTab = ref('rules')
 const rules = ref([])
@@ -220,7 +253,14 @@ const form = reactive({
   threshold: 10,
   intervalSec: 300,
   webhookUrl: '',
+  channel: 'webhook',
 })
+
+// 支持的通知渠道（V2.2-05）
+const channels = ref([])
+const channelTesting = ref(false)
+
+const router = useRouter()
 
 async function loadRules() {
   loading.value = true
@@ -291,6 +331,7 @@ async function onEditRule(row) {
     threshold: row.threshold || 10,
     intervalSec: row.intervalSec || 300,
     webhookUrl: row.webhookUrl || '',
+    channel: row.channel || 'webhook',
   })
   dialogVisible.value = true
 }
@@ -353,9 +394,67 @@ async function onDeleteEvent(row) {
   loadEvents()
 }
 
+// onAIDiagnose 跳转对话工作台并携带告警规则 ID，预填首轮诊断问题。
+function onAIDiagnose(row) {
+  router.push({
+    path: '/conversation',
+    query: { alertId: String(row.id), ruleName: row.name || '' },
+  })
+}
+
+// 加载支持的通知渠道清单
+async function loadChannels() {
+  try {
+    const { data } = await listChannels()
+    channels.value = data.data?.channels || []
+  } catch {
+    // 渠道清单加载失败时回退到基础选项，不阻塞主流程
+    channels.value = [
+      { id: 'webhook', name: '通用 Webhook', desc: 'POST JSON' },
+      { id: 'dingtalk', name: '钉钉群机器人', desc: '' },
+      { id: 'wecom', name: '企业微信机器人', desc: '' },
+      { id: 'feishu', name: '飞书群机器人', desc: '' },
+      { id: 'email', name: '邮件（SMTP）', desc: '' },
+    ]
+  }
+}
+
+// 渠道连通性测试（V2.2-05）：真实发一条测试消息并展示结果
+async function onTestChannel() {
+  channelTesting.value = true
+  try {
+    const { data } = await testChannel({
+      channel: form.channel,
+      webhookUrl: form.webhookUrl,
+    })
+    const r = data.data || {}
+    if (r.success) {
+      ElMessage.success(`投递成功（HTTP ${r.statusCode}，${r.costMs}ms）`)
+    } else {
+      ElMessage.error(`投递失败：${r.error || r.body || `HTTP ${r.statusCode}`}`)
+    }
+  } catch {
+    ElMessage.error('测试请求失败')
+  } finally {
+    channelTesting.value = false
+  }
+}
+
+// 异常时间线下钻：跳转到检索页并带上模板 hash 作为过滤条件
+function onTimelineDrillDown(point) {
+  router.push({
+    path: '/logs',
+    query: {
+      item: point.itemId ? String(point.itemId) : '',
+      query: point.templateHash ? `template:${point.templateHash}` : '',
+    },
+  })
+}
+
 onMounted(() => {
   loadRules()
   loadEvents()
   loadQuota()
+  loadChannels()
 })
 </script>

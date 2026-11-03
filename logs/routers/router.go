@@ -24,6 +24,8 @@ import (
 	"ydsz-trace/logs/controllers/alert"
 	"ydsz-trace/logs/controllers/logs"
 	"ydsz-trace/logs/controllers/migration"
+	"ydsz-trace/logs/controllers/system"
+	accesscontrol "ydsz-trace/logs/middleware"
 	"ydsz-trace/pkg/api"
 	pkgauth "ydsz-trace/pkg/auth"
 	"ydsz-trace/pkg/config"
@@ -76,6 +78,8 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	r.GET("/", admin.Index)
 	r.GET("/health", admin.Health)
 	r.GET("/ready", admin.Ready)
+	r.GET("/api/v2/health", system.Health)
+	r.GET("/api/v2/health/dependencies", system.HealthDependencies)
 	r.GET("/metrics", metrics.Global().GinHandler())
 	r.GET("/admin/login", admin.Login)
 	r.POST("/admin/login", admin.Login)
@@ -99,11 +103,17 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	// 鉴权中间件：对非公开路径统一应用 filterAuth + csrfProtection。
 	r.Use(authBlockMiddleware)
 
+	// 行级 RBAC 中间件（V2.1 FR-1302）：对非 admin 用户注入可访问资源 ID 列表。
+	// 必须在 authBlockMiddleware 之后执行（需要 session 中的 username）。
+	r.Use(accesscontrol.AccessControlMiddleware())
+
 	// ━━ viewer 级别（只读）━━
-	r.GET("/client/query", client.Query)
+	// 行级 RBAC（V2.1-04）：对携带 ?id= 的单资源查询做访问校验。
+	// admin 由中间件跳过（ItemIDsFromContext 返回 false），直接放行。
+	r.GET("/client/query", accesscontrol.FilterClientHandler(client.Query))
 	r.GET("/client/queryAll", client.QueryAll)
 	r.GET("/client/queryPage", client.QueryPage)
-	r.GET("/item/query", item.Query)
+	r.GET("/item/query", accesscontrol.FilterItemHandler(item.Query))
 	r.GET("/item/queryAll", item.QueryAll)
 	r.GET("/item/queryPage", item.QueryPage)
 	r.GET("/logs/queryClients", logs.QueryClient)
@@ -111,12 +121,25 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	r.GET("/logs/tasks/:taskNo", logs.QueryTask)
 	r.GET("/logs/tasks/:taskNo/progress", logs.QueryTaskProgress)
 	r.GET("/logs/tasks", logs.ListTasks)
-	r.GET("/logs/context/:itemId", logs.Context)
+	// /logs/context/:itemId — path 参数形式的行级校验
+	r.GET("/logs/context/:itemId", accesscontrol.FilterItemHandler(logs.Context))
 	r.GET("/logs/dashboard/insight", logs.DashboardInsightHandler)
 	r.GET("/logs/alerts/rules", alert.ListRules)
 	r.GET("/logs/alerts/rules/:id", alert.GetRule)
 	r.GET("/logs/alerts/events", alert.ListEvents)
 	r.GET("/logs/alerts/quota", alert.Quota)
+	// V2.2-05 渠道清单与连通性测试
+	r.GET("/logs/alerts/channels", alert.ListChannels)
+	r.GET("/logs/templates/search", logs.SearchTemplates)
+
+	// V2.2 异常反馈闭环 / 静默窗口 / 异常时间线（FR-806 / FR-807）
+	r.GET("/logs/anomalies/timeline", alert.AnomalyTimeline)
+	r.GET("/logs/anomalies/feedback/stats", alert.FeedbackStats)
+	r.GET("/logs/maintenance-windows", alert.ListMaintenanceWindows)
+
+	// 审计日志 V2 路由（与 /admin/audit/* 并存，便于 v2 前端/API 调用）
+	r.GET("/api/v2/audit/logs", audit.ListAuditLogs)
+	r.GET("/api/v2/audit/stats", audit.GetAuditStats)
 
 	// ━━ operator 级别（可写资源 + 触发查询）━━
 	r.POST("/client/add", pkgauth.RequireOperator(), client.Add)
@@ -135,6 +158,27 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	r.POST("/logs/tail", pkgauth.RequireOperator(), logs.Tail)
 	// NL2DSL 自然语言转结构化检索参数（FR-501）
 	r.POST("/logs/nl2dsl/parse", pkgauth.RequireOperator(), logs.Nl2DslParse)
+	// 根因分析 Agent（FR-901~908）
+	r.POST("/logs/agent/reason", pkgauth.RequireOperator(), logs.AgentReasonHandler)
+	r.GET("/logs/agent/tools", pkgauth.RequireOperator(), logs.AgentToolsHandler)
+	// AI 诊断会话管理（FR-901）
+	r.POST("/logs/conversation/create", pkgauth.RequireOperator(), logs.ConvCreate)
+	r.GET("/logs/conversation/list", pkgauth.RequireOperator(), logs.ConvList)
+	r.GET("/logs/conversation/:convId/messages", pkgauth.RequireOperator(), logs.ConvMessages)
+	r.POST("/logs/conversation/append", pkgauth.RequireOperator(), logs.ConvAppend)
+	r.DELETE("/logs/conversation/:convId", pkgauth.RequireOperator(), logs.ConvDelete)
+	r.PUT("/logs/conversation/:convId/title", pkgauth.RequireOperator(), logs.ConvUpdateTitle)
+	// 案例库管理（FR-907）
+	r.POST("/logs/cases/save", pkgauth.RequireOperator(), logs.CaseSaveHandler)
+	r.GET("/logs/cases/search", pkgauth.RequireOperator(), logs.CaseSearchHandler)
+	r.GET("/logs/cases/list", pkgauth.RequireOperator(), logs.CaseListHandler)
+	// 模型路由策略（FR-1304）
+	r.GET("/logs/model-router/:capability", pkgauth.RequireOperator(), logs.ModelRouterResolveHandler)
+	// 成本配额管理（FR-1305）
+	r.POST("/logs/quota/check", pkgauth.RequireOperator(), logs.QuotaCheckHandler)
+	r.POST("/logs/quota/consume", pkgauth.RequireOperator(), logs.QuotaConsumeHandler)
+	r.GET("/logs/quota/stats/:modelId", pkgauth.RequireOperator(), logs.QuotaStatsHandler)
+	r.GET("/logs/quota/summary", pkgauth.RequireOperator(), logs.QuotaSummaryHandler)
 	r.POST("/logs/tasks/:taskNo/retry", pkgauth.RequireOperator(), logs.RetryTask)
 	r.DELETE("/logs/tasks/:taskNo", pkgauth.RequireOperator(), logs.DeleteTask)
 	r.POST("/logs/alerts/rules", pkgauth.RequireOperator(), alert.AddRule)
@@ -142,7 +186,12 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	r.DELETE("/logs/alerts/rules/:id", pkgauth.RequireOperator(), alert.DeleteRule)
 	r.POST("/logs/alerts/rules/toggle", pkgauth.RequireOperator(), alert.ToggleRule)
 	r.POST("/logs/alerts/rules/test", pkgauth.RequireOperator(), alert.TestFire)
+	r.POST("/logs/alerts/channels/test", pkgauth.RequireOperator(), alert.TestChannel)
 	r.DELETE("/logs/alerts/events/:id", pkgauth.RequireOperator(), alert.DeleteEvent)
+	// V2.2 写操作：异常反馈标记与静默窗口配置
+	r.POST("/logs/anomalies/feedback", pkgauth.RequireOperator(), alert.MarkFeedback)
+	r.POST("/logs/maintenance-windows", pkgauth.RequireOperator(), alert.SaveMaintenanceWindows)
+	r.POST("/logs/maintenance-windows/sync", pkgauth.RequireOperator(), alert.SyncMaintenanceWindows)
 
 	// 自助修改密码（任何已登录用户可操作）
 	r.POST("/admin/users/change-password", admin.ChangePassword)
@@ -169,10 +218,17 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 		adm.GET("/stats/patterns", admin.StatsPatterns)
 		adm.GET("/stats/anomalies", admin.StatsAnomalyEvents)
 		adm.GET("/stats/baseline", admin.StatsBaseline)
+adm.GET("/ai/status", admin.AIStatusHandler)
 
 		// 迁移工具：v1 -> v2 schema 就绪确认（仅 admin）
 		adm.POST("/migration/run", migration.Run)
 		adm.GET("/migration/status", migration.StatusHandler)
+
+		// 备份与恢复（仅 admin，FR-1307）
+		adm.POST("/backup/create", logs.BackupCreateHandler)
+		adm.GET("/backup/list", logs.BackupListHandler)
+		adm.POST("/backup/restore", logs.BackupRestoreHandler)
+		adm.POST("/backup/cleanup", logs.BackupCleanupHandler)
 
 		// @Tags ModelCapability
 		// 模型能力配置—写操作（仅 admin）。
@@ -236,6 +292,8 @@ var publicPaths = map[string]bool{
 	"/":               true,
 	"/health":         true,
 	"/ready":          true,
+	"/api/v2/health":  true,
+	"/api/v2/health/dependencies": true,
 	"/metrics":        true,
 	"/admin/login":    true,
 	"/admin/exit":     true,

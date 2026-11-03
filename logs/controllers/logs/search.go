@@ -22,9 +22,12 @@ import (
 	"time"
 
 	"ydsz-trace/logs/controllers/audit"
+	accesscontrol "ydsz-trace/logs/middleware"
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
 	"ydsz-trace/pkg/cache"
+	"ydsz-trace/pkg/mask"
+	"ydsz-trace/pkg/metrics"
 	"ydsz-trace/pkg/session"
 
 	"github.com/gin-gonic/gin"
@@ -85,8 +88,10 @@ type templateGroup struct {
 
 // logRow 单条日志行（前端表格展示一行）。
 type logRow struct {
-	// Line 日志原文。
+	// Line 日志原文（脱敏后）。
 	Line string `json:"line"`
+	// Raw 日志原文（未脱敏，供授权用户查看原文）。
+	Raw string `json:"raw,omitempty"`
 	// Source 来源节点 ip:port，便于排查单点问题。
 	Source  string `json:"source,omitempty"`
 	nodeIdx int
@@ -114,12 +119,23 @@ type LogcSearchResp struct {
 // @Failure 404 {object} api.Response "项目不存在"
 // @Router /logs/search [post]
 func Search(c *gin.Context) {
+	queryStart := time.Now()
+	metrics.Global().QueryStarted()
+	defer func() {
+		if r := recover(); r != nil {
+			metrics.Global().QueryFailed(time.Since(queryStart))
+			panic(r)
+		}
+	}()
+
 	var req SearchReq
 	if err := c.ShouldBindJSON(&req); err != nil {
+		metrics.Global().QueryFailed(time.Since(queryStart))
 		api.Fail(c, api.CodeBadRequest, "请求参数错误")
 		return
 	}
 	if req.Item == 0 || (req.Key == "" && req.Query == "") || req.Date == "" {
+		metrics.Global().QueryFailed(time.Since(queryStart))
 		api.Fail(c, api.CodeBadRequest, "item/query+key 不能同时为空，且 date 必填")
 		return
 	}
@@ -163,6 +179,11 @@ func Search(c *gin.Context) {
 		}
 	}
 
+	// 行级 RBAC（V2.1-04）：非 admin 用户仅能访问绑定资源，否则 403。
+	if !accesscontrol.CheckItem(c, req.Item) {
+		return
+	}
+
 	item := models.ReadItem(req.Item)
 	if item.Id == 0 {
 		api.Fail(c, api.CodeNotFound, "项目不存在")
@@ -172,6 +193,9 @@ func Search(c *gin.Context) {
 
 	var targets []targetSpec
 	if req.Client != 0 {
+		if !accesscontrol.CheckClient(c, req.Client) {
+			return
+		}
 		cl := models.ReadClient(req.Client)
 		if cl.Id == 0 {
 			api.Fail(c, api.CodeNotFound, "客户端不存在")
@@ -243,7 +267,9 @@ func Search(c *gin.Context) {
 	}
 	page := make([]logRow, 0, end-start)
 	for _, lr := range lines[start:end] {
-		page = append(page, logRow{Line: lr.Line, Source: lr.Source})
+		// FR-1303：展示层脱敏（保留原文在 logRow.Raw，前端按需切换）
+		masked := mask.MaskAll(lr.Line)
+		page = append(page, logRow{Line: masked, Raw: lr.Line, Source: lr.Source})
 	}
 
 	totalPage := (total + req.PageSize - 1) / req.PageSize
@@ -268,6 +294,20 @@ func Search(c *gin.Context) {
 		cacheKey := cache.BuildCacheKey(req.Item, req.Date, req.Key, req.Query, req.Regex)
 		queryCache.Set(cacheKey, resp)
 	}
+
+	// 指标埋点：查询成功 + 延迟
+	metrics.Global().QuerySucceeded(time.Since(queryStart))
+
+	// 审计埋点：搜索操作（实际查询）
+	audit.RecordAudit(c, "search", "/logs/search", map[string]interface{}{
+		"itemId":     req.Item,
+		"clientId":   req.Client,
+		"date":       req.Date,
+		"key":        req.Key,
+		"query":      req.Query,
+		"matchCount": total,
+		"cached":     false,
+	}, "success")
 
 	c.JSON(http.StatusOK, api.Response{
 		Code:    api.CodeSuccess,
@@ -465,7 +505,16 @@ type taskProgress struct {
 }
 
 // QueryTask 按 taskNo 查询单个检索任务状态（含进度百分比）。
-// GET /logs/tasks/:taskNo
+//
+// @Summary 查询任务状态
+// @Description 按 taskNo 查询单个检索任务的状态与进度百分比。
+// @Tags Task
+// @Produce json
+// @Param taskNo path string true "任务编号"
+// @Success 200 {object} api.Response{data=taskProgress}
+// @Failure 400 {object} api.Response "taskNo 不能为空"
+// @Failure 404 {object} api.Response "任务不存在"
+// @Router /logs/tasks/{taskNo} [get]
 func QueryTask(c *gin.Context) {
 	taskNo := c.Param("taskNo")
 	if taskNo == "" {
@@ -492,7 +541,16 @@ func QueryTask(c *gin.Context) {
 }
 
 // QueryTaskProgress 轻量进度查询（高频轮询友好）。
-// GET /logs/tasks/:taskNo/progress
+//
+// @Summary 任务进度
+// @Description 轻量级任务进度查询，供前端高频轮询使用。
+// @Tags Task
+// @Produce json
+// @Param taskNo path string true "任务编号"
+// @Success 200 {object} api.Response{data=taskProgress}
+// @Failure 400 {object} api.Response "taskNo 不能为空"
+// @Failure 404 {object} api.Response "任务不存在"
+// @Router /logs/tasks/{taskNo}/progress [get]
 func QueryTaskProgress(c *gin.Context) {
 	taskNo := c.Param("taskNo")
 	if taskNo == "" {
@@ -519,7 +577,16 @@ func QueryTaskProgress(c *gin.Context) {
 }
 
 // ListTasks 分页查询检索任务列表。
-// GET /logs/tasks?page=1&pageSize=20&status=running
+//
+// @Summary 任务列表
+// @Description 分页查询检索任务列表，支持按状态过滤。
+// @Tags Task
+// @Produce json
+// @Param page query int false "页码（默认 1）"
+// @Param pageSize query int false "每页条数（默认 20）"
+// @Param status query string false "状态过滤：running / success / failed"
+// @Success 200 {object} api.Paginated{data=[]models.TTask}
+// @Router /logs/tasks [get]
 func ListTasks(c *gin.Context) {
 	pageNo, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
@@ -529,7 +596,16 @@ func ListTasks(c *gin.Context) {
 }
 
 // DeleteTask 删除一条检索任务记录。
-// DELETE /logs/tasks/:taskNo
+//
+// @Summary 删除任务
+// @Description 删除指定 taskNo 的检索任务记录。
+// @Tags Task
+// @Produce json
+// @Param taskNo path string true "任务编号"
+// @Success 200 {object} api.Response{data=map[string]string} "taskNo"
+// @Failure 400 {object} api.Response "taskNo 不能为空"
+// @Failure 404 {object} api.Response "任务不存在或已删除"
+// @Router /logs/tasks/{taskNo} [delete]
 func DeleteTask(c *gin.Context) {
 	taskNo := c.Param("taskNo")
 	if taskNo == "" {
@@ -549,7 +625,16 @@ func DeleteTask(c *gin.Context) {
 }
 
 // RetryTask 重新触发一条失败/超时的检索任务（仅前端可再次发起调用）。
-// POST /logs/tasks/:taskNo/retry 会删除旧记录并返回新的 taskNo 给前端跳转。
+//
+// @Summary 重试任务
+// @Description 删除旧任务记录并创建新的任务编号，供前端跳转重试。
+// @Tags Task
+// @Produce json
+// @Param taskNo path string true "任务编号"
+// @Success 200 {object} api.Response{data=map[string]string} "taskNo = 新任务编号"
+// @Failure 400 {object} api.Response "仅失败或已完成的任务可重试"
+// @Failure 404 {object} api.Response "任务不存在"
+// @Router /logs/tasks/{taskNo}/retry [post]
 func RetryTask(c *gin.Context) {
 	taskNo := c.Param("taskNo")
 	task, err := models.GetTaskByNo(taskNo)
@@ -561,7 +646,9 @@ func RetryTask(c *gin.Context) {
 		api.Fail(c, api.CodeBadRequest, "仅失败或已完成的任务可重试")
 		return
 	}
-	_ = models.DeleteTaskByNo(taskNo)
+	if rows := models.DeleteTaskByNo(taskNo); rows == 0 {
+		log.Printf("[search] 删除旧任务 %s 未找到记录", taskNo)
+	}
 	newTaskNo := models.NewTaskNo()
 	// 审计埋点：重试检索任务
 	audit.RecordAudit(c, "retry", "/logs/tasks/:taskNo/retry", map[string]interface{}{
