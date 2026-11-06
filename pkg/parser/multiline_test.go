@@ -154,7 +154,7 @@ func TestMergeMultiLine_LevelPrefixNoTimestamp(t *testing.T) {
 	}
 }
 
-// TestMergeMultiLine_BracketLevel 方括号级别格式。
+// TestMergeMultiLine_BracketLevel 方括号时间戳格式。
 func TestMergeMultiLine_BracketLevel(t *testing.T) {
 	lines := []string{
 		`[2026-11-03 10:00:00] [ERROR] boom`,
@@ -162,14 +162,12 @@ func TestMergeMultiLine_BracketLevel(t *testing.T) {
 	}
 
 	entries := MergeMultiLine(lines)
-	// 主行以 '[' 开头但内嵌时间戳，looksLikePrimary 走 hasLeadingTimestamp 失败，
-	// 此时应作为单行输出，从属行也不应被吞并到无结构文本中。
-	if len(entries) == 0 {
-		t.Fatal("不应为空")
+	// 方括号时间戳被 hasLeadingTimestamp 识别为主行，后续 at 行触发 Java 栈合并。
+	if len(entries) != 1 {
+		t.Fatalf("应合并为 1 个条目, got %d", len(entries))
 	}
-	// 至少第一行必须是 single（未误判为从属）
-	if entries[0].Kind != KindSingle {
-		t.Errorf("首行应为 single, got %q", entries[0].Kind)
+	if entries[0].Kind != KindJavaStack {
+		t.Errorf("kind = %q want java-stack", entries[0].Kind)
 	}
 }
 

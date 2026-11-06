@@ -39,19 +39,127 @@ func TestAgentTool_Names(t *testing.T) {
 	}
 }
 
-// TestReasoningAgent_ToolRegistration 验证 NewReasoningAgent 注册了全部 4 个工具。
+// TestReasoningAgent_ToolRegistration 验证 NewReasoningAgent 注册了全部 7 类工具。
+//
+// V2.3-03：PRD FR-903 要求覆盖 7 类工具，缺少任何一类都会让 Agent
+// 在某些排障场景下无手段可用（例如无法判断异常是新增还是持续存在）。
 func TestReasoningAgent_ToolRegistration(t *testing.T) {
 	agent := NewReasoningAgent()
-	if len(agent.tools) != 4 {
-		t.Fatalf("expected 4 tools, got %d", len(agent.tools))
+	if len(agent.tools) != 7 {
+		t.Fatalf("expected 7 tools, got %d", len(agent.tools))
 	}
-	for _, name := range []string{"search_logs", "agg_stats", "get_context", "get_trace"} {
+
+	wantTools := []string{
+		"search_logs",       // 日志检索
+		"agg_stats",         // 聚合统计
+		"get_context",       // 上下文回溯
+		"get_trace",         // 链路查询
+		"list_templates",    // 模板列表
+		"get_anomalies",     // 异常事件
+		"diff_time_window",  // 时间窗对比
+	}
+	for _, name := range wantTools {
 		if _, ok := agent.tools[name]; !ok {
 			t.Errorf("missing tool: %s", name)
 		}
 	}
+
 	if agent.maxSteps != agentMaxSteps {
 		t.Errorf("maxSteps = %d, want %d", agent.maxSteps, agentMaxSteps)
+	}
+}
+
+// TestReasoningAgent_TokenBudgetDefault 验证 Token 预算默认值已启用。
+func TestReasoningAgent_TokenBudgetDefault(t *testing.T) {
+	agent := NewReasoningAgent()
+	if agent.tokenBudget <= 0 {
+		t.Errorf("tokenBudget = %d, want > 0", agent.tokenBudget)
+	}
+	if agent.tokenBudget != agentDefaultTokenBudget {
+		t.Errorf("tokenBudget = %d, want %d", agent.tokenBudget, agentDefaultTokenBudget)
+	}
+}
+
+// TestToolMetrics_RecordAndSnapshot 验证工具成功率统计正确。
+func TestToolMetrics_RecordAndSnapshot(t *testing.T) {
+	m := newToolMetrics()
+
+	m.Record("search_logs", true, "", 10)
+	m.Record("search_logs", true, "", 12)
+	m.Record("search_logs", false, "timeout", 5000)
+
+	snapshot := m.Snapshot()
+	var found *AgentToolStats
+	for i := range snapshot {
+		if snapshot[i].Tool == "search_logs" {
+			found = &snapshot[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("search_logs 未出现在统计中")
+	}
+	if found.TotalCalls != 3 {
+		t.Errorf("TotalCalls = %d want 3", found.TotalCalls)
+	}
+	if found.SuccessCalls != 2 {
+		t.Errorf("SuccessCalls = %d want 2", found.SuccessCalls)
+	}
+	if found.SuccessRate < 0.66 || found.SuccessRate > 0.67 {
+		t.Errorf("SuccessRate = %f want ~0.667", found.SuccessRate)
+	}
+}
+
+// TestToolMetrics_RecentCalls 验证最近调用明细按时间倒序。
+func TestToolMetrics_RecentCalls(t *testing.T) {
+	m := newToolMetrics()
+	m.Record("a", true, "", 1)
+	m.Record("b", false, "err", 2)
+
+	recent := m.RecentCalls(5)
+	if len(recent) != 2 {
+		t.Fatalf("len = %d want 2", len(recent))
+	}
+	// 最新的在前
+	if recent[0].Tool != "b" {
+		t.Errorf("recent[0].Tool = %q want b", recent[0].Tool)
+	}
+	if recent[0].Success {
+		t.Error("recent[0] 应为失败")
+	}
+}
+
+// TestToolMetrics_RecentCallsLimit 明细上限生效。
+func TestToolMetrics_RecentCallsLimit(t *testing.T) {
+	m := newToolMetrics()
+	for i := 0; i < maxRecentEntries+50; i++ {
+		m.Record("t", true, "", 1)
+	}
+
+	if got := len(m.RecentCalls(1000)); got != maxRecentEntries {
+		t.Errorf("limit = %d want %d", got, maxRecentEntries)
+	}
+}
+
+// TestToolMetrics_ConcurrentRecord 并发记录不丢失且无竞态。
+func TestToolMetrics_ConcurrentRecord(t *testing.T) {
+	m := newToolMetrics()
+	done := make(chan struct{})
+	for i := 0; i < 8; i++ {
+		go func() {
+			defer func() { done <- struct{}{} }()
+			for j := 0; j < 100; j++ {
+				m.Record("concurrent", true, "", 1)
+			}
+		}()
+	}
+	for i := 0; i < 8; i++ {
+		<-done
+	}
+
+	snapshot := m.Snapshot()
+	if len(snapshot) != 1 || snapshot[0].TotalCalls != 800 {
+		t.Errorf("TotalCalls = %+v want 800", snapshot)
 	}
 }
 

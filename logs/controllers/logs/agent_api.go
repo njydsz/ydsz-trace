@@ -75,13 +75,34 @@ func AgentReasonHandler(c *gin.Context) {
 // @Success 200 {object} api.Success{data=[]AgentToolInfo}
 // @Router /logs/agent/tools [get]
 func AgentToolsHandler(c *gin.Context) {
+	// 全部 7 类只读工具（V2.3-03），与 ReasoningAgent 注册保持一致
 	tools := []AgentToolInfo{
 		{Name: (&SearchLogsTool{}).Name(), Description: (&SearchLogsTool{}).Description()},
 		{Name: (&AggStatsTool{}).Name(), Description: (&AggStatsTool{}).Description()},
 		{Name: (&GetContextTool{}).Name(), Description: (&GetContextTool{}).Description()},
 		{Name: (&GetTraceTool{}).Name(), Description: (&GetTraceTool{}).Description()},
+		{Name: (&ListTemplatesTool{}).Name(), Description: (&ListTemplatesTool{}).Description()},
+		{Name: (&GetAnomaliesTool{}).Name(), Description: (&GetAnomaliesTool{}).Description()},
+		{Name: (&DiffTimeWindowTool{}).Name(), Description: (&DiffTimeWindowTool{}).Description()},
 	}
 	api.Success(c, "查询成功", tools)
+}
+
+// AgentToolStats 工具成功率统计（V2.3-03，FR-903 验收：工具成功率 ≥95%）。
+type AgentToolStats struct {
+	Tool         string  `json:"tool"`
+	TotalCalls   int     `json:"totalCalls"`
+	SuccessCalls int     `json:"successCalls"`
+	FailureCalls int     `json:"failureCalls"`
+	SuccessRate  float64 `json:"successRate"`
+}
+
+// AgentToolStatsHandler GET /logs/agent/tools/stats
+//
+// 汇总工具调用成功率，供运维监控 Agent 健康度。
+func AgentToolStatsHandler(c *gin.Context) {
+	stats := collectToolStats()
+	api.Success(c, "查询成功", stats)
 }
 
 // trimSpace 去除字符串首尾空白。

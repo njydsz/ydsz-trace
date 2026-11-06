@@ -131,3 +131,17 @@ func QueryPageItem(pageNum int, pageSize int) (page Page) {
 	page = PageUtil(totalCount, pageNum, pageSize, items)
 	return page
 }
+
+// QueryEnabledItemsByClientId 按 client_id 查询所有启用（status=1）的日志项。
+//
+// 用于长连接通道注册时向 agent 下发采集配置（P1-3）。
+func QueryEnabledItemsByClientId(id int64) ([]TItem, error) {
+	items := []TItem{}
+	err := DB.Select(&items,
+		`SELECT * FROM t_item WHERE client_id = ? AND status = '1' ORDER BY id ASC`, id)
+	if err != nil {
+		log.Printf("query enabled items by client id err: %v", err)
+		return nil, err
+	}
+	return items, nil
+}

@@ -28,6 +28,17 @@ type ReasoningResult struct {
 	Degraded bool `json:"degraded"`
 	// ModelName 使用的模型名称（降级模式为空字符串）
 	ModelName string `json:"modelName"`
+	// TokenBudgetExceeded 是否因 Token 预算耗尽而提前终止（V2.3-02，FR-908）
+	TokenBudgetExceeded bool `json:"tokenBudgetExceeded,omitempty"`
+	// TotalTokens 本次会话累计消耗的输出 token
+	TotalTokens int `json:"totalTokens"`
+	// MaxSteps 推理步数上限（用于前端展示约束）
+	MaxSteps int `json:"maxSteps"`
+	// ThreeSection 三段式报告（假设/验证/结论 + 证据引用，V2.3-06，FR-904）
+	ThreeSection *ThreeSectionReport `json:"threeSection,omitempty"`
+	// TraceableRefs 可点击回溯原文的证据引用（V2.3-06，与 Evidence 的区别：
+	// Evidence 为结构化验证段，TraceableRefs 为可直接跳转的原文引用）
+	TraceableRefs []EvidenceRef `json:"traceableRefs,omitempty"`
 }
 
 // HypothesisSection 根因假设。
@@ -82,4 +93,8 @@ type ToolCallRecord struct {
 	ResultSummary string `json:"resultSummary"`
 	// DurationMs 工具执行耗时（毫秒）
 	DurationMs int64 `json:"durationMs"`
+	// Success 调用是否成功（用于工具成功率统计）
+	Success bool `json:"success"`
+	// Error 失败原因（成功时为空）
+	Error string `json:"error,omitempty"`
 }

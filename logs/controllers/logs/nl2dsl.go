@@ -48,6 +48,14 @@ type Nl2DslParseResp struct {
 	DslConditions string `json:"dslConditions"`
 	// IntentType 意图类型
 	IntentType string `json:"intentType"`
+	// Strategy 解析策略：rule / llm / degraded（V2.3-04）
+	Strategy string `json:"strategy"`
+	// Confidence 规则解析置信度（0~1）
+	Confidence float64 `json:"confidence"`
+	// Explanation 解释卡（V2.3-05，FR-505）
+	Explanation *ExplanationCard `json:"explanation,omitempty"`
+	// Coref 指代消解信息（多轮会话场景，V2.3-05）
+	Coref *CorefResult `json:"coref,omitempty"`
 }
 
 // 常量定义。
@@ -68,13 +76,24 @@ const (
 
 // 正则预编译。
 var (
-	nlLevelPattern      = regexp.MustCompile(`(?i)\b(ERROR|WARN|INFO|DEBUG|FATAL)\b`)
+	nlLevelPattern      = regexp.MustCompile(`(?i)\b(ERROR|WARN|WARNING|INFO|DEBUG|FATAL)\b`)
 	nlHourPattern       = regexp.MustCompile(`(?:近|最近|last)\s*(\d+)\s*小时`)
 	nlDayPattern        = regexp.MustCompile(`(?:近|最近|last)\s*(\d+)\s*天`)
 	nlQuotedPattern     = regexp.MustCompile(`["'']([^'']+)["'']`)
 	nlCleanupTimeRef    = regexp.MustCompile(`(?:近\s*\d+\s*(?:小时|天)|最近\s*\d+\s*(?:小时|天)|今天|今日|日志|查[一查]?[下看]?[一下我]?[们]?|[查看]?[一一下]?[看我]?[们]?)`)
-	nlCleanupLevel      = regexp.MustCompile(`(?i)\b(ERROR|WARN|INFO|DEBUG|FATAL)\b`)
+	nlCleanupLevel      = regexp.MustCompile(`(?i)\b(ERROR|WARN|WARNING|INFO|DEBUG|FATAL)\b`)
+	nlChineseLevelAlias = regexp.MustCompile(`(报错|错误|异常|崩溃|告警)`)
 )
+
+// nlLevelAliasMap 级别别名归一化映射。
+var nlLevelAliasMap = map[string]string{
+	"WARNING": LEVEL_WARN,
+	"ERROR":   LEVEL_ERROR,
+	"WARN":    LEVEL_WARN,
+	"INFO":    LEVEL_INFO,
+	"DEBUG":   LEVEL_DEBUG,
+	"FATAL":   LEVEL_FATAL,
+}
 
 // nl2dslParse 处理自然语言转 DSL 解析。
 //
@@ -104,7 +123,33 @@ func nl2dslParse(c *gin.Context) {
 		return
 	}
 
-	resp := nl2dslBuildResponse(req.Query)
+	// 多轮指代消解（V2.3-05）：传入 convId 时读取历史轮次
+	var coref *CorefResult
+	if convID := strings.TrimSpace(c.Query("convId")); convID != "" {
+		history := loadConversationTurns(convID)
+		if len(history) > 0 {
+			result := ResolveCoref(req.Query, history)
+			if result.Changed {
+				coref = &result
+				// 用消解后的完整语义重新解析
+				req.Query = result.ResolvedQuery
+			}
+		}
+	}
+
+	// 带 LLM 兜底的解析（V2.3-04，FR-504）
+	resp, strategy := nl2dslParseWithFallback(req.Query)
+	resp.Strategy = strategy
+	resp.Coref = coref
+
+	// 解释卡（V2.3-05，FR-505）
+	warnings := make([]string, 0, 2)
+	if coref != nil && coref.Strategy == "llm" {
+		warnings = append(warnings, "已根据上文补全指代内容")
+	}
+	card := BuildExplanationCard(req.Query, resp, strategy, warnings)
+	resp.Explanation = &card
+
 	api.Success(c, "NL2DSL 解析成功", resp)
 }
 
@@ -130,12 +175,17 @@ func nl2dslBuildResponse(query string) Nl2DslParseResp {
 }
 
 // nl2dslExtractLevel 从自然语言中提取日志级别。
+// 支持英文别名（WARNING→WARN）和中文语义（报错/错误/异常/崩溃/告警→ERROR）。
 func nl2dslExtractLevel(text string) string {
 	match := nlLevelPattern.FindString(text)
-	if match == "" {
-		return ""
+	if match != "" {
+		return nlLevelAliasMap[strings.ToUpper(match)]
 	}
-	return strings.ToUpper(match)
+	// 中文语义兜底
+	if nlChineseLevelAlias.MatchString(text) {
+		return LEVEL_ERROR
+	}
+	return ""
 }
 
 // nl2dslExtractTimeRange 解析时间范围。

@@ -27,27 +27,35 @@ const (
 //
 // 负责按固定/退避间隔反复调用 RegisterLocalIp，保持客户端在 logs 侧的在线状态。
 // 调用结果（成功/失败）驱动退避计数，实现真正的指数退避。
+//
+// 轻量化策略（P0-3）：
+//   - 首次调用完整注册（RegisterLocalIp），携带 source_type 等元数据。
+//   - 后续调用轻量 Ping，仅刷新在线状态，显著降低心跳带宽。
 type HeartbeatManager struct {
-	mu           sync.Mutex
-	server       string
-	vKey         string
-	regKey       string
-	stopCh       chan struct{}
-	doneCh       chan struct{}
-	isRunning    bool
-	retryCount   int
-	lastFailTime time.Time
+	mu              sync.Mutex
+	server          string
+	vKey            string
+	regKey          string
+	localLogcPort   string
+	stopCh          chan struct{}
+	doneCh          chan struct{}
+	isRunning       bool
+	retryCount      int
+	lastFailTime    time.Time
+	firstRegisterDone bool
 }
 
 // NewHeartbeatManager 创建指定目标服务地址与密钥的心跳管理器。
 // regKey 为注册鉴权密钥，与服务端 getRegisterKey 一致。
-func NewHeartbeatManager(server, vKey, regKey string) *HeartbeatManager {
+// localLogcPort 用于轻量心跳中携带 logc 端口（服务端可据此更新回调地址）。
+func NewHeartbeatManager(server, vKey, regKey, localLogcPort string) *HeartbeatManager {
 	return &HeartbeatManager{
-		server: server,
-		vKey:   vKey,
-		regKey: regKey,
-		stopCh: make(chan struct{}),
-		doneCh: make(chan struct{}),
+		server:        server,
+		vKey:          vKey,
+		regKey:        regKey,
+		localLogcPort: localLogcPort,
+		stopCh:        make(chan struct{}),
+		doneCh:        make(chan struct{}),
 	}
 }
 
@@ -103,15 +111,22 @@ func (h *HeartbeatManager) heartbeatLoop() {
 	}
 }
 
-// doRegister 执行一次注册请求并根据结果更新退避状态。
+// doRegister 执行一次心跳并根据结果更新退避状态。
+//
+// 首次调用完整注册（RegisterLocalIp），后续调用轻量 Ping（P0-3）。
 // 成功时重置 retryCount，失败时递增 retryCount 并记录时间。
-// 这是 P0-1 修复的核心：心跳结果真正反馈到退避逻辑。
 func (h *HeartbeatManager) doRegister() {
 	h.mu.Lock()
-	server, vKey, regKey := h.server, h.vKey, h.regKey
+	server, vKey, regKey, port := h.server, h.vKey, h.regKey, h.localLogcPort
+	first := !h.firstRegisterDone
 	h.mu.Unlock()
 
-	_, err := RegisterLocalIp(server, vKey, regKey)
+	var err error
+	if first {
+		_, err = RegisterLocalIp(server, vKey, regKey)
+	} else {
+		err = Ping(server, vKey, regKey, port)
+	}
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -119,14 +134,19 @@ func (h *HeartbeatManager) doRegister() {
 	if err != nil {
 		h.retryCount++
 		h.lastFailTime = time.Now()
-		log.Printf("[heartbeat] 注册失败 (第 %d 次)，下次间隔: %v，错误: %v",
+		log.Printf("[heartbeat] 心跳失败 (第 %d 次)，下次间隔: %v，错误: %v",
 			h.retryCount, h.getIntervalLocked(), err)
 		return
 	}
 
+	// 首次注册成功后标记，后续走轻量 Ping。
+	if first {
+		h.firstRegisterDone = true
+	}
+
 	// 成功时重置退避
 	if h.retryCount > 0 {
-		log.Printf("[heartbeat] 注册恢复，重置退避计数 (此前失败 %d 次)", h.retryCount)
+		log.Printf("[heartbeat] 心跳恢复，重置退避计数 (此前失败 %d 次)", h.retryCount)
 	}
 	h.retryCount = 0
 }
@@ -159,9 +179,10 @@ var (
 
 // StartGlobalHeartbeat 启动全局唯一心跳（仅首次调用生效）。
 // regKey 为注册鉴权密钥，与服务端 getRegisterKey 一致。
-func StartGlobalHeartbeat(server, vKey, regKey string) {
+// localLogcPort 用于轻量心跳携带端口。
+func StartGlobalHeartbeat(server, vKey, regKey, localLogcPort string) {
 	heartbeatOnce.Do(func() {
-		globalHeartbeat = NewHeartbeatManager(server, vKey, regKey)
+		globalHeartbeat = NewHeartbeatManager(server, vKey, regKey, localLogcPort)
 		globalHeartbeat.Start()
 	})
 }

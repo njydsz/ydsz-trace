@@ -33,21 +33,40 @@ type ReasoningAgent struct {
 	llmClient *LLMClient
 	// anomalyEngine 异常检测引擎（降级模式使用）
 	anomalyEngine *stats.AnomalyEngine
+
+	// totalTokens 本次会话累计消耗的输出 token（V2.3-02）
+	totalTokens int
+	// tokenBudget 单次会话的输出 token 硬上限（0 表示不限制）
+	tokenBudget int
 }
 
-// NewReasoningAgent 构造 ReasoningAgent，注册 4 个只读工具。
+// NewReasoningAgent 构造 ReasoningAgent，注册全部 7 类只读工具（V2.3-03）。
+//
+//	search_logs      日志检索
+//	agg_stats        聚合统计
+//	get_context      上下文回溯
+//	get_trace        链路查询
+//	list_templates   模板列表
+//	get_anomalies    异常事件
+//	diff_time_window 时间窗对比
 func NewReasoningAgent() *ReasoningAgent {
 	tools := map[string]AgentTool{
-		(&SearchLogsTool{}).Name():  &SearchLogsTool{},
-		(&AggStatsTool{}).Name():    &AggStatsTool{},
-		(&GetContextTool{}).Name():  &GetContextTool{},
-		(&GetTraceTool{}).Name():    &GetTraceTool{},
+		(&SearchLogsTool{}).Name():       &SearchLogsTool{},
+		(&AggStatsTool{}).Name():         &AggStatsTool{},
+		(&GetContextTool{}).Name():       &GetContextTool{},
+		(&GetTraceTool{}).Name():         &GetTraceTool{},
+		(&ListTemplatesTool{}).Name():    &ListTemplatesTool{},
+		(&GetAnomaliesTool{}).Name():     &GetAnomaliesTool{},
+		(&DiffTimeWindowTool{}).Name():   &DiffTimeWindowTool{},
 	}
 	return &ReasoningAgent{
 		tools:         tools,
 		maxSteps:      agentMaxSteps,
 		llmClient:     NewLLMClient(),
 		anomalyEngine: stats.NewAnomalyEngine(),
+		// 累计 Token 预算（输出侧），防止 ReAct 循环失控消耗
+		totalTokens:   0,
+		tokenBudget:   agentDefaultTokenBudget,
 	}
 }
 
@@ -87,6 +106,9 @@ func (a *ReasoningAgent) Run(ctx context.Context, query string, convID string) (
 		result.Degraded = false
 		result.ModelName = a.llmClient.ModelName()
 		a.runReAct(ctx, query, result)
+		result.MaxSteps = a.maxSteps
+		result.TotalTokens = a.totalTokens
+		attachEvidenceAndReport(result)
 		return result, nil
 	}
 
@@ -95,6 +117,9 @@ func (a *ReasoningAgent) Run(ctx context.Context, query string, convID string) (
 	result.Degraded = true
 	result.ModelName = ""
 	a.runDegraded(ctx, query, result)
+	result.MaxSteps = a.maxSteps
+	result.TotalTokens = a.totalTokens
+	attachEvidenceAndReport(result)
 	return result, nil
 }
 
@@ -102,15 +127,43 @@ func (a *ReasoningAgent) Run(ctx context.Context, query string, convID string) (
 func (a *ReasoningAgent) runReAct(ctx context.Context, query string, result *ReasoningResult) {
 	history := make([]reactStep, 0, a.maxSteps)
 
+	// 相似案例注入（V2.3-08，FR-907）：把历史纠错经验作为先验参考。
+	// 在循环外检索一次，避免每步重复查库。
+	similarCases := SearchSimilarCases(query)
+	systemPrompt := AgentPromptWithCases(buildAgentSystemPrompt(), similarCases)
+	if len(similarCases) > 0 {
+		log.Printf("[agent] 注入 %d 条相似案例", len(similarCases))
+	}
+
+	// 变更事件注入（V2.3-10，FR-905）：近期变更作为强根因线索。
+	// 以当前时间为基准回溯，覆盖「刚发布完就出问题」的典型场景。
+	before := len(systemPrompt)
+	systemPrompt = InjectChangesIntoPrompt(systemPrompt, time.Now())
+	if len(systemPrompt) > before {
+		log.Printf("[agent] 已注入近期变更事件作为强证据")
+	}
+
 	for step := 1; step <= a.maxSteps; step++ {
 		// 构造 prompt
-		systemPrompt := buildAgentSystemPrompt()
 		userPrompt := buildAgentUserPrompt(query, history)
 
-		// 调用 LLM（带超时）
+		// 调用 LLM（带超时），并统计本次输出 token（V2.3-02）
 		callCtx, cancel := context.WithTimeout(ctx, agentLLMTimeout)
-		output, err := a.llmClient.Call(callCtx, systemPrompt, userPrompt)
+		output, usedTokens, err := a.llmClient.CallWithUsage(callCtx, systemPrompt, userPrompt)
 		cancel()
+
+		// Token 预算硬约束（FR-908）：超出立即终止，基于已有历史生成结论
+		if a.tokenBudget > 0 {
+			a.totalTokens += usedTokens
+			if a.totalTokens > a.tokenBudget {
+				log.Printf("[agent] Token 预算耗尽（used=%d budget=%d），提前终止 ReAct 循环",
+					a.totalTokens, a.tokenBudget)
+				a.synthesizeFromHistory(query, history, result)
+				result.TokenBudgetExceeded = true
+				return
+			}
+		}
+
 		if err != nil {
 			log.Printf("[agent] LLM 调用失败（step=%d）: %v", step, err)
 			// 首次即失败则降级为统计结论
@@ -174,14 +227,33 @@ func (a *ReasoningAgent) runReAct(ctx context.Context, query string, result *Rea
 		stepRecord.Observation = obsStr
 		history[len(history)-1] = stepRecord
 
-		result.ToolCalls = append(result.ToolCalls, ToolCallRecord{
+		record := ToolCallRecord{
 			Step:          step,
 			Tool:          toolName,
 			Params:        stepRecord.Action.Params,
 			ResultSummary: truncateStr(obsStr, 200),
 			DurationMs:    durationMs,
-		})
+			Success:       toolErr == nil,
+		}
+		if toolErr != nil {
+			record.Error = toolErr.Error()
+		}
+		result.ToolCalls = append(result.ToolCalls, record)
+
+		// 上报工具成功率指标（V2.3-03）
+		errMsg := ""
+		if toolErr != nil {
+			errMsg = toolErr.Error()
+		}
+		recordToolCall(toolName, toolErr == nil, errMsg, durationMs)
 	}
+
+	// 记录约束信息（供前端展示与审计）
+	result.MaxSteps = a.maxSteps
+	result.TotalTokens = a.totalTokens
+
+	// 三段式报告与证据引用（V2.3-06，FR-904）
+	attachEvidenceAndReport(result)
 
 	// 达到最大步数：基于历史生成结论
 	a.synthesizeFromHistory(query, history, result)
@@ -324,12 +396,15 @@ func buildAgentSystemPrompt() string {
 	b.WriteString("可用工具（JSON 格式调用）：\n")
 	b.WriteString("{\"tool\": \"<name>\", \"params\": {...}}\n\n")
 
-	// 注入工具定义
+	// 注入工具定义（与 NewReasoningAgent 注册保持一致）
 	tools := []AgentTool{
 		&SearchLogsTool{},
 		&AggStatsTool{},
 		&GetContextTool{},
 		&GetTraceTool{},
+		&ListTemplatesTool{},
+		&GetAnomaliesTool{},
+		&DiffTimeWindowTool{},
 	}
 	for _, t := range tools {
 		fmt.Fprintf(&b, "- %s: %s\n", t.Name(), t.Description())

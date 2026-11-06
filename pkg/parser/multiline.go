@@ -36,24 +36,32 @@ var (
 	reJavaCausedBy = regexp.MustCompile(`^\s*Caused by:\s*\S`)
 	// reJavaSuppressed Java 抑制异常：    Suppressed: ...
 	reJavaSuppressed = regexp.MustCompile(`^\s*Suppressed:\s*\S`)
+	// reJavaExceptionLine Java 异常类型行：java.lang.RuntimeException: msg
+	// 紧跟在 ERROR 主行之后的异常声明行（无 at 前缀）也是 Java 栈的一部分
+	reJavaExceptionLine = regexp.MustCompile(`^\s*(?:[a-z][\w]*\.)+[A-Z]\w*(?:Exception|Error|Throwable)\b`)
 	// rePythonFrame Python 堆栈帧：    File "/x/y.py", line 12, in func
 	rePythonFrame = regexp.MustCompile(`^\s+File\s+"[^"]+",\s*line\s+\d+`)
 	// rePythonCaret Python 指示符：    ^
 	rePythonCaret = regexp.MustCompile(`^\s*\^+`)
 	// rePythonTracebackHeader traceback 起始行（属于 Python 调用栈的一部分）
 	rePythonTracebackHeader = regexp.MustCompile(`^Traceback \(most recent call last\):`)
+	// rePythonChainedHeader Python 链式异常头：During handling of the above exception...
+	rePythonChainedHeader = regexp.MustCompile(`^During handling of the above exception`)
 	// rePythonErrorLine Python 异常类型行（末尾无时间戳的续行）
 	rePythonErrorLine = regexp.MustCompile(`^(?:[A-Za-z_][\w.]*Error|Exception|SystemExit|KeyboardInterrupt|StopIteration|GeneratorExit)\b.*:.*$`)
 	// reGoFrame Go 堆栈帧：    main.main()\t/x/main.go:10 +0x1a
 	// 同时匹配 tab 缩进的源文件行（Go 栈帧标准形式）
 	reGoFrame = regexp.MustCompile(`^\s*\S.*\.go:\d+`)
-	// reGoFuncLine Go 函数调用行：    main.main()  /  net/http.(*Server).Serve()
+	// reGoFuncLine Go 函数调用行：    main.main()  /  net/http.(*Server).Serve()  /  main.(*Server).handle(...)
 	// 紧跟在 goroutine 头之后的调用栈行没有 .go: 后缀，需单独识别
-	reGoFuncLine = regexp.MustCompile(`^\s*[\w.$/()]+\.[\w$]+\(`)
+	// 支持指针接收器（*T）、接口方法、匿名函数等形式
+	reGoFuncLine = regexp.MustCompile(`^\s*[\w.$/*()]+\.[\w$]+\(`)
 	// reGoCreatedBy Go 协程创建点：    created by ...
 	reGoCreatedBy = regexp.MustCompile(`^\s*created by\s+\S`)
 	// reGoGoroutine Go 协程头：    goroutine 1 [running]:
 	reGoGoroutine = regexp.MustCompile(`^\s*goroutine\s+\d+`)
+	// reGoPanicLine Go panic 行：    panic: runtime error: ...
+	reGoPanicLine = regexp.MustCompile(`^\s*panic:\s*\S`)
 )
 
 // MultiLineEntry 合并后的多行日志条目。
@@ -197,6 +205,10 @@ func hasLeadingTimestamp(s string) bool {
 	if s[4] == '-' && s[7] == '-' && s[10] == 'T' {
 		return true
 	}
+	// 方括号时间戳：[2026-11-03 10:00:26] 或 [2026-11-03T10:00:26Z]
+	if s[0] == '[' && len(s) > 11 && s[5] == '-' && s[8] == '-' {
+		return true
+	}
 	// Unix 时间戳（10 位）或毫秒（13 位）
 	if len(s) >= 10 && isAllDigits(s[:10]) {
 		return true
@@ -242,6 +254,8 @@ func classifyContinuation(line string) string {
 	switch {
 	case rePythonTracebackHeader.MatchString(line):
 		return KindPythonTraceback
+	case rePythonChainedHeader.MatchString(line):
+		return KindPythonTraceback
 	case rePythonErrorLine.MatchString(line):
 		// 异常类型行：仅在上一行是 Python 栈时才算从属；此处保守识别为 Python 续行
 		return KindPythonTraceback
@@ -252,6 +266,8 @@ func classifyContinuation(line string) string {
 	case reJavaCausedBy.MatchString(line):
 		return KindJavaStack
 	case reJavaSuppressed.MatchString(line):
+		return KindJavaStack
+	case reJavaExceptionLine.MatchString(line):
 		return KindJavaStack
 	case rePythonFrame.MatchString(line):
 		return KindPythonTraceback
@@ -264,6 +280,8 @@ func classifyContinuation(line string) string {
 	case reGoFuncLine.MatchString(line):
 		return KindGoPanic
 	case reGoCreatedBy.MatchString(line):
+		return KindGoPanic
+	case reGoPanicLine.MatchString(line):
 		return KindGoPanic
 	}
 

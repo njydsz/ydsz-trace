@@ -34,16 +34,17 @@ func QuotaCheckHandler(c *gin.Context) {
 		req.Tokens = 1000 // 默认预估 1k tokens
 	}
 
-	ok, remaining, err := models.CheckQuota(req.ModelID, req.Tokens)
+	ok, remaining, usagePercent, err := models.CheckQuotaAndAlert(req.ModelID, req.Tokens)
 	if err != nil {
 		api.Fail(c, api.CodeServerError, "配额检查失败: "+err.Error())
 		return
 	}
 
 	api.Success(c, "检查成功", gin.H{
-		"modelId":   req.ModelID,
-		"available": ok,
-		"remaining": remaining,
+		"modelId":      req.ModelID,
+		"available":    ok,
+		"remaining":    remaining,
+		"usagePercent": usagePercent,
 	})
 }
 
@@ -66,7 +67,7 @@ func QuotaConsumeHandler(c *gin.Context) {
 		return
 	}
 
-	if err := models.ConsumeQuota(req.ModelID, req.Tokens); err != nil {
+	if err := models.ConsumeQuotaAndAlert(req.ModelID, req.Tokens); err != nil {
 		api.Fail(c, api.CodeServerError, "配额消费失败: "+err.Error())
 		return
 	}

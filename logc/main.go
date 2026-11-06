@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"log"
 	"net/http"
@@ -22,12 +23,17 @@ import (
 	"syscall"
 	"time"
 
+	"ydsz-trace/logc/agentlink"
 	filectl "ydsz-trace/logc/controllers/file"
 	"ydsz-trace/logc/controllers/register"
 	"ydsz-trace/logc/routers"
+	agentproto "ydsz-trace/pkg/agentlink"
 	"ydsz-trace/pkg/config"
+	pkgtls "ydsz-trace/pkg/tls"
 	"ydsz-trace/pkg/perf"
 	"ydsz-trace/pkg/source"
+	"ydsz-trace/pkg/spool"
+	"ydsz-trace/pkg/util"
 )
 
 // activeSource 全局激活的日志源实例（由工厂创建，中间件注入到请求上下文）。
@@ -37,6 +43,8 @@ var (
 	sampler *perf.Sampler
 	// guardian 资源护栏（V2.2-11）
 	guardian *perf.Guardian
+	// spoolMgr 背压队列管理器（FR-103，V2.2-09）
+	spoolMgr *agentlink.SpoolManager
 )
 
 func main() {
@@ -117,7 +125,65 @@ func main() {
 	register.RegisterLocalIp(server, vkey, regKey)
 
 	// ===== 启动心跳续约 =====
-	register.StartGlobalHeartbeat(server, vkey, regKey)
+	// 首次完整注册，后续走轻量 Ping（P0-3）。
+	register.StartGlobalHeartbeat(server, vkey, regKey, activeSourcePort())
+
+	// ===== 启动长连接通道（P1-1/P1-2/P1-3/P1-5）=====
+	// push 模式：logc 主动向 logs 建立 WebSocket 长连接；
+	// pull 模式：保持纯 HTTP 拉取，不建立长连接。
+	// P1-5：模式可由服务端按客户端灰度下发（t_client.agent_mode），
+	// agent 注册后按 RegisterAccept.AgentMode 动态切换。
+	localMode := agentlinkMode(cfg)
+
+	// FR-103 背压队列：服务端不可用时把日志批次落盘，恢复后补传。
+	// 默认启用，容量 10000 条；可通过环境变量关闭。
+	var spoolErr error
+	spoolMgr, spoolErr = agentlink.NewSpoolManager(agentlink.SpoolConfig{
+		Enabled:  envBool("YDSZ_SPOOL_ENABLED", true),
+		Capacity: spool.DefaultCapacity,
+		Path:     os.Getenv("YDSZ_SPOOL_PATH"),
+	})
+	if spoolErr != nil {
+		log.Printf("[spool] 背压队列初始化失败: %v（降级为内存队列）", spoolErr)
+		spoolMgr = nil
+	}
+	if spoolMgr == nil {
+		log.Printf("[spool] 背压队列未启用（YDSZ_SPOOL_ENABLED=false 或初始化失败）")
+	} else {
+		stats := spoolMgr.Stats()
+		log.Printf("[spool] 背压队列已启用: path=%s capacity=%d", stats.Path, stats.Capacity)
+		defer func() {
+			if err := spoolMgr.Close(); err != nil {
+				log.Printf("[spool] 关闭队列失败: %v", err)
+			}
+		}()
+	}
+
+	linkClient := agentlink.NewClient(server, vkey, regKey, activeSourcePort())
+	linkClient.SetSpool(spoolMgr)
+	linkClient.SetConfigHandler(func(cfgPush *agentproto.ConfigPush) {
+		// P1-4：配置热下发回调。
+		log.Printf("[agentlink] 收到配置下发 version=%d samplingRate=%.2f",
+			cfgPush.Version, cfgPush.SamplingRate)
+		applyAgentConfig(cfgPush)
+	})
+	// P1-3：按服务端下发的 item 列表启动本地 tail 上报。
+	tailer := agentlink.NewTailer(activeSource, linkClient.SubmitBatch)
+	tailer.Start()
+	linkClient.SetItemsHandler(func(specs []agentproto.ItemSpec) {
+		tailer.ApplyItems(specs)
+		log.Printf("[agentlink] 已应用 %d 个日志项的采集配置", len(specs))
+	})
+	defer tailer.Stop()
+	// P1-5：模式切换回调（服务端下发优先于本地配置）。
+	linkClient.SetModeHandler(func(mode string) {
+		linkClient.ApplyMode(mode)
+	})
+	if localMode != "pull" {
+		linkClient.ApplyMode("push")
+	}
+	defer linkClient.Stop()
+	log.Printf("[agentlink] 长连接通道已启动（本地模式=%s）", localMode)
 
 	// ===== Docker / K8s 模式：启动自动发现与虚拟客户端注册 =====
 	autoRegisterCtx, autoRegisterCancel := context.WithCancel(context.Background())
@@ -133,14 +199,37 @@ func main() {
 	port := cfg.StringOr("httpport", "2020")
 	handler := routers.SetupRouter(cfg)
 
+	// TLS/mTLS 配置（PRD FR-1308）：logc 作为服务端接受 logs 的回调。
+	// 启用后要求 logs 出示客户端证书；未启用保持明文 HTTP（开发模式）。
+	tlsCfg := pkgtls.LoadFromEnv()
+	if err := tlsCfg.ValidateServer(); err != nil {
+		log.Fatalf("[tls] 配置校验失败: %v", err)
+	}
+	var tlsConfig *tls.Config
+	if tlsCfg.Enabled {
+		var terr error
+		tlsConfig, terr = tlsCfg.ServerTLSConfig()
+		if terr != nil {
+			log.Fatalf("[tls] 服务端配置加载失败: %v", terr)
+		}
+		log.Printf("[tls] mTLS 已启用（最低 %s，要求并校验 logs 证书）", util.TLSVersionName(tlsConfig.MinVersion))
+	}
+
 	srv := &http.Server{
-		Addr:    ":" + port,
-		Handler: handler,
+		Addr:      ":" + port,
+		Handler:   handler,
+		TLSConfig: tlsConfig,
 	}
 
 	go gracefulShutdown(srv)
 
 	log.Printf("logc 启动成功，监听端口 %s", port)
+	if tlsConfig != nil {
+		if err := srv.ListenAndServeTLS(tlsCfg.CertFile, tlsCfg.KeyFile); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTPS服务启动失败: %v", err)
+		}
+		return
+	}
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("HTTP服务启动失败: %v", err)
 	}
@@ -220,6 +309,52 @@ func activeSourcePort() string {
 	return port
 }
 
+// agentlinkMode 返回长连接通道模式：push（默认）| pull。
+func agentlinkMode(cfg *config.Config) string {
+	mode := os.Getenv("YDSZ_AGENT_MODE")
+	if mode == "" {
+		mode = cfg.StringOr("agent_mode", "push")
+	}
+	if mode != "pull" {
+		return "push"
+	}
+	return "pull"
+}
+
+// applyAgentConfig 应用服务端下发的配置（P1-4）。
+//
+// 当前实现：采样率热更新（perf.Sampler）；其余字段记录日志待后续接入。
+func applyAgentConfig(cfg *agentproto.ConfigPush) {
+	if cfg == nil {
+		return
+	}
+	if cfg.SamplingRate > 0 && cfg.SamplingRate <= 1 {
+		sampler.SetRate(cfg.SamplingRate)
+		log.Printf("[agentlink] 采样率已热更新为 %.2f", cfg.SamplingRate)
+	}
+	if len(cfg.MaskTemplates) > 0 {
+		log.Printf("[agentlink] 脱敏模板更新: %d 条", len(cfg.MaskTemplates))
+	}
+	if len(cfg.MultilinePatterns) > 0 {
+		log.Printf("[agentlink] 多行合并规则更新: %d 条", len(cfg.MultilinePatterns))
+	}
+}
+
+// envBool 解析环境变量为布尔值（默认值兜底）。
+func envBool(key string, def bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	switch v {
+	case "1", "true", "TRUE", "yes", "YES", "on", "ON":
+		return true
+	case "0", "false", "FALSE", "no", "NO", "off", "OFF":
+		return false
+	}
+	return def
+}
+
 // gracefulShutdown 监听 SIGTERM/SIGINT，停止心跳并优雅关闭 HTTP 服务。
 func gracefulShutdown(srv *http.Server) {
 	quit := make(chan os.Signal, 1)
@@ -232,6 +367,18 @@ func gracefulShutdown(srv *http.Server) {
 
 	// 释放常驻接收端口（V2.2-10）
 	stopReceivingSources(activeSource)
+
+	// 关闭背压队列（FR-103，落盘待补传数据）
+	if spoolMgr != nil {
+		if err := spoolMgr.Close(); err != nil {
+			log.Printf("[spool] 关闭队列失败: %v", err)
+		}
+	}
+
+	// 停止资源护栏（V2.2-11）
+	if guardian != nil {
+		guardian.Stop()
+	}
 
 	register.StopGlobalHeartbeat()
 

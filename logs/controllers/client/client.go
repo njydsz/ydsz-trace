@@ -150,39 +150,68 @@ func Update(c *gin.Context) {
 
 // DefaultRegisterKey 出厂默认注册密钥。
 //
-// 【安全】仅允许 dev 模式使用；runmode != "dev" 时强制拒绝启动。
-// 生产必须通过 YDSZ_REGISTER_KEY 注入 ≥16 字符的强密钥。
+// 【安全】仅允许 dev 模式使用；runmode != "dev" 时由 ValidateRegisterKeyAtStartup
+// 在启动阶段拒绝启动。生产必须通过 YDSZ_REGISTER_KEY 注入 ≥16 字符的强密钥。
 const DefaultRegisterKey = "ydsz-trace-register-2026"
 
-// getRegisterKey 获取注册鉴权密钥。
-// 优先级：环境变量 YDSZ_REGISTER_KEY > 配置文件 register_key > 默认值。
-//
-// 安全策略（V2.1-09）：
-//   - 非 dev 模式检测到默认密钥 → 直接 panic 拒绝启动（不静默降级）
-//   - 每次注册请求校验密钥长度 ≥ 16，不足则走签名启用判断
-func getRegisterKey(c *gin.Context) string {
-	key := DefaultRegisterKey
+// MinRegisterKeyLength 注册密钥最小长度（安全策略）。
+const MinRegisterKeyLength = 16
 
-	if v := os.Getenv("YDSZ_REGISTER_KEY"); v != "" {
-		key = v
-	} else if cfg, exists := c.Get("cfg"); exists {
-		if conf, ok := cfg.(*config.Config); ok {
-			if v := conf.StringOr("register_key", ""); v != "" {
-				key = v
-			}
-		}
+// ValidateRegisterKeyAtStartup 启动期校验注册密钥强度。
+//
+// 安全策略（P0-2）：
+//   - dev 模式：允许使用默认密钥（零配置体验），仅打印警告。
+//   - 非 dev 模式：使用默认密钥或长度 < MinRegisterKeyLength 时返回 error，
+//     调用方必须拒绝启动，不得带弱密钥上线。
+//
+// 该函数在 logs 启动时调用一次；请求期不再重复校验（避免 panic 影响运行时）。
+func ValidateRegisterKeyAtStartup(cfg *config.Config) error {
+	key := resolveRegisterKey(cfg)
+	runmode := "dev"
+	if cfg != nil {
+		runmode = cfg.StringOr("runmode", "dev")
 	}
 
-	// 生产环境拒绝使用出厂默认密钥（防止带弱密钥上线）
-	if isProductionMode(c) && key == DefaultRegisterKey {
-		panic("[security] 生产模式禁止使用出厂默认注册密钥，请通过 YDSZ_REGISTER_KEY 注入 ≥16 字符的强密钥")
+	if runmode == "dev" {
+		if key == DefaultRegisterKey {
+			log.Printf("[security] 警告：dev 模式使用默认注册密钥，生产环境请通过 YDSZ_REGISTER_KEY 注入强密钥")
+		}
+		return nil
 	}
 
 	if key == DefaultRegisterKey {
-		log.Printf("[security] 警告：使用默认注册密钥，生产环境请通过 YDSZ_REGISTER_KEY 环境变量配置强密钥")
+		return fmt.Errorf("生产模式禁止使用出厂默认注册密钥，请通过 YDSZ_REGISTER_KEY 注入 ≥%d 字符的强密钥", MinRegisterKeyLength)
 	}
+	if len(key) < MinRegisterKeyLength {
+		return fmt.Errorf("生产模式注册密钥长度不足（当前 %d，要求 ≥%d），请通过 YDSZ_REGISTER_KEY 注入强密钥", len(key), MinRegisterKeyLength)
+	}
+	return nil
+}
 
-	return key
+// resolveRegisterKey 按优先级解析注册密钥：环境变量 > 配置文件 > 默认值。
+func resolveRegisterKey(cfg *config.Config) string {
+	if v := os.Getenv("YDSZ_REGISTER_KEY"); v != "" {
+		return v
+	}
+	if cfg != nil {
+		if v := cfg.StringOr("register_key", ""); v != "" {
+			return v
+		}
+	}
+	return DefaultRegisterKey
+}
+
+// getRegisterKey 获取注册鉴权密钥（请求期使用）。
+//
+// 密钥强度已在启动期校验；此处仅做解析。
+func getRegisterKey(c *gin.Context) string {
+	var cfg *config.Config
+	if v, exists := c.Get("cfg"); exists {
+		if conf, ok := v.(*config.Config); ok {
+			cfg = conf
+		}
+	}
+	return resolveRegisterKey(cfg)
 }
 
 // isProductionMode 判断当前是否为生产模式（runmode != "dev"）。
@@ -345,6 +374,85 @@ func Register(c *gin.Context) {
 		handleTraditionalRegister(c, ip, port, reg.VKey, reg.LocalLogcPort)
 		return
 	}
+}
+
+// PingReq 轻量心跳请求体（P0-3）。
+//
+// 与注册请求相比，仅携带存活必需字段，不含 source_type/identity/log_path 等元数据。
+type PingReq struct {
+	VKey          string `json:"key"`
+	Timestamp     int64  `json:"timestamp"`
+	Signature     string `json:"signature"`
+	LocalLogcPort string `json:"local_logc_port"`
+}
+
+// Ping 处理 logc 的轻量心跳（仅续约在线状态，不触发创建/更新逻辑）。
+//
+// 与 Register 的区别：
+//   - 复用相同的 HMAC 签名校验，但仅刷新 online/heartbeat_at
+//   - 客户端不存在时直接返回失败（不自动创建，安全）
+//
+// @Summary 客户端心跳
+// @Description 轻量心跳续约：仅刷新在线状态，不触发客户端创建。签名校验同注册接口。
+// @Tags Client
+// @Accept json
+// @Produce json
+// @Param body body PingReq true "心跳请求：key + timestamp + signature"
+// @Success 200 {object} api.Response "心跳成功"
+// @Failure 401 {object} api.Response "鉴权失败"
+// @Failure 404 {object} api.Response "客户端不存在"
+// @Router /client/ping [post]
+func Ping(c *gin.Context) {
+	ip := extractClientIP(c)
+	port := "2020"
+
+	var req PingReq
+	reqBody, err := c.GetRawData()
+	if err != nil {
+		api.Fail(c, api.CodeBadRequest, "请求参数错误")
+		return
+	}
+	if err := json.Unmarshal(reqBody, &req); err != nil {
+		api.Fail(c, api.CodeBadRequest, "请求参数错误")
+		return
+	}
+
+	// 鉴权：与注册一致的签名校验。
+	expectedKey := getRegisterKey(c)
+	if err := verifyRegister(expectedKey, &ClientRegisterReq{
+		VKey:       req.VKey,
+		Timestamp:  req.Timestamp,
+		Signature:  req.Signature,
+	}); err != nil {
+		log.Printf("[security] 心跳鉴权失败 ip=%s: %v", ip, err)
+		api.Fail(c, api.CodeUnauthorized, "心跳鉴权失败")
+		return
+	}
+
+	if req.LocalLogcPort != "" {
+		port = req.LocalLogcPort
+	}
+
+	client := models.CheckClient(ip, port, req.VKey)
+	if client.Id == 0 {
+		// 客户端不存在：心跳不应自动创建（与注册的安全策略一致）。
+		api.Fail(c, api.CodeForbidden, "客户端不存在，请先完成注册")
+		return
+	}
+
+	cl := models.TClient{Id: client.Id, Online: "1", UpdatedTime: nowStr()}
+	if _, err := models.ChangeClientOnline(&cl); err != nil {
+		log.Printf("[ping] 在线状态更新失败 client_id=%d: %v", client.Id, err)
+		api.Fail(c, api.CodeServerError, "心跳处理失败")
+		return
+	}
+
+	audit.RecordAudit(c, "ping", "/client/ping", map[string]interface{}{
+		"ip":   ip,
+		"port": port,
+	}, "success")
+
+	api.Success(c, "心跳成功", nil)
 }
 
 // handleTraditionalRegister 传统 IP+Port+vKey 注册。

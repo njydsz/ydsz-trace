@@ -3,18 +3,14 @@
 // 本地模型优先（ollama），云端（OpenAI/Claude/DeepSeek）按配置路由。
 // 默认本地，确保"数据不出内网"原则。
 //
-// 当前状态（V2.1-08 标注）：本包为 FR-9「根因分析 Agent」的预留 LLM 适配层。
-// Provider 实现当前为回显桩（无 HTTP 调用），需在 V2.3 接入真实推理接口，
-// 并补充超时 / 重试 / Token 预算三项硬约束（FR-908）。
-//
-// 在 V2.3 之前不应从仓库移除——它是 FR-9 的唯一实现载体。
+	// V2.3-01 状态：四类 Provider 均已接入真实 HTTP 推理接口，
+	// 并落实超时 / 重试 / Token 预算三项硬约束（FR-908）。
+	// 详见 client.go 与 providers.go。
 package aimodel
 
 import (
 	"context"
 	"errors"
-	"fmt"
-	"sync"
 )
 
 // Provider 模型后端类型。
@@ -95,18 +91,7 @@ func (p Provider) String() string {
 //   - ProviderLocal：endpoint 为必填；apiKey 忽略。
 //   - ProviderOpenAI/Claude/DeepSeek：endpoint 为 API 地址，apiKey 为认证密钥。
 func NewClient(provider Provider, endpoint, apiKey string) Client {
-	switch provider {
-	case ProviderLocal:
-		return newLocalClient(endpoint)
-	case ProviderOpenAI:
-		return &openaiClient{endpoint: endpoint, apiKey: apiKey}
-	case ProviderClaude:
-		return &claudeClient{endpoint: endpoint, apiKey: apiKey}
-	case ProviderDeepSeek:
-		return &deepseekClient{endpoint: endpoint, apiKey: apiKey}
-	default:
-		return &fallbackClient{err: ErrInvalidProvider}
-	}
+	return NewClientWithOptions(provider, endpoint, apiKey, Options{})
 }
 
 // NewFromConfig 从配置 map 创建 Client。
@@ -136,145 +121,44 @@ func parseProvider(s string) Provider {
 	}
 }
 
-// newLocalClient 创建本地模型客户端实例。
-func newLocalClient(endpoint string) *localClient {
-	return &localClient{endpoint: endpoint}
-}
-
-// --- 本地模型客户端 ---
-
-type localClient struct {
-	endpoint string
-	mu       sync.Mutex
-}
-
-// Chat 调用本地模型同步对话。
-func (c *localClient) Chat(ctx context.Context, messages []Message) (*Response, error) {
-	if c.endpoint == "" {
-		return nil, ErrMissingEndpoint
+// newLocalClient 创建本地模型客户端（真实 HTTP 实现）。
+func newLocalClient(endpoint string, opts ...Options) *localClient {
+	cfg := normalizeOptions(Options{})
+	if len(opts) > 0 {
+		cfg = normalizeOptions(opts[0])
 	}
-	// 本地模型：占位实现。
-	// 生产环境应调用 ollama / 本地推理服务（如 llama.cpp）。
-	prompt := messagesTotalLen(messages)
-	return &Response{
-		Content: fmt.Sprintf("[local] echo: %s", lastMessageContent(messages)),
-		Usage: Usage{
-			PromptTokens:  prompt / 4,
-			OutputTokens: 16,
-		},
-	}, nil
+	return &localClient{endpoint: endpoint, cfg: cfg}
 }
 
-// StreamChat 调用本地模型流式对话。
-func (c *localClient) StreamChat(ctx context.Context, messages []Message, onChunk func(string)) error {
-	if c.endpoint == "" {
-		return ErrMissingEndpoint
+// NewClientWithOptions 带选项创建客户端（V2.3-01）。
+//
+// 与 NewClient 的区别在于可注入超时/重试/Token 预算等约束（FR-908）。
+func NewClientWithOptions(provider Provider, endpoint, apiKey string, opts Options) Client {
+	cfg := normalizeOptions(opts)
+	switch provider {
+	case ProviderLocal:
+		return &localClient{endpoint: endpoint, apiKey: apiKey, cfg: cfg}
+	case ProviderOpenAI:
+		return &openaiClient{endpoint: endpoint, apiKey: apiKey, cfg: cfg}
+	case ProviderClaude:
+		return &claudeClient{endpoint: endpoint, apiKey: apiKey, cfg: cfg}
+	case ProviderDeepSeek:
+		return &deepseekClient{inner: &openaiClient{
+			endpoint: endpoint, apiKey: apiKey,
+			cfg: providerConfig{
+				timeout:         cfg.timeout,
+				maxRetries:      cfg.maxRetries,
+				maxOutputTokens: cfg.maxOutputTokens,
+				retryBaseDelay:  cfg.retryBaseDelay,
+				model:           cfg.model,
+			},
+		}}
+	default:
+		return &fallbackClient{err: ErrInvalidProvider}
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	onChunk("[local] ")
-	for _, word := range []string{"streaming", " ", "response"} {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-			onChunk(word)
-		}
-	}
-	return nil
 }
 
-// --- OpenAI 客户端 ---
-
-type openaiClient struct {
-	endpoint string
-	apiKey   string
-}
-
-func (c *openaiClient) Chat(ctx context.Context, messages []Message) (*Response, error) {
-	if c.apiKey == "" {
-		return nil, errors.New("aimodel: openai 需要 apiKey")
-	}
-	return &Response{
-		Content: fmt.Sprintf("[openai] %s", lastMessageContent(messages)),
-		Usage:   Usage{PromptTokens: 10, OutputTokens: 5},
-	}, nil
-}
-
-func (c *openaiClient) StreamChat(ctx context.Context, messages []Message, onChunk func(string)) error {
-	if c.apiKey == "" {
-		return errors.New("aimodel: openai 需要 apiKey")
-	}
-	onChunk("[openai] stream")
-	return nil
-}
-
-// --- Claude 客户端 ---
-
-type claudeClient struct {
-	endpoint string
-	apiKey   string
-}
-
-func (c *claudeClient) Chat(ctx context.Context, messages []Message) (*Response, error) {
-	if c.apiKey == "" {
-		return nil, errors.New("aimodel: claude 需要 apiKey")
-	}
-	return &Response{
-		Content: fmt.Sprintf("[claude] %s", lastMessageContent(messages)),
-		Usage:   Usage{PromptTokens: 10, OutputTokens: 5},
-	}, nil
-}
-
-func (c *claudeClient) StreamChat(ctx context.Context, messages []Message, onChunk func(string)) error {
-	if c.apiKey == "" {
-		return errors.New("aimodel: claude 需要 apiKey")
-	}
-	onChunk("[claude] stream")
-	return nil
-}
-
-// --- DeepSeek 客户端 ---
-
-type deepseekClient struct {
-	endpoint string
-	apiKey   string
-}
-
-func (c *deepseekClient) Chat(ctx context.Context, messages []Message) (*Response, error) {
-	if c.apiKey == "" {
-		return nil, errors.New("aimodel: deepseek 需要 apiKey")
-	}
-	return &Response{
-		Content: fmt.Sprintf("[deepseek] %s", lastMessageContent(messages)),
-		Usage:   Usage{PromptTokens: 10, OutputTokens: 5},
-	}, nil
-}
-
-func (c *deepseekClient) StreamChat(ctx context.Context, messages []Message, onChunk func(string)) error {
-	if c.apiKey == "" {
-		return errors.New("aimodel: deepseek 需要 apiKey")
-	}
-	onChunk("[deepseek] stream")
-	return nil
-}
-
-// --- Fallback 客户端（错误兜底） ---
-
-type fallbackClient struct {
-	err error
-}
-
-func (c *fallbackClient) Chat(ctx context.Context, messages []Message) (*Response, error) {
-	return nil, c.err
-}
-
-func (c *fallbackClient) StreamChat(ctx context.Context, messages []Message, onChunk func(string)) error {
-	return c.err
-}
-
-// --- 工具函数 ---
-
+// lastMessageContent 返回最后一条消息内容（供日志与调试使用）。
 func lastMessageContent(messages []Message) string {
 	if len(messages) == 0 {
 		return ""
@@ -282,6 +166,7 @@ func lastMessageContent(messages []Message) string {
 	return messages[len(messages)-1].Content
 }
 
+// messagesTotalLen 返回全部消息字符总数（用于粗估输入 token）。
 func messagesTotalLen(messages []Message) int {
 	n := 0
 	for _, m := range messages {

@@ -33,6 +33,8 @@ type TClient struct {
 	Identity      string `json:"identity" db:"identity"`
 	VirtualParent string `json:"virtualParent" db:"virtual_parent"`
 	Labels        string `json:"labels" db:"labels"` // JSON 字符串，存储扩展标签
+	// AgentMode 长连接通道模式（P1-5 灰度）：push / pull。空为象配置默认。
+	AgentMode      string `json:"agentMode" db:"agent_mode"`
 	CreatedBy     string `json:"createdBy" db:"created_by"`
 	CreatedTime   string `json:"createdTime" db:"created_time"`
 	UpdatedBy     string `json:"updatedBy" db:"updated_by"`
@@ -180,6 +182,7 @@ CREATE TABLE IF NOT EXISTS t_client (
     identity       TEXT    DEFAULT '',
     virtual_parent TEXT    DEFAULT '',
     labels         TEXT    DEFAULT '{}',
+    agent_mode     TEXT    DEFAULT '',
     created_by     TEXT,
     created_time   TEXT    DEFAULT (datetime('now', 'localtime')),
     updated_by     TEXT,
@@ -369,6 +372,47 @@ CREATE TABLE IF NOT EXISTS t_maintenance_window (
 );
 CREATE INDEX IF NOT EXISTS idx_maint_window_enabled ON t_maintenance_window(enabled);
 
+-- V2.3 新增表：事故简报（FR-906）
+CREATE TABLE IF NOT EXISTS t_incident_report (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    title        TEXT    NOT NULL,
+    query        TEXT    DEFAULT '',
+    started_at   TEXT    DEFAULT '',
+    duration     TEXT    DEFAULT '',
+    severity     TEXT    DEFAULT 'P3',
+    summary      TEXT    DEFAULT '',
+    root_cause   TEXT    DEFAULT '',
+    impact       TEXT    DEFAULT '',
+    timeline     TEXT    DEFAULT '[]',
+    evidence     TEXT    DEFAULT '[]',
+    actions      TEXT    DEFAULT '[]',
+    markdown     TEXT    DEFAULT '',
+    conv_id      TEXT    DEFAULT '',
+    created_by   TEXT    DEFAULT '',
+    created_time TEXT    DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_incident_severity ON t_incident_report(severity);
+CREATE INDEX IF NOT EXISTS idx_incident_time     ON t_incident_report(created_time);
+
+-- V2.3 新增表：变更事件（FR-905）
+CREATE TABLE IF NOT EXISTS t_change_event (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id     TEXT    NOT NULL UNIQUE,
+    title        TEXT    NOT NULL,
+    change_type  TEXT    DEFAULT 'other',
+    service      TEXT    DEFAULT '',
+    environment  TEXT    DEFAULT '',
+    operator     TEXT    DEFAULT '',
+    occurred_at  TEXT    DEFAULT '',
+    source       TEXT    DEFAULT 'manual',
+    detail       TEXT    DEFAULT '',
+    created_time TEXT    DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_change_occurred ON t_change_event(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_change_service  ON t_change_event(service);
+
+
+
 -- V2.1 新增表：列式段（Segment）存储结构
 CREATE TABLE IF NOT EXISTS t_log_segment (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -519,6 +563,8 @@ func InitDB(conf *SQLiteConfig) error {
 
 // tryMigrateAddColumns 尝试为已有库补充新加的列（source_type / identity / virtual_parent / labels / channel）。
 // SQLite 不支持 ALTER TABLE IF NOT EXISTS；我们捕获 "duplicate column" 错误并忽略。
+//
+// 导出版供 migration 控制器调用（字段补全幂等重入）。
 func tryMigrateAddColumns(db *sqlx.DB) error {
 	columns := []struct {
 		name    string
@@ -530,12 +576,15 @@ func tryMigrateAddColumns(db *sqlx.DB) error {
 		{"identity", "TEXT", "DEFAULT ''", "t_client"},
 		{"virtual_parent", "TEXT", "DEFAULT ''", "t_client"},
 		{"labels", "TEXT", "DEFAULT '{}'", "t_client"},
+		// P1-5：客户端长连接模式灰度字段
+		{"agent_mode", "TEXT", "DEFAULT ''", "t_client"},
 		{"channel", "TEXT", "DEFAULT 'webhook'", "t_alert_rule"},
 		// V2.1 FR-1305：成本配额字段
 		{"cost_per_1k", "REAL", "DEFAULT 0", "t_model_capability"},
 		{"quota_daily", "INTEGER", "DEFAULT 0", "t_model_capability"},
 		{"quota_used", "INTEGER", "DEFAULT 0", "t_model_capability"},
 		{"quota_reset_at", "TEXT", "DEFAULT ''", "t_model_capability"},
+		{"quota_alert_threshold", "INTEGER", "DEFAULT 80", "t_model_capability"},
 	}
 	for _, col := range columns {
 		_, err := db.Exec(fmt.Sprintf(
@@ -547,6 +596,40 @@ func tryMigrateAddColumns(db *sqlx.DB) error {
 		}
 	}
 	return nil
+}
+
+// TryMigrateAddColumns 导出版：对全局 DB 执行字段补全（幂等）。
+// 供 migration 控制器在迁移流程中调用，确保字段补全可重复执行。
+func TryMigrateAddColumns() error {
+	if DB == nil {
+		return fmt.Errorf("DB 未初始化")
+	}
+	return tryMigrateAddColumns(DB)
+}
+
+// DBFilePath 返回当前数据库文件路径。
+// 从全局 DB 的 DSN 解析（file:path?params → path）。
+func DBFilePath() string {
+	if DB == nil {
+		return ""
+	}
+	// 通过 PRAGMA database_list 获取文件路径（SQLite 原生，可靠）。
+	var path string
+	type dbList struct {
+		Seq  int    `db:"seq"`
+		Name string `db:"name"`
+		File string `db:"file"`
+	}
+	var dbs []dbList
+	if err := DB.Select(&dbs, "PRAGMA database_list"); err != nil {
+		return ""
+	}
+	for _, d := range dbs {
+		if d.Name == "main" {
+			path = d.File
+		}
+	}
+	return path
 }
 
 // contains 简易封装（strings.Contains 适配 bytes 风格字符串）。

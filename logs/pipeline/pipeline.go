@@ -200,10 +200,19 @@ func (p *Pipeline) processItem(ctx context.Context, item *models.TItem) {
 		return
 	}
 
+	p.processLines(ctx, item, lines, date)
+}
+
+// processLines 对一批日志行执行五阶段写入管线。
+//
+// 与 processItem 的区别：不读取文件，直接接收已有行参。
+// 实时上报（P1-3）与定时扫描共用同一套锁入逻辑，
+// 避免双份维护导致行为分歧。
+func (p *Pipeline) processLines(ctx context.Context, item *models.TItem, lines []string, date string) {
 	// 阶段 1b：多行合并（V2.2-07，FR-104）
 	// 把 Java 堆栈 / Python traceback / Go panic 折叠为逻辑条目后再解析，
 	// 避免同一异常被拆成几十条碎片模板，同时让模板聚类更贴近真实错误。
-	// 合并仅影响解析与统计视图，不改变磁盘上的原始日志。
+	// 合并仅影响解析与统计视图，不改动磁盘上的原始日志。
 	lines = flattenMultiLineEntries(parser.MergeMultiLine(lines))
 
 	// 阶段 2：Drain 解析
@@ -629,4 +638,38 @@ func lastTimestamp(m map[string]string) string {
 		}
 	}
 	return last
+}
+
+// IngestBatch 实时入口（P1-3）：处理 agentlink 长连接通道上报的日志批次。
+//
+// 与 processItem 的区别：行数据由 agent 上报而非本地读取，
+// 因此真正实现“日志主动上报”，减少本地扫描与 agent 端的重复读取。
+//
+// 安全校验：根据 clientID + itemID 回查日志项，校验归属关系；
+// 不匹配或不存在时拒绝上报，防止 agent 伪造任意 item。
+//
+// 行数超过 maxLines 时截断（与定时扫描的保护线一致）。
+func (p *Pipeline) IngestBatch(ctx context.Context, clientID, itemID int64, lines []string) error {
+	if len(lines) == 0 {
+		return nil
+	}
+	if len(lines) > p.maxLines {
+		lines = lines[:p.maxLines]
+	}
+
+	// 安全校验：日志项必须归属于该 agent，且状态为启用。
+	item := models.ReadItem(itemID)
+	if item.Id == 0 {
+		return fmt.Errorf("item %d not found", itemID)
+	}
+	if item.ClientId != clientID {
+		return fmt.Errorf("item %d not owned by client %d (owner=%d)", itemID, clientID, item.ClientId)
+	}
+	if item.Status != "1" {
+		return fmt.Errorf("item %d is disabled", itemID)
+	}
+
+	date := time.Now().Format("20060102")
+	p.processLines(ctx, &item, lines, date)
+	return nil
 }

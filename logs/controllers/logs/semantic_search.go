@@ -7,21 +7,142 @@
 // 不包含语义匹配；本接口提供语义级召回能力。
 //
 // 路由：POST /logs/semantic/search（本文件仅实现控制器，路由挂载由 router.go 完成）
+//
+// V2.1 FR-303：大规模向量下启用 HNSW 加速索引（100 万向量 P95 ≤ 1s）。
+// 当 t_embedding 表向量数超过 hnswIndexThreshold 时，自动构建 HNSW 内存索引，
+// 避免每次查询全表扫描。
 package logs
 
 import (
 	"context"
 	"log"
+	"math"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
 	"ydsz-trace/pkg/embedding"
+	"ydsz-trace/pkg/search"
 )
+
+// HNSW 加速层阈值：向量数超过此值时构建 HNSW 索引。
+const hnswIndexThreshold = 5000
+
+// hnswCache HNSW 索引缓存（按 targetType 分组）。
+//
+// 懒加载：首次查询时从 DB 加载向量构建索引；
+// 写入管线更新 t_embedding 后，通过 InvalidateHNSWCache 使缓存失效。
+var hnswCache = struct {
+	mu    sync.RWMutex
+	index map[string]*embedding.HNSWIndex
+	// builtAt 记录构建时间，用于监控缓存年龄
+	builtAt map[string]time.Time
+}{
+	index:   make(map[string]*embedding.HNSWIndex),
+	builtAt: make(map[string]time.Time),
+}
+
+// InvalidateHNSWCache 使 HNSW 索引缓存失效（写入管线调用）。
+//
+// 当 t_embedding 表有新向量写入时，调用此函数使缓存失效，
+// 下次查询时重新构建。
+func InvalidateHNSWCache() {
+	hnswCache.mu.Lock()
+	defer hnswCache.mu.Unlock()
+	hnswCache.index = make(map[string]*embedding.HNSWIndex)
+	hnswCache.builtAt = make(map[string]time.Time)
+	log.Printf("[semantic] HNSW 缓存已失效")
+}
+
+// getHNSWIndex 获取或构建指定 targetType 的 HNSW 索引。
+//
+// 如果缓存中不存在或已失效，则从 t_embedding 表加载向量构建索引。
+// 向量数低于阈值时返回 nil（退化为 SQL 全表扫描）。
+func getHNSWIndex(ctx context.Context, targetType string) *embedding.HNSWIndex {
+	// 快速路径：检查缓存
+	hnswCache.mu.RLock()
+	if idx, ok := hnswCache.index[targetType]; ok && idx != nil {
+		hnswCache.mu.RUnlock()
+		return idx
+	}
+	hnswCache.mu.RUnlock()
+
+	// 慢速路径：构建索引
+	hnswCache.mu.Lock()
+	defer hnswCache.mu.Unlock()
+
+	// 双重检查
+	if idx, ok := hnswCache.index[targetType]; ok && idx != nil {
+		return idx
+	}
+
+	if models.DB == nil {
+		return nil
+	}
+
+	// 统计向量数
+	tstore, err := embedding.NewTStore(models.DB.DB)
+	if err != nil {
+		return nil
+	}
+	count, err := tstore.CountT(ctx)
+	if err != nil || count < hnswIndexThreshold {
+		return nil
+	}
+
+	// 从 DB 加载所有向量
+	rows, err := models.DB.DB.QueryContext(ctx,
+		`SELECT target_id, vector_blob, vector_dim, target_type FROM t_embedding WHERE target_type = ?`,
+		targetType)
+	if err != nil {
+		log.Printf("[semantic] 加载 HNSW 向量失败: %v", err)
+		return nil
+	}
+	defer func() {
+		if cerr := rows.Close(); cerr != nil {
+			log.Printf("[semantic] 关闭 rows 失败: %v", cerr)
+		}
+	}()
+
+	idx := embedding.NewHNSWIndex()
+	for rows.Next() {
+		var targetID string
+		var blob []byte
+		var dim int
+		var tt string
+		if err := rows.Scan(&targetID, &blob, &dim, &tt); err != nil {
+			continue
+		}
+		vec, err := deserializeVector(blob, dim)
+		if err != nil {
+			continue
+		}
+		idx.Add(targetID, vec, map[string]string{"targetType": tt})
+	}
+
+	hnswCache.index[targetType] = idx
+	hnswCache.builtAt[targetType] = time.Now()
+	log.Printf("[semantic] HNSW 索引已构建 targetType=%s vectors=%d", targetType, idx.Count())
+	return idx
+}
+
+// deserializeVector 将 BLOB 反序列化为 float32 切片。
+func deserializeVector(blob []byte, dim int) ([]float32, error) {
+	if len(blob) != 4*dim {
+		return nil, strconv.ErrSyntax
+	}
+	vec := make([]float32, dim)
+	for i := 0; i < dim; i++ {
+		bits := uint32(blob[i*4]) | uint32(blob[i*4+1])<<8 | uint32(blob[i*4+2])<<16 | uint32(blob[i*4+3])<<24
+		vec[i] = math.Float32frombits(bits)
+	}
+	return vec, nil
+}
 
 // 语义检索目标类型。
 const (
@@ -157,11 +278,27 @@ func semanticSearch(c *gin.Context) {
 			degradReason = "query 向量化失败: " + err.Error()
 			searchResults = nil
 		} else {
-			// 向量检索：优先 t_embedding 表，降级 embedding_vec 表。
-			sr, serr := tstore.SearchT(ctx, queryVec, req.TopK, "", req.Type)
-			if serr != nil {
-				log.Printf("[semantic] t_embedding 检索失败，降级到 embedding_vec: %v", serr)
-				sr = nil
+			// 向量检索：优先 HNSW 加速索引（大规模），降级 SQL 全表扫描。
+			var sr []embedding.SearchResult
+			var serr error
+
+			// HNSW 加速路径（向量数 >= hnswIndexThreshold 时生效）
+			hnswIdx := getHNSWIndex(ctx, req.Type)
+			if hnswIdx != nil {
+				sr, serr = hnswIdx.Search(ctx, queryVec, req.TopK)
+				if serr != nil {
+					log.Printf("[semantic] HNSW 检索失败，降级 SQL: %v", serr)
+					sr = nil
+				}
+			}
+
+			// SQL 降级路径
+			if len(sr) == 0 {
+				sr, serr = tstore.SearchT(ctx, queryVec, req.TopK, "", req.Type)
+				if serr != nil {
+					log.Printf("[semantic] t_embedding 检索失败，降级到 embedding_vec: %v", serr)
+					sr = nil
+				}
 			}
 			if len(sr) == 0 {
 				// 降级：查询 embedding_vec 表（兼容旧数据）
@@ -176,6 +313,15 @@ func semanticSearch(c *gin.Context) {
 				}
 			}
 			searchResults = sr
+		}
+	}
+
+	// 向量路不可用时，尝试 BM25 关键词检索作为降级路径（FR-402 混合检索）。
+	if degraded {
+		bm25Results := bm25FallbackSearch(req.Query, req.Type, req.TopK)
+		if len(bm25Results) > 0 {
+			searchResults = bm25Results
+			degradReason = "向量检索不可用，已降级为 BM25 关键词检索"
 		}
 	}
 
@@ -287,3 +433,45 @@ func enrichSampleMetadata(embeddingKey string, metadata map[string]string) {
 	metadata["modelVersion"] = row.ModelVersion
 	metadata["vectorDim"] = strconv.Itoa(row.VectorDim)
 }
+
+// bm25FallbackSearch 向量路不可用时的 BM25 关键词降级检索（FR-402）。
+//
+// 从 t_log_template 加载模板文本，构建临时 BM25 索引，执行关键词检索。
+// 返回 embedding.SearchResult 格式，与向量路结果统一。
+func bm25FallbackSearch(query, targetType string, topK int) []embedding.SearchResult {
+	if models.DB == nil {
+		return nil
+	}
+
+	// 加载模板（最多 5000 条，避免内存压力）
+	templates, err := models.SearchTemplates("", 5000)
+	if err != nil || len(templates) == 0 {
+		return nil
+	}
+
+	// 构建 BM25 索引
+	bm25Idx := search.NewBM25Index()
+	for _, tmpl := range templates {
+		bm25Idx.Add(&search.Document{
+			ID:      tmpl.TemplateId,
+			Content: tmpl.TemplateText,
+		})
+	}
+
+	// 执行 BM25 检索
+	bm25Results := bm25Idx.Search(query, topK)
+
+	// 转换为 embedding.SearchResult
+	results := make([]embedding.SearchResult, 0, len(bm25Results))
+	for _, r := range bm25Results {
+		results = append(results, embedding.SearchResult{
+			Key:   r.ID,
+			Score: float32(r.BM25Score),
+			Metadata: map[string]string{
+				"searchMode": "bm25",
+			},
+		})
+	}
+	return results
+}
+

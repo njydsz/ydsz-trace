@@ -225,7 +225,7 @@ func FileInode(path string) uint64 {
 	if err != nil {
 		return 0
 	}
-	return inodeOf(info)
+	return platformInode(info)
 }
 
 // FormatOffset 将偏移格式化为可读字符串（用于日志）。

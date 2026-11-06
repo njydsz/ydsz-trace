@@ -23,6 +23,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"log"
 	"net/http"
 	"os"
@@ -32,13 +33,17 @@ import (
 	"syscall"
 	"time"
 
+	"ydsz-trace/logs/agentlink"
 	"ydsz-trace/logs/controllers/alert"
+	"ydsz-trace/logs/controllers/client"
 	"ydsz-trace/logs/controllers/task"
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/logs/pipeline"
 	"ydsz-trace/logs/routers"
+	agentproto "ydsz-trace/pkg/agentlink"
 	"ydsz-trace/pkg/config"
 	"ydsz-trace/pkg/embedding"
+	pkgtls "ydsz-trace/pkg/tls"
 	"ydsz-trace/pkg/ratelimit"
 	"ydsz-trace/pkg/session"
 	"ydsz-trace/pkg/util"
@@ -220,6 +225,11 @@ func main() {
 	// 生产模式安全前置校验：拒绝弱口令启动
 	enforceProductionSecurity(cfg)
 
+	// 注册密钥强度校验（P0-2）：生产模式拒绝默认/弱密钥启动。
+	if err := client.ValidateRegisterKeyAtStartup(cfg); err != nil {
+		log.Fatalf("[security] 拒绝启动：%v", err)
+	}
+
 	// SQLite 数据库文件路径：环境变量优先，其次配置文件。
 	sqlitePath := getEnv("YDSZ_DB_PATH", cfg.StringOr("dbpath", "./data/ydsz_trace.db"))
 
@@ -239,12 +249,15 @@ func main() {
 	}
 	defer models.DB.Close()
 
-	// 创建 V2.1 新增表（幂等）：t_user_binding / t_conversation / t_conversation_msg。
+	// 创建 V2.1 新增表（幂等）：t_user_binding / t_conversation / t_conversation_msg / t_incident_report。
 	if err := models.CreateUserBindingTable(); err != nil {
 		log.Printf("[warn] 创建 t_user_binding 表失败: %v", err)
 	}
 	if err := models.CreateConversationTable(); err != nil {
 		log.Printf("[warn] 创建 t_conversation 表失败: %v", err)
+	}
+	if err := models.CreateIncidentReportTable(); err != nil {
+		log.Printf("[warn] 创建 t_incident_report 表失败: %v", err)
 	}
 
 	// 首次启动种子：t_user 为空时使用配置账号创建 admin 用户
@@ -298,19 +311,69 @@ func main() {
 	// 构建 Gin 路由并启动 HTTP 服务。
 	port := cfg.StringOr("httpport", "2021")
 	sessionMgr, redisClient := buildSessionManager(cfg)
+
+	// 长连接通道服务端（P1-1/P1-2）：复用 HTTP 端口，WebSocket 升级接入。
+	// 仅在 YDSZ_AGENT_MODE != "pull" 时启用；默认 push 模式。
+	if agentlinkMode(cfg) != "pull" {
+		regKey := resolveRegisterKey(cfg)
+		agentSrv := agentlink.NewServer(regKey)
+		agentSrv.SetBatchHandler(func(batch *agentproto.LogBatch) {
+			// P1-3：接收日志批次，交由写入管线实时入库。
+			if len(batch.Lines) == 0 {
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := writePipeline.IngestBatch(ctx, batch.ClientID, batch.ItemID, batch.Lines); err != nil {
+				log.Printf("[agentlink] 批次入库处理失败 batchNo=%s clientId=%d itemId=%d lines=%d: %v",
+					batch.BatchNo, batch.ClientID, batch.ItemID, len(batch.Lines), err)
+				return
+			}
+			log.Printf("[agentlink] 批次已入库 batchNo=%s clientId=%d itemId=%d lines=%d",
+				batch.BatchNo, batch.ClientID, batch.ItemID, len(batch.Lines))
+		})
+		routers.SetAgentLinkServer(agentSrv)
+		stopReaper := agentSrv.StartReaper(30 * time.Second)
+		defer stopReaper()
+		log.Printf("[agentlink] 长连接通道已启用，在线连接数=%d", agentSrv.OnlineCount())
+	}
+
 	handler := routers.SetupRouter(cfg, sessionMgr)
 
 	gin.SetMode(gin.ReleaseMode)
 
+	// TLS/mTLS 配置（PRD FR-1308）：启用后要求客户端证书，未启用保持明文 HTTP。
+	tlsCfg := pkgtls.LoadFromEnv()
+	if err := tlsCfg.ValidateServer(); err != nil {
+		log.Fatalf("[tls] 配置校验失败: %v", err)
+	}
+	var tlsConfig *tls.Config
+	if tlsCfg.Enabled {
+		var terr error
+		tlsConfig, terr = tlsCfg.ServerTLSConfig()
+		if terr != nil {
+			log.Fatalf("[tls] 服务端配置加载失败: %v", terr)
+		}
+		log.Printf("[tls] mTLS 已启用（最低 %s，要求并校验客户端证书）", util.TLSVersionName(tlsConfig.MinVersion))
+	}
+
 	srv := &http.Server{
-		Addr:    ":" + port,
-		Handler: handler,
+		Addr:      ":" + port,
+		Handler:   handler,
+		TLSConfig: tlsConfig,
 	}
 
 	// 后台监听退出信号，触发优雅关闭。
 	go gracefulShutdown(srv, sessionMgr, redisClient)
 
 	log.Printf("logs 启动成功，监听端口 %s\n", port)
+	if tlsConfig != nil {
+		// TLS 模式：通过 ListenAndServeTLS 加载证书并监听。
+		if err := srv.ListenAndServeTLS(tlsCfg.CertFile, tlsCfg.KeyFile); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("HTTPS服务启动失败: %v", err)
+		}
+		return
+	}
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("HTTP服务启动失败: %v", err)
 	}
@@ -339,6 +402,33 @@ func gracefulShutdown(srv *http.Server, sessionMgr *session.Manager, redisClient
 		_ = redisClient.Close()
 	}
 	os.Exit(0)
+}
+
+// agentlinkMode 返回长连接通道模式：push（默认）| pull。
+//
+// 环境变量 YDSZ_AGENT_MODE 优先，其次配置文件 agent_mode。
+func agentlinkMode(cfg *config.Config) string {
+	mode := os.Getenv("YDSZ_AGENT_MODE")
+	if mode == "" {
+		mode = cfg.StringOr("agent_mode", "push")
+	}
+	if mode != "pull" {
+		return "push"
+	}
+	return "pull"
+}
+
+// resolveRegisterKey 解析注册密钥（与 client 包一致）。
+func resolveRegisterKey(cfg *config.Config) string {
+	if v := os.Getenv("YDSZ_REGISTER_KEY"); v != "" {
+		return v
+	}
+	if cfg != nil {
+		if v := cfg.StringOr("register_key", ""); v != "" {
+			return v
+		}
+	}
+	return client.DefaultRegisterKey
 }
 
 // buildSessionManager 根据配置创建会话管理器：检测到 redisenv / YDSZ_REDIS_ADDR 时使用 Redis，

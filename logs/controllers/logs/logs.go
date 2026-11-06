@@ -19,6 +19,7 @@ import (
 	"ydsz-trace/pkg/api"
 	"ydsz-trace/pkg/config"
 	"ydsz-trace/pkg/metrics"
+	pkgtls "ydsz-trace/pkg/tls"
 	"ydsz-trace/pkg/sanitize"
 	"ydsz-trace/pkg/util"
 
@@ -41,8 +42,21 @@ type LogsReq struct {
 	Query string `json:"query"`
 }
 
-// httpClient 共享 HTTP 客户端（带连接池，120 秒超时）。
-var httpClient = util.NewClientWithTimeout(120 * time.Second)
+// httpClient 共享 HTTP 客户端（带连接池，120 秒超时，按需启用 mTLS）。
+var httpClient = mustBuildLogcClient()
+
+// mustBuildLogcClient 构建访问 logc 的 HTTP 客户端。
+//
+// 启用 YDSZ_TLS_ENABLED=true 时使用 mTLS（logs 作为客户端向 logc 出示证书）。
+// 构建失败时回退到明文客户端并打印警告，保证服务仍可启动（开发模式）。
+func mustBuildLogcClient() *http.Client {
+	c, err := util.NewTLSClientWithTimeout(120*time.Second, true)
+	if err != nil {
+		log.Printf("[tls] logc 客户端未启用 mTLS: %v（回退明文）", err)
+		return util.NewClientWithTimeout(120 * time.Second)
+	}
+	return c
+}
 
 // errNonOK 构造非 200 状态码错误。
 func errNonOK(status int) error {
@@ -71,7 +85,11 @@ func postToLogc(server, path, key string, line int64, savePath string, regex boo
 		return err
 	}
 
-	url := "http://" + server + "/file/query"
+	scheme := "http"
+	if pkgtls.LoadFromEnv().Enabled {
+		scheme = "https"
+	}
+	url := scheme + "://" + server + "/file/query"
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return err

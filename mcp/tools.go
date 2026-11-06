@@ -47,7 +47,7 @@ func BuildTools(s *MCPServer) []MCPTool {
 				"required": []string{"item", "date"},
 			},
 			Handler: func(ctx context.Context, params map[string]interface{}) (interface{}, error) {
-				return callLogsAPI(ctx, s, http.MethodPost, "/api/v2/logs/search", params)
+				return callLogsAPI(ctx, s, http.MethodPost, "/logs/search", params)
 			},
 		},
 		{
@@ -62,7 +62,7 @@ func BuildTools(s *MCPServer) []MCPTool {
 			},
 			Handler: func(ctx context.Context, params map[string]interface{}) (interface{}, error) {
 				query := buildQuery(params, "timeRange", "itemId")
-				return callLogsAPI(ctx, s, http.MethodGet, "/api/v2/logs/dashboard/insight"+query, nil)
+				return callLogsAPI(ctx, s, http.MethodGet, "/logs/dashboard/insight"+query, nil)
 			},
 		},
 		{
@@ -86,7 +86,7 @@ func BuildTools(s *MCPServer) []MCPTool {
 					return nil, fmt.Errorf("itemId 必填且为整数")
 				}
 				query := buildQuery(params, "refTime", "refLine", "before", "after", "date")
-				path := fmt.Sprintf("/api/v2/logs/context/%d", int64(itemID))
+				path := fmt.Sprintf("/logs/context/%d", int64(itemID))
 				return callLogsAPI(ctx, s, http.MethodGet, path+query, nil)
 			},
 		},
@@ -105,7 +105,7 @@ func BuildTools(s *MCPServer) []MCPTool {
 				"required": []string{"traceId", "date", "item"},
 			},
 			Handler: func(ctx context.Context, params map[string]interface{}) (interface{}, error) {
-				return callLogsAPI(ctx, s, http.MethodPost, "/api/v2/logs/trace", params)
+				return callLogsAPI(ctx, s, http.MethodPost, "/logs/trace", params)
 			},
 		},
 		{
@@ -119,7 +119,7 @@ func BuildTools(s *MCPServer) []MCPTool {
 				"required": []string{"query"},
 			},
 			Handler: func(ctx context.Context, params map[string]interface{}) (interface{}, error) {
-				return callLogsAPI(ctx, s, http.MethodPost, "/api/v2/logs/nl2dsl/parse", params)
+				return callLogsAPI(ctx, s, http.MethodPost, "/logs/nl2dsl/parse", params)
 			},
 		},
 		{
@@ -135,9 +135,85 @@ func BuildTools(s *MCPServer) []MCPTool {
 				"required": []string{"query"},
 			},
 			Handler: func(ctx context.Context, params map[string]interface{}) (interface{}, error) {
-				return callLogsAPI(ctx, s, http.MethodPost, "/api/v2/logs/semantic/search", params)
+				return callLogsAPI(ctx, s, http.MethodPost, "/api/v2/semantic/search", params)
 			},
 		},
+		{
+			Name:        "get_anomalies",
+			Description: "查询异常检测引擎产出的事件（突增/新增/消失），返回时间、模板、类型与 score。",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"timeRange": map[string]interface{}{"type": "string", "description": "时间范围（1h/6h/24h/7d）", "default": "24h"},
+					"itemId":    map[string]interface{}{"type": "integer", "description": "日志项 ID（0 表示全部）", "default": 0},
+					"limit":     map[string]interface{}{"type": "integer", "description": "返回条数（最大 100）", "default": 20},
+				},
+			},
+			Handler: func(ctx context.Context, params map[string]interface{}) (interface{}, error) {
+				return callLogsAPI(ctx, s, http.MethodGet, "/logs/anomalies/timeline", params)
+			},
+		},
+		{
+			Name:        "list_templates",
+			Description: "列出时间窗内命中次数最高的日志模板，用于快速定位异常模式。",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"timeRange": map[string]interface{}{"type": "string", "description": "时间范围（1h/6h/24h/7d）", "default": "1h"},
+					"itemId":    map[string]interface{}{"type": "integer", "description": "日志项 ID（0 表示全部）", "default": 0},
+					"topN":      map[string]interface{}{"type": "integer", "description": "返回条数（最大 50）", "default": 10},
+				},
+			},
+			Handler: func(ctx context.Context, params map[string]interface{}) (interface{}, error) {
+				return callLogsAPI(ctx, s, http.MethodGet, "/logs/templates/search", params)
+			},
+		},
+		{
+			Name:        "diff_time_window",
+			Description: "对比两个时间窗的模板命中量，判断异常是新增还是持续存在。",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"currentWindow":  map[string]interface{}{"type": "string", "description": "当前时间窗（如 1h）", "default": "1h"},
+					"baselineWindow": map[string]interface{}{"type": "string", "description": "基线时间窗（如 24h）", "default": "24h"},
+					"topN":           map[string]interface{}{"type": "integer", "description": "返回条数（最大 50）", "default": 10},
+				},
+			},
+			Handler: func(ctx context.Context, params map[string]interface{}) (interface{}, error) {
+				return callLogsAPI(ctx, s, http.MethodGet, "/logs/templates/search", params)
+			},
+		},
+		{
+			Name:        "reason_incident",
+			Description: "根因推理：基于 ReAct 循环调用多个日志工具，输出假设/验证/结论三段式报告与证据引用。",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"query": map[string]interface{}{"type": "string", "description": "排障问题描述（必填）"},
+					"item":  map[string]interface{}{"type": "integer", "description": "日志项 ID（可选，0 表示自动选择）", "default": 0},
+				},
+				"required": []string{"query"},
+			},
+			Handler: func(ctx context.Context, params map[string]interface{}) (interface{}, error) {
+				return callLogsAPI(ctx, s, http.MethodPost, "/logs/agent/reason", params)
+			},
+		},
+	}
+}
+
+// ToolNames 返回全部工具名清单（供 MCP 能力声明与测试使用）。
+func ToolNames() []string {
+	return []string{
+		"search_logs",
+		"agg_stats",
+		"get_context",
+		"get_trace",
+		"nl2dsl_parse",
+		"semantic_search",
+		"get_anomalies",
+		"list_templates",
+		"diff_time_window",
+		"reason_incident",
 	}
 }
 

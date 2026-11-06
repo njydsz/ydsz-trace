@@ -37,8 +37,9 @@ type BackupInfo struct {
 
 // CreateBackup 创建数据库逻辑备份（SQLite dump）。
 //
-// 使用 SQLite 的 `.dump` 命令导出全部表结构与数据。
-// 备份文件命名：ydsz-trace-backup-YYYYMMDD-HHMMSS.sql
+// 使用 SQLite 的 VACUUM INTO 命令导出全部表结构与数据。
+// 备份文件命名：ydsz-trace-backup-YYYYMMDD-HHMMSS[-N].sql
+// 同一秒内多次备份时追加 -N 序号，避免文件名冲突。
 // 返回备份文件的完整路径。
 func CreateBackup(dbPath string) (string, error) {
 	if dbPath == "" {
@@ -51,9 +52,19 @@ func CreateBackup(dbPath string) (string, error) {
 		return "", fmt.Errorf("创建备份目录失败: %w", err)
 	}
 
-	// 构造备份文件路径
+	// 构造备份文件路径（同秒冲突时追加序号）。
 	timestamp := time.Now().Format(backupTimeFormat)
-	backupFile := filepath.Join(backupDir, fmt.Sprintf("%s-%s.sql", backupPrefix, timestamp))
+	baseName := fmt.Sprintf("%s-%s.sql", backupPrefix, timestamp)
+	backupFile := filepath.Join(backupDir, baseName)
+
+	// 如果同秒备份已存在，追加 -1, -2, ... 序号。
+	for i := 1; ; i++ {
+		if _, err := os.Stat(backupFile); os.IsNotExist(err) {
+			break
+		}
+		baseName = fmt.Sprintf("%s-%s-%d.sql", backupPrefix, timestamp, i)
+		backupFile = filepath.Join(backupDir, baseName)
+	}
 
 	// 使用 SQLite dump API（通过 sqlx 连接执行）
 	// 注意：这里使用 VACUUM INTO 命令，它是 SQLite 3.27+ 支持的原生备份方式

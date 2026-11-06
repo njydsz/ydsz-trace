@@ -20,6 +20,7 @@ CREATE TABLE t_client (
     identity       TEXT    DEFAULT '',         -- 虚拟客户端稳定标识（容器 ID 等）
     virtual_parent TEXT    DEFAULT '',         -- 虚拟父客户端标识（同 logc 多实例）
     labels         TEXT    DEFAULT '{}',       -- JSON 字符串，存储扩展标签
+    agent_mode     TEXT    DEFAULT '',         -- Agent 模式（pull / push）
     created_by     TEXT,                       -- 创建人
     created_time   TEXT    DEFAULT (datetime('now', 'localtime')),  -- 创建时间
     updated_by     TEXT,                       -- 更新人
@@ -179,7 +180,13 @@ CREATE TABLE t_model_capability (
     capability    TEXT    NOT NULL DEFAULT 'chat',  -- 能力类型：chat / embedding / rerank
     created_by    TEXT    DEFAULT '',
     created_time  TEXT    DEFAULT (datetime('now', 'localtime')),
-    updated_time  TEXT    DEFAULT (datetime('now', 'localtime'))
+    updated_time  TEXT    DEFAULT (datetime('now', 'localtime')),
+    -- V2.1 FR-1305：成本配额
+    cost_per_1k            REAL    DEFAULT 0,      -- 每 1k tokens 成本（元）
+    quota_daily            INTEGER DEFAULT 0,      -- 每日配额（tokens，0=不限）
+    quota_used             INTEGER DEFAULT 0,      -- 今日已用（tokens）
+    quota_reset_at         TEXT    DEFAULT '',     -- 配额重置时间
+    quota_alert_threshold  INTEGER DEFAULT 80     -- 配额告警阈值（0-100，默认 80%）
 );
 
 -- 模型能力配置表索引
@@ -329,6 +336,47 @@ CREATE TABLE t_maintenance_window (
     updated_time TEXT DEFAULT (datetime('now','localtime'))
 );
 CREATE INDEX IF NOT EXISTS idx_maint_window_enabled ON t_maintenance_window(enabled);
+
+-- V2.3 新增表：事故简报（FR-906）
+CREATE TABLE t_incident_report (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    title        TEXT    NOT NULL,
+    query        TEXT    DEFAULT '',
+    started_at   TEXT    DEFAULT '',
+    duration     TEXT    DEFAULT '',
+    severity     TEXT    DEFAULT 'P3',
+    summary      TEXT    DEFAULT '',
+    root_cause   TEXT    DEFAULT '',
+    impact       TEXT    DEFAULT '',
+    timeline     TEXT    DEFAULT '[]',
+    evidence     TEXT    DEFAULT '[]',
+    actions      TEXT    DEFAULT '[]',
+    markdown     TEXT    DEFAULT '',
+    conv_id      TEXT    DEFAULT '',
+    created_by   TEXT    DEFAULT '',
+    created_time TEXT    DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_incident_severity ON t_incident_report(severity);
+CREATE INDEX IF NOT EXISTS idx_incident_time     ON t_incident_report(created_time);
+
+-- V2.3 新增表：变更事件（FR-905）
+CREATE TABLE t_change_event (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id     TEXT    NOT NULL UNIQUE,
+    title        TEXT    NOT NULL,
+    change_type  TEXT    DEFAULT 'other',
+    service      TEXT    DEFAULT '',
+    environment  TEXT    DEFAULT '',
+    operator     TEXT    DEFAULT '',
+    occurred_at  TEXT    DEFAULT '',
+    source       TEXT    DEFAULT 'manual',
+    detail       TEXT    DEFAULT '',
+    created_time TEXT    DEFAULT (datetime('now','localtime'))
+);
+CREATE INDEX IF NOT EXISTS idx_change_occurred ON t_change_event(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_change_service  ON t_change_event(service);
+
+
 
 -- ==================== 审计日志表 ====================
 DROP TABLE IF EXISTS t_audit_log;

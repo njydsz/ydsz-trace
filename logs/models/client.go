@@ -1,6 +1,7 @@
 package models
 
 import (
+	"fmt"
 	"log"
 	"time"
 )
@@ -260,4 +261,20 @@ func QueryPageClient(pageNum int, pageSize int) (page Page) {
 	}
 	page = PageUtil(totalCount, pageNum, pageSize, clients)
 	return page
+}
+
+// UpdateClientAgentMode 更新客户端的长连接模式（P1-5 灰度）。
+//
+// mode 取值为 "push" / "pull"，持久化在 t_client.agent_mode。
+func UpdateClientAgentMode(id int64, mode string) error {
+	if mode != "push" && mode != "pull" {
+		return fmt.Errorf("非法模式: %s", mode)
+	}
+	_, err := DB.Exec(`UPDATE t_client SET agent_mode = ?, updated_time = ? WHERE id = ?`,
+		mode, nowStrr(), id)
+	if err != nil {
+		log.Printf("update client agent_mode err: %v", err)
+		return err
+	}
+	return nil
 }

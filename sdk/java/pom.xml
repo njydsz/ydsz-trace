@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.njydsz</groupId>
+    <artifactId>ydsz-trace-sdk</artifactId>
+    <version>2.4.0</version>
+    <packaging>jar</packaging>
+
+    <name>ydsz-trace-sdk</name>
+    <description>云顶追踪 HTTP API Java 客户端</description>
+
+    <properties>
+        <maven.compiler.source>8</maven.compiler.source>
+        <maven.compiler.target>8</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    </properties>
+
+    <!--
+      零外部依赖：仅使用 JDK 自带 java.net.http 与内置 JSON 解析器，
+      保证内网离线环境可直接构建（V2.4-02 设计约束）。
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>junit</groupId>
+            <artifactId>junit</artifactId>
+            <version>4.13.2</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <!-- 构建插件按需启用：内网离线环境下 source-plugin 可能不可用 -->
+</project>

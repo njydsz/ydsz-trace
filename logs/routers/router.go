@@ -25,7 +25,7 @@ import (
 	"ydsz-trace/logs/controllers/logs"
 	"ydsz-trace/logs/controllers/migration"
 	"ydsz-trace/logs/controllers/system"
-	accesscontrol "ydsz-trace/logs/middleware"
+	logsmiddleware "ydsz-trace/logs/middleware"
 	"ydsz-trace/pkg/api"
 	pkgauth "ydsz-trace/pkg/auth"
 	"ydsz-trace/pkg/config"
@@ -51,6 +51,8 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 
 	// TraceId 注入（PRD FR-1405）：为每个请求生成/透传 traceId。
 	r.Use(middleware.TraceID())
+	// V2.3-09 链路追踪传播：识别 W3C/B3/SkyWalking 头并注入追踪载体
+	r.Use(logsmiddleware.TraceMiddleware())
 
 	// 配置注入：下游 handler 通过 c.MustGet("cfg") 获取配置。
 	r.Use(func(c *gin.Context) {
@@ -89,8 +91,20 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	// 控制台（SPA 入口，由 Vite 构建的 logv/dist 提供）
 	r.GET("/admin/console", admin.Console)
 
-	// logc 代理注册接口（代理调用，无 session，需放行）
+	// logc 代理注册/心跳接口（代理调用，无 session，需放行）
 	r.POST("/client/register", client.Register)
+	r.POST("/client/ping", client.Ping)
+
+	// logc 长连接通道（P1：WebSocket 升级，代理调用，需放行）
+	// 由注入的 AgentLinkServer 处理；nil 时返回 501。
+	r.GET("/agent/link", func(c *gin.Context) {
+		srv := GetAgentLinkServer()
+		if srv == nil {
+			api.Fail(c, api.CodeServerError, "长连接通道未启用")
+			return
+		}
+		srv.ServeWS(c.Writer, c.Request)
+	})
 
 	// 鉴权分组：client / item / logs 需要登录 + 按角色分读写
 	// viewer：只读查询（可浏览资源与搜索日志）
@@ -105,15 +119,15 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 
 	// 行级 RBAC 中间件（V2.1 FR-1302）：对非 admin 用户注入可访问资源 ID 列表。
 	// 必须在 authBlockMiddleware 之后执行（需要 session 中的 username）。
-	r.Use(accesscontrol.AccessControlMiddleware())
+	r.Use(logsmiddleware.AccessControlMiddleware())
 
 	// ━━ viewer 级别（只读）━━
 	// 行级 RBAC（V2.1-04）：对携带 ?id= 的单资源查询做访问校验。
 	// admin 由中间件跳过（ItemIDsFromContext 返回 false），直接放行。
-	r.GET("/client/query", accesscontrol.FilterClientHandler(client.Query))
+	r.GET("/client/query", logsmiddleware.FilterClientHandler(client.Query))
 	r.GET("/client/queryAll", client.QueryAll)
 	r.GET("/client/queryPage", client.QueryPage)
-	r.GET("/item/query", accesscontrol.FilterItemHandler(item.Query))
+	r.GET("/item/query", logsmiddleware.FilterItemHandler(item.Query))
 	r.GET("/item/queryAll", item.QueryAll)
 	r.GET("/item/queryPage", item.QueryPage)
 	r.GET("/logs/queryClients", logs.QueryClient)
@@ -122,7 +136,7 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	r.GET("/logs/tasks/:taskNo/progress", logs.QueryTaskProgress)
 	r.GET("/logs/tasks", logs.ListTasks)
 	// /logs/context/:itemId — path 参数形式的行级校验
-	r.GET("/logs/context/:itemId", accesscontrol.FilterItemHandler(logs.Context))
+	r.GET("/logs/context/:itemId", logsmiddleware.FilterItemHandler(logs.Context))
 	r.GET("/logs/dashboard/insight", logs.DashboardInsightHandler)
 	r.GET("/logs/alerts/rules", alert.ListRules)
 	r.GET("/logs/alerts/rules/:id", alert.GetRule)
@@ -146,6 +160,11 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	r.POST("/client/delete", pkgauth.RequireOperator(), client.Delete)
 	r.POST("/client/update", pkgauth.RequireOperator(), client.Update)
 	r.POST("/client/changeStatus", pkgauth.RequireOperator(), client.ChangeClientStatus)
+	// 配置热下发（P1-4）：单客户端 / 广播。
+	r.POST("/agent/config/push", pkgauth.RequireOperator(), PushConfigHandler)
+	r.POST("/agent/config/broadcast", pkgauth.RequireOperator(), BroadcastConfigHandler)
+	r.POST("/agent/client/:id/mode", pkgauth.RequireOperator(), SetClientModeHandler)
+	r.GET("/agent/client/:id/mode", GetClientModeHandler)
 	r.POST("/item/add", pkgauth.RequireOperator(), item.Add)
 	r.POST("/item/delete", pkgauth.RequireOperator(), item.Delete)
 	r.POST("/item/update", pkgauth.RequireOperator(), item.Update)
@@ -161,6 +180,20 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	// 根因分析 Agent（FR-901~908）
 	r.POST("/logs/agent/reason", pkgauth.RequireOperator(), logs.AgentReasonHandler)
 	r.GET("/logs/agent/tools", pkgauth.RequireOperator(), logs.AgentToolsHandler)
+	// V2.3-03 工具成功率统计与调用明细
+	r.GET("/logs/agent/tools/stats", pkgauth.RequireOperator(), logs.AgentToolStatsHandler)
+	r.GET("/logs/agent/calls/recent", pkgauth.RequireOperator(), logs.AgentRecentCallsHandler)
+	// V2.3-07 事故简报生成与导出
+	r.POST("/logs/agent/report", pkgauth.RequireOperator(), logs.GenerateReportHandler)
+	r.GET("/logs/agent/report/export", pkgauth.RequireOperator(), logs.ExportReportHandler)
+	// V2.3-08 纠正回流案例库
+	r.POST("/logs/cases/feedback", pkgauth.RequireOperator(), logs.SubmitCaseFeedback)
+	r.GET("/logs/cases", pkgauth.RequireOperator(), logs.ListCasesHandler)
+	r.GET("/logs/cases/search", pkgauth.RequireOperator(), logs.SearchCasesHandler)
+	// V2.3-10 变更事件登记与关联
+	r.POST("/logs/changes", pkgauth.RequireOperator(), logs.CreateChangeEventHandler)
+	r.GET("/logs/changes", pkgauth.RequireOperator(), logs.ListChangesHandler)
+	r.GET("/logs/changes/correlate", pkgauth.RequireOperator(), logs.CorrelateChangesHandler)
 	// AI 诊断会话管理（FR-901）
 	r.POST("/logs/conversation/create", pkgauth.RequireOperator(), logs.ConvCreate)
 	r.GET("/logs/conversation/list", pkgauth.RequireOperator(), logs.ConvList)
@@ -170,8 +203,6 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	r.PUT("/logs/conversation/:convId/title", pkgauth.RequireOperator(), logs.ConvUpdateTitle)
 	// 案例库管理（FR-907）
 	r.POST("/logs/cases/save", pkgauth.RequireOperator(), logs.CaseSaveHandler)
-	r.GET("/logs/cases/search", pkgauth.RequireOperator(), logs.CaseSearchHandler)
-	r.GET("/logs/cases/list", pkgauth.RequireOperator(), logs.CaseListHandler)
 	// 模型路由策略（FR-1304）
 	r.GET("/logs/model-router/:capability", pkgauth.RequireOperator(), logs.ModelRouterResolveHandler)
 	// 成本配额管理（FR-1305）
@@ -220,9 +251,16 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 		adm.GET("/stats/baseline", admin.StatsBaseline)
 adm.GET("/ai/status", admin.AIStatusHandler)
 
-		// 迁移工具：v1 -> v2 schema 就绪确认（仅 admin）
+		// 迁移工具：v1 -> v2 元数据迁移（FR-307，仅 admin）
+		// run: 字段补全 + 自动备份 + 迁移确认
+		// status: 各表行数 / schema 版本 / 备份列表
+		// backups: 备份文件列表
+		// restore: 从备份一键回滚
 		adm.POST("/migration/run", migration.Run)
 		adm.GET("/migration/status", migration.StatusHandler)
+		adm.GET("/migration/backups", migration.ListBackupsHandler)
+		adm.POST("/migration/restore", migration.RestoreHandler)
+		adm.POST("/migration/rollback", migration.RollbackHandler)
 
 		// 备份与恢复（仅 admin，FR-1307）
 		adm.POST("/backup/create", logs.BackupCreateHandler)
@@ -297,8 +335,10 @@ var publicPaths = map[string]bool{
 	"/metrics":        true,
 	"/admin/login":    true,
 	"/admin/exit":     true,
-	"/admin/console":  true,
+	"/admin/console":   true,
 	"/client/register": true,
+	"/client/ping":     true,
+	"/agent/link":     true,
 }
 
 // authBlockMiddleware 对非公开 API 路径统一应用 filterAuth + csrfProtection。

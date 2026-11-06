@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"ydsz-trace/pkg/config"
+	pkgtls "ydsz-trace/pkg/tls"
 	"ydsz-trace/pkg/util"
 
 	"github.com/gin-gonic/gin"
@@ -62,11 +63,13 @@ func GetVKey(cfg *config.Config) string {
 	return cfg.StringOr("key", "123456")
 }
 
+// DefaultRegisterKey 出厂默认注册密钥（仅 dev 模式允许使用）。
+const DefaultRegisterKey = "ydsz-trace-register-2026"
+
 // getRegisterKey 获取注册鉴权密钥，优先级：环境变量 YDSZ_REGISTER_KEY > 配置文件 register_key > 默认值。
 //
-// 【安全】默认值 "ydsz-trace-register-2026" 仅适用于开发环境。
-// 生产环境必须通过 YDSZ_REGISTER_KEY 环境变量注入强密钥，
-// 否则启动时将打印安全警告日志。
+// 【安全】默认值仅适用于开发环境。生产环境必须通过 YDSZ_REGISTER_KEY 注入强密钥；
+// 检测到默认密钥时打印警告（不阻断，便于开发）。
 func getRegisterKey(cfg *config.Config) string {
 	if v := os.Getenv("YDSZ_REGISTER_KEY"); v != "" {
 		return v
@@ -77,7 +80,22 @@ func getRegisterKey(cfg *config.Config) string {
 		}
 	}
 	log.Printf("[security] 警告：使用默认注册密钥，生产环境请通过 YDSZ_REGISTER_KEY 环境变量配置强密钥")
-	return "ydsz-trace-register-2026"
+	return DefaultRegisterKey
+}
+
+// schemeForServer 按 TLS 配置返回请求协议前缀。
+//
+// 启用 YDSZ_TLS_ENABLED=true 时使用 https，否则保持 http（开发模式）。
+func schemeForServer() string {
+	if pkgtls.LoadFromEnv().Enabled {
+		return "https"
+	}
+	return "http"
+}
+
+// newRegisterClient 构建注册/心跳使用的 HTTP 客户端（按需启用 mTLS）。
+func newRegisterClient() (*http.Client, error) {
+	return util.NewTLSClient(false)
 }
 
 // computeHMAC 计算时间戳签名字符串。
@@ -88,6 +106,77 @@ func computeHMAC(secret, vkey string, timestamp int64) string {
 	mac := hmac.New(sha1.New, []byte(secret))
 	mac.Write([]byte(tsStr + "." + vkey))
 	return hex.EncodeToString(mac.Sum(nil))
+}
+
+// PingRequest 轻量心跳请求体。
+//
+// 仅携带存活必需字段（vkey + timestamp + signature），不含 source_type 等注册元数据，
+// 相较完整注册请求可显著降低带宽（P0-3）。
+type PingRequest struct {
+	VKey       string `json:"key"`
+	Timestamp  int64  `json:"timestamp"`
+	Signature  string `json:"signature"`
+	LocalLogcPort string `json:"local_logc_port,omitempty"`
+}
+
+// Ping 向 logs 服务端发送一次轻量心跳（仅续约在线状态）。
+//
+// 与 RegisterLocalIp 的区别：
+//   - 不触发客户端创建/更新逻辑，仅刷新 heartbeat_at 与 online 状态
+//   - 请求体更小（无 source_type 等字段）
+//   - 失败时返回 error，由 HeartbeatManager 驱动退避
+//
+// 签名算法与注册一致：HMAC-SHA1(regKey, timestamp + "." + vKey)。
+func Ping(server, vKey, regKey, localLogcPort string) error {
+	if server == "" {
+		return fmt.Errorf("server 地址为空")
+	}
+	if regKey == "" {
+		regKey = getRegisterKey(nil)
+	}
+
+	timestamp := time.Now().Unix()
+	signature := computeHMAC(regKey, vKey, timestamp)
+
+	body, err := json.Marshal(PingRequest{
+		VKey:          vKey,
+		Timestamp:     timestamp,
+		Signature:     signature,
+		LocalLogcPort: localLogcPort,
+	})
+	if err != nil {
+		return fmt.Errorf("marshal ping body: %w", err)
+	}
+
+	url := schemeForServer() + "://" + server + "/client/ping"
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("new ping request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client, err := newRegisterClient()
+	if err != nil {
+		return fmt.Errorf("build ping client: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("send ping request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%w: HTTP %d", errRegisterFailed, resp.StatusCode)
+	}
+
+	var result Resp
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("decode ping response: %w", err)
+	}
+	if result.Code != 0 {
+		return fmt.Errorf("%w: code=%d msg=%s", errRegisterFailed, result.Code, result.Msg)
+	}
+	return nil
 }
 
 // RegisterLocalIp 向 logs 服务端发起一次自注册请求（传统模式）。
@@ -127,14 +216,17 @@ func RegisterLocalIp(server string, vKey string, regKey string) (time.Duration, 
 		return 0, fmt.Errorf("marshal register body: %w", err)
 	}
 
-	url := "http://" + server + "/client/register"
+	url := schemeForServer() + "://" + server + "/client/register"
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return 0, fmt.Errorf("new register request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := util.NewClientWithTimeout(10 * time.Second)
+	client, err := newRegisterClient()
+	if err != nil {
+		return 0, fmt.Errorf("build register client: %w", err)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, fmt.Errorf("send register request: %w", err)
@@ -207,14 +299,17 @@ func sendRegister(server string, body map[string]interface{}) error {
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
-	url := "http://" + server + "/client/register"
+	url := schemeForServer() + "://" + server + "/client/register"
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("new request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	client := util.NewClientWithTimeout(10 * time.Second)
+	client, err := newRegisterClient()
+	if err != nil {
+		return fmt.Errorf("build register client: %w", err)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("do request: %w", err)
