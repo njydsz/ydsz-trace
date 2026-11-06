@@ -13,6 +13,7 @@ import (
 
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
+	"ydsz-trace/pkg/session"
 
 	"github.com/gin-gonic/gin"
 )
@@ -69,7 +70,7 @@ func ConvCreate(c *gin.Context) {
 	// 从 session 获取 username（优先）或请求体
 	username := req.Username
 	if username == "" {
-		username = c.GetString("username")
+		username = session.GetString(c, "username")
 	}
 
 	conv := &models.TConversation{
@@ -109,7 +110,7 @@ func ConvCreate(c *gin.Context) {
 // @Failure 500 {object} api.Response "查询失败"
 // @Router /logs/conversation/list [get]
 func ConvList(c *gin.Context) {
-	username := c.GetString("username")
+	username := session.GetString(c, "username")
 	if username == "" {
 		api.Fail(c, api.CodeUnauthorized, "未登录")
 		return

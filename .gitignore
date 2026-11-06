@@ -38,3 +38,4 @@ logs/*.log
 coverage/
 data/
 __pycache__/
+*.bin

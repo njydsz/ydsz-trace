@@ -382,6 +382,5 @@ func authBlockMiddleware(c *gin.Context) {
 		c.Abort()
 		return
 	}
-
 	c.Next()
 }

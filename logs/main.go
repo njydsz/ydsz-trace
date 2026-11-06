@@ -437,7 +437,12 @@ func buildSessionManager(cfg *config.Config) (*session.Manager, *redis.Client) {
 	addr := getEnv("YDSZ_REDIS_ADDR", cfg.StringOr("redisaddr", ""))
 	if addr == "" {
 		log.Println("[session] 使用进程内存后端（单副本模式）")
-		return session.NewManager(), nil
+		mgr := session.NewManager()
+		if cfg.StringOr("runmode", "dev") == "dev" {
+			mgr.SetInsecureDevMode()
+			log.Println("[session] dev 模式：已关闭 Cookie Secure 属性")
+		}
+		return mgr, nil
 	}
 
 	password := getEnv("YDSZ_REDIS_PASSWORD", cfg.StringOr("redispwd", ""))
@@ -455,7 +460,12 @@ func buildSessionManager(cfg *config.Config) (*session.Manager, *redis.Client) {
 	if err := client.Ping(ctx).Err(); err != nil {
 		log.Printf("[session] Redis 连接失败 (%v)，回落到内存后端", err)
 		client.Close()
-		return session.NewManager(), nil
+		mgr := session.NewManager()
+		if cfg.StringOr("runmode", "dev") == "dev" {
+			mgr.SetInsecureDevMode()
+			log.Println("[session] dev 模式：已关闭 Cookie Secure 属性")
+		}
+		return mgr, nil
 	}
 
 	log.Printf("[session] 使用 Redis 后端（addr=%s, db=%d）", addr, db)

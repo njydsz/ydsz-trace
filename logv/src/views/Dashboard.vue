@@ -1,30 +1,21 @@
 <template>
   <div class="dashboard">
-    <!-- 分时段欢迎问候条 -->
+    <!-- 分时段欢迎问候条（含平台标语） -->
     <div class="greeting-banner flex items-center gap-3 rounded-xl px-4 py-3 mb-4" data-testid="dashboard-greeting">
       <el-icon :size="20" class="greeting-icon">
         <component :is="greetingIcon" />
       </el-icon>
-      <span class="greeting-text" data-testid="dashboard-greeting-text">{{ greeting }}！欢迎回来，祝您工作顺利</span>
+      <div class="greeting-main min-w-0">
+        <span class="greeting-text" data-testid="dashboard-greeting-text">{{ greeting }}！欢迎回来，祝您工作顺利</span>
+        <span class="greeting-slogan" data-testid="dashboard-welcome-desc">AI 驱动的分布式日志排障定位平台 — 让日志分析更智能、更高效</span>
+      </div>
+      <span class="greeting-brand" data-testid="dashboard-welcome-title">Ydsz Trace</span>
       <span class="greeting-time ml-auto">{{ new Date().toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', month: 'long', day: 'numeric', weekday: 'long' }) }}</span>
     </div>
 
     <!-- AI 四层智能引擎状态 -->
     <div class="mb-6">
       <AIStatusPanel />
-    </div>
-
-    <!-- 欢迎横幅 -->
-    <div class="welcome-banner rounded-2xl p-6 mb-6">
-      <div class="flex items-center justify-between">
-        <div>
-          <h1 class="welcome-title" data-testid="dashboard-welcome-title">欢迎使用 Ydsz Trace</h1>
-          <p class="welcome-desc mt-1" data-testid="dashboard-welcome-desc">AI 驱动的分布式日志排障定位平台 — 让日志分析更智能、更高效</p>
-        </div>
-        <div class="welcome-icon hidden sm:flex">
-          <el-icon :size="48"><DataAnalysis /></el-icon>
-        </div>
-      </div>
     </div>
 
     <!-- 洞察看板（模板趋势 / 异常事件时间线 / 服务健康度总览） -->
@@ -129,7 +120,7 @@
 import { useRouter } from 'vue-router'
 import {
   Search, Share, Bell,
-  ChatLineRound, Lightning, InfoFilled, DataAnalysis, Position,
+  ChatLineRound, Lightning, InfoFilled, Position,
 } from '@element-plus/icons-vue'
 import DashboardInsight from '@/components/DashboardInsight.vue'
 import SkeletonLoader from '@/components/SkeletonLoader.vue'
@@ -175,49 +166,37 @@ function onInsightLoaded() {
   color: #2563eb;
   flex-shrink: 0;
 }
+.greeting-main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
 .greeting-text {
   font-size: 14px;
   font-weight: 500;
   color: #1e40af;
+  line-height: 1.2;
+}
+.greeting-slogan {
+  font-size: 12px;
+  color: #3b82f6;
+  line-height: 1.3;
+}
+.greeting-brand {
+  font-size: 12px;
+  font-weight: 600;
+  color: #1e40af;
+  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  padding: 3px 10px;
+  white-space: nowrap;
 }
 .greeting-time {
   font-size: 12px;
   color: #6b7280;
   white-space: nowrap;
-}
-
-/* ===== 欢迎横幅 ===== */
-.welcome-banner {
-  background: linear-gradient(135deg, var(--brand-700) 0%, var(--brand-600) 50%, var(--brand-500) 100%);
-  color: white;
-  position: relative;
-  overflow: hidden;
-}
-.welcome-banner::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: radial-gradient(circle at 80% 50%, rgba(255, 255, 255, 0.08) 0%, transparent 60%);
-  pointer-events: none;
-}
-.welcome-title {
-  font-size: 20px;
-  font-weight: 700;
-  margin: 0;
-}
-.welcome-desc {
-  font-size: 13.5px;
-  opacity: 0.85;
-  margin: 0;
-}
-.welcome-icon {
-  opacity: 0.5;
-  background: rgba(255, 255, 255, 0.1);
-  width: 72px;
-  height: 72px;
-  border-radius: 20px;
-  align-items: center;
-  justify-content: center;
 }
 
 /* ===== 快捷操作 ===== */

@@ -12,6 +12,7 @@ import (
 
 	models "ydsz-trace/logs/models"
 	"ydsz-trace/pkg/api"
+	"ydsz-trace/pkg/session"
 
 	"github.com/gin-gonic/gin"
 )
@@ -57,7 +58,7 @@ func CaseSaveHandler(c *gin.Context) {
 	}
 	createdBy := req.CreatedBy
 	if createdBy == "" {
-		createdBy = c.GetString("username")
+		createdBy = session.GetString(c, "username")
 	}
 
 	entry := models.CaseEntry{

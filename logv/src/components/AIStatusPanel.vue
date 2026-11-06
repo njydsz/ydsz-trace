@@ -15,44 +15,50 @@
       <el-icon class="animate-spin text-brand-500"><Loading /></el-icon>
     </div>
 
-    <div v-else class="space-y-2">
+    <div v-else class="grid grid-cols-2 xl:grid-cols-4 gap-3">
       <div
         v-for="layer in layers"
         :key="layer.layer"
-        class="layer-row flex items-center justify-between p-2 rounded-lg transition-colors hover:bg-muted-bg"
+        class="layer-card flex flex-col gap-2 p-3 rounded-xl border border-transparent transition-colors hover:bg-muted-bg hover:border-border-card"
       >
-        <div class="flex items-center gap-3">
-          <span
-            class="status-dot w-2 h-2 rounded-full"
-            :class="{
-              'bg-green-400': layer.status === 'active',
-              'bg-yellow-400': layer.status === 'degraded',
-              'bg-gray-400': layer.status === 'inactive'
-            }"
-          />
-          <div>
-            <span class="text-sm font-medium text-primary">{{ layer.name }}</span>
-            <p class="text-xs text-muted leading-tight mt-0.5">{{ layer.description }}</p>
-            <div v-if="layer.algorithms && layer.algorithms.length" class="flex flex-wrap gap-1 mt-1">
-              <span
-                v-for="alg in layer.algorithms"
-                :key="alg"
-                class="text-[10px] px-1.5 py-0.5 rounded bg-muted-bg text-muted"
-              >{{ alg }}</span>
-            </div>
+        <!-- 层名 + 状态 -->
+        <div class="flex items-start justify-between gap-2">
+          <div class="flex items-center gap-2 min-w-0">
+            <span
+              class="status-dot w-2 h-2 rounded-full flex-shrink-0 mt-1"
+              :class="{
+                'bg-green-400': layer.status === 'active',
+                'bg-yellow-400': layer.status === 'degraded',
+                'bg-gray-400': layer.status === 'inactive'
+              }"
+            />
+            <span class="text-sm font-medium text-primary truncate">{{ layer.name }}</span>
           </div>
-        </div>
-        <div class="text-right">
           <el-tag
             size="small"
             :type="layer.status === 'active' ? 'success' : layer.status === 'degraded' ? 'warning' : 'info'"
+            class="flex-shrink-0"
           >
             {{ layer.status === 'active' ? '运行中' : layer.status === 'degraded' ? '降级' : '未激活' }}
           </el-tag>
-          <div v-if="layer.model" class="text-xs text-muted mt-1">{{ layer.model }}</div>
-          <div v-if="layer.callCount24H > 0" class="text-xs text-muted mt-0.5">
-            {{ layer.callCount24H }} 次
-          </div>
+        </div>
+
+        <!-- 描述 -->
+        <p class="text-xs text-muted leading-snug line-clamp-2 min-h-[2rem]">{{ layer.description }}</p>
+
+        <!-- 算法标签 -->
+        <div v-if="layer.algorithms && layer.algorithms.length" class="flex flex-wrap gap-1">
+          <span
+            v-for="alg in layer.algorithms"
+            :key="alg"
+            class="text-[10px] px-1.5 py-0.5 rounded bg-muted-bg text-muted"
+          >{{ alg }}</span>
+        </div>
+
+        <!-- 底部：模型 + 调用量 -->
+        <div class="mt-auto pt-2 border-t border-border-card/60 flex items-center justify-between text-xs text-muted">
+          <span class="truncate">{{ layer.model || '—' }}</span>
+          <span class="flex-shrink-0 ml-2">{{ layer.callCount24H ?? 0 }} 次/24h</span>
         </div>
       </div>
     </div>
@@ -107,7 +113,7 @@ onMounted(async () => {
   border-radius: 12px;
   padding: 16px;
 }
-.layer-row {
-  border: 1px solid transparent;
+.layer-card {
+  background: var(--bg-card-muted, rgba(0, 0, 0, 0.02));
 }
 </style>
