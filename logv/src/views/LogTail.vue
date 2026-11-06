@@ -80,14 +80,23 @@
         </div>
       </template>
       <div class="log-viewer bg-gray-900 rounded p-3 h-[500px] overflow-hidden font-mono text-sm">
-        <RecycleScroller
+        <!-- V2.4-08 虚拟滚动：改用 DynamicScroller 支持可变行高。
+             原因：日志开启 pre-wrap 后行高不再固定，固定的 item-size
+             会导致滚动位置错乱与白屏。DynamicScroller 会实测每行高度。 -->
+        <DynamicScroller
           ref="scrollerRef"
           class="log-scroller"
           :items="displayLines"
-          :item-size="28"
+          :min-item-size="28"
           key-field="__lineKey"
-          v-slot="{ item, index }"
+          v-slot="{ item, index, active }"
         >
+          <DynamicScrollerItem
+            :item="item"
+            :active="active"
+            :data-index="index"
+            :size-dependencies="[item.content, isMultiNode]"
+          >
           <div
             class="log-line hover:bg-gray-800 group relative"
             :class="getLineClass(item)"
@@ -106,7 +115,8 @@
               @click.stop="handleCopy(item)"
             />
           </div>
-        </RecycleScroller>
+          </DynamicScrollerItem>
+        </DynamicScroller>
         <div v-if="displayLines.length === 0" class="text-gray-500 text-center py-8">
           点击"开始追踪"查看实时日志
         </div>
@@ -120,7 +130,7 @@ import { ref, reactive, shallowRef, computed, onMounted, onUnmounted, nextTick }
 import { useRoute } from 'vue-router'
 import { VideoPlay, VideoPause, Delete, CopyDocument, Check } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import { RecycleScroller } from 'vue-virtual-scroller'
+import { DynamicScroller, DynamicScrollerItem } from 'vue-virtual-scroller'
 import 'vue-virtual-scroller/dist/vue-virtual-scroller.css'
 import { queryLogClients, queryItemsByClient } from '@/api/logs'
 import { createSSE } from '@/api/sse'
@@ -402,8 +412,10 @@ onUnmounted(() => {
 }
 .log-line {
   display: flex;
-  align-items: center;
-  height: 28px;
+  align-items: flex-start;
+  /* V2.4-08：去掉固定 height，改由 DynamicScroller 实测行高。
+     保留 min-height 作为 min-item-size 的对应值。 */
+  min-height: 28px;
   padding: 0 4px;
   white-space: pre-wrap;
   word-break: break-all;

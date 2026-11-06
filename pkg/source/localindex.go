@@ -27,7 +27,6 @@ import (
 	"hash/fnv"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -310,7 +309,7 @@ func extractIndexTokens(line string) []string {
 
 	for _, r := range line {
 		isWord := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-			(r >= '0' && r <= '9') || r == '_'
+			(r >= '0' && r <= '9') || r == '_' || r == '-'
 		if isWord {
 			current.WriteRune(r)
 			continue
@@ -393,7 +392,8 @@ func ExtractQueryTokens(key string) []string {
 	}
 	// 按空白与常见分隔符切分
 	fields := strings.FieldsFunc(key, func(r rune) bool {
-		return r == ' ' || r == '\t' || r == ',' || r == ';' || r == '|' || r == '(' || r == ')'
+		return r == ' ' || r == '\t' || r == ',' || r == ';' || r == '|' ||
+			r == '(' || r == ')' || r == ':' || r == '='
 	})
 	out := make([]string, 0, len(fields))
 	for _, f := range fields {
@@ -411,6 +411,9 @@ func IndexFileFor(logPath string) string {
 }
 
 // IsIndexFile 判断给定路径是否为索引文件。
+//
+// 用后缀匹配而非 filepath.Ext：Ext 只返回最后一段（.idx），
+// 而完整后缀是 .ydsz.idx，直接比较 Ext 会永远为 false。
 func IsIndexFile(path string) bool {
-	return filepath.Ext(path) == IndexFileSuffix
+	return strings.HasSuffix(path, IndexFileSuffix)
 }

@@ -199,15 +199,22 @@
       <div v-if="templateGroups.length > 0" class="mb-4">
         <div class="flex items-center justify-between mb-2">
           <span class="text-sm text-secondary font-medium">模板聚类视图</span>
-          <el-radio-group v-model="viewMode" size="small">
-            <el-radio-button value="cluster">聚类</el-radio-button>
-            <el-radio-button value="flat">原始列表</el-radio-button>
-          </el-radio-group>
+          <div class="flex items-center gap-2">
+            <!-- V2.4-09：排序切换（后端默认按命中次数降序） -->
+            <el-radio-group v-model="groupSort" size="small">
+              <el-radio-button value="count">按次数</el-radio-button>
+              <el-radio-button value="time">按时间</el-radio-button>
+            </el-radio-group>
+            <el-radio-group v-model="viewMode" size="small">
+              <el-radio-button value="cluster">聚类</el-radio-button>
+              <el-radio-button value="flat">原始列表</el-radio-button>
+            </el-radio-group>
+          </div>
         </div>
 
         <el-collapse v-if="viewMode === 'cluster'" v-model="activeTemplateGroups">
           <el-collapse-item
-            v-for="g in templateGroups"
+            v-for="g in sortedTemplateGroups"
             :key="g.templateId"
             :name="g.templateId"
           >
@@ -219,19 +226,21 @@
               </div>
             </template>
             <div class="bg-muted-bg p-3 rounded-lg text-sm font-mono">
+              <!-- V2.4-09：后端样本上限为 3 条，展开阈值需与其一致，
+                   否则永远显示不出「展开全部」按钮 -->
               <div
-                v-for="(line, i) in (expandedTemplates[g.templateId] ? g.sampleLines : g.sampleLines.slice(0, 5))"
+                v-for="(line, i) in visibleSamples(g)"
                 :key="i"
                 class="text-secondary leading-6 py-0.5"
               >{{ line }}</div>
               <el-button
-                v-if="g.sampleLines.length > 5 && !expandedTemplates[g.templateId]"
+                v-if="shouldShowExpand(g)"
                 text
                 size="small"
                 class="mt-1"
-                @click="expandedTemplates[g.templateId] = true"
+                @click="toggleTemplateSamples(g.templateId)"
               >
-                展开全部 ({{ g.sampleLines.length }} 条)
+                {{ expandedTemplates[g.templateId] ? '收起' : `展开全部 (${g.sampleLines.length} 条)` }}
               </el-button>
             </div>
           </el-collapse-item>
@@ -341,7 +350,7 @@
 
 <script setup>
 /** 历史日志检索页 v2.0：选择客户端 + 日志项，按日期和关键词跨节点检索日志。 */
-import { ref, reactive, shallowRef, onMounted, onUnmounted } from 'vue'
+import { ref, reactive, shallowRef, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useRouteQuery } from '@/composables/useRouteQuery'
 import TaskProgressRing from '@/components/TaskProgressRing.vue'
@@ -364,9 +373,51 @@ const itemsLoading = ref(false)
 const searching = ref(false)
 
 const viewMode = ref('cluster')
+// 聚类排序方式（V2.4-09）：count 按命中次数（后端默认），time 按首次出现时间
+const groupSort = ref('count')
 const templateGroups = ref([])
 const activeTemplateGroups = ref([])
 const expandedTemplates = ref({})
+
+// 模板样本展示上限（V2.4-09）
+//
+// 后端 groupByTemplate 最多返回 3 条样本（与 FR-702 一致），
+// 折叠态默认展示 1 条，点击「展开全部」后展示全部 3 条。
+// 此前前端写死 slice(0, 5)，与后端上限不一致导致展开按钮永不出现。
+const COLLAPSED_SAMPLE_LIMIT = 1
+
+function visibleSamples(group) {
+  const samples = group?.sampleLines || []
+  if (expandedTemplates.value[group?.templateId]) return samples
+  return samples.slice(0, COLLAPSED_SAMPLE_LIMIT)
+}
+
+function shouldShowExpand(group) {
+  return (group?.sampleLines?.length || 0) > COLLAPSED_SAMPLE_LIMIT
+}
+
+function toggleTemplateSamples(templateId) {
+  expandedTemplates.value = {
+    ...expandedTemplates.value,
+    [templateId]: !expandedTemplates.value[templateId],
+  }
+}
+
+// sortedTemplateGroups 按选定方式排序后的聚类列表（V2.4-09）
+const sortedTemplateGroups = computed(() => {
+  const list = [...(templateGroups.value || [])]
+  if (groupSort.value === 'time') {
+    // 按首次出现时间倒序（新的在前）；缺失时排末尾
+    return list.sort((a, b) => {
+      const ta = a?.firstSeen || ''
+      const tb = b?.firstSeen || ''
+      if (ta === tb) return 0
+      return ta < tb ? 1 : -1
+    })
+  }
+  // 默认按命中次数降序（后端已排好，这里做稳定再排保证一致性）
+  return list.sort((a, b) => (b?.count || 0) - (a?.count || 0))
+})
 
 const searchStore = useSearchHistory()
 const historyDropdownRef = ref(null)

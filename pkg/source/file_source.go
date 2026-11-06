@@ -25,6 +25,30 @@ type FileSource struct {
 	// offsets 读取位点存储（V2.2-08，FR-102）。
 	// nil 时退化为全量读取（向后兼容，不影响既有调用方）。
 	offsets *OffsetStore
+
+	// indexManager 本地索引管理器（V2.4-03，FR-306 查询下推）。
+	// nil 时不启用下推。
+	indexManager *LocalIndexManager
+	// pushdown 是否启用查询下推
+	pushdown bool
+}
+
+// WithPushdown 启用查询下推（V2.4-03）。
+//
+// 启用后 Read 会用本地 Bloom 索引排除不可能命中的文件，
+// 在多节点场景显著降低传输量。
+func WithPushdown(enable bool) FileSourceOption {
+	return func(fs *FileSource) {
+		fs.pushdown = enable
+		if enable && fs.indexManager == nil {
+			fs.indexManager = NewLocalIndexManager()
+		}
+	}
+}
+
+// IndexManager 返回本地索引管理器（未启用时下推时为 nil）。
+func (fs *FileSource) IndexManager() *LocalIndexManager {
+	return fs.indexManager
 }
 
 // WithOffsetStore 注入位点存储（V2.2-08）。
@@ -86,6 +110,11 @@ func (fs *FileSource) Read(ctx context.Context, path string, cfg ScanConfig, out
 
 	var total int64
 	for _, p := range candidates {
+		// 查询下推（V2.4-03）：用本地 Bloom 索引排除不可能命中的文件
+		if fs.pushdown && fs.indexManager != nil && fs.shouldSkipByPushdown(p, cfg) {
+			continue
+		}
+
 		n, err := fs.readOneFileWithOffset(ctx, p, cfg, output)
 		if err != nil {
 			log.Printf("[source]读取 %s 失败: %v", p, err)
@@ -94,6 +123,18 @@ func (fs *FileSource) Read(ctx context.Context, path string, cfg ScanConfig, out
 		total += n
 	}
 	return total, nil
+}
+
+// shouldSkipByPushdown 判断是否可基于本地索引跳过该文件。
+//
+// 仅在启用下推且存在有效关键词时生效；索引不可用时不跳过（保守策略）。
+func (fs *FileSource) shouldSkipByPushdown(path string, cfg ScanConfig) bool {
+	tokens := ExtractQueryTokens(cfg.Key)
+	if len(tokens) == 0 {
+		return false
+	}
+	filter := NewPushdownFilter(fs.indexManager, cfg.Key, false)
+	return filter.ShouldSkipFile(path)
 }
 
 // readOneFileWithOffset 按位点续读单个文件（V2.2-08）。
@@ -477,6 +518,10 @@ func init() {
 		}
 		offsetFile, _ := cfg.Options["offset_file"]
 		opts = append(opts, WithOffsetStore(NewOffsetStore(offsetFile)))
+		// 查询下推（V2.4-03）：默认关闭，通过配置显式启用
+		if v, ok := cfg.Options["pushdown"]; ok && (v == "true" || v == "1") {
+			opts = append(opts, WithPushdown(true))
+		}
 		return NewFileSource(opts...), nil
 	})
 }

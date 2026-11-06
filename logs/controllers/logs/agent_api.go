@@ -63,6 +63,10 @@ func AgentReasonHandler(c *gin.Context) {
 		return
 	}
 
+	// AI 会话审计（V2.4-06，FR-309）：记录推理消耗与降级状态
+	AuditAIReason(c, BuildAIReasonDetail(req.Query, result.ModelName,
+		result.TotalTokens, result.MaxSteps, result.Degraded, 0), "success")
+
 	api.Success(c, "根因分析完成", result)
 }
 

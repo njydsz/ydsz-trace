@@ -178,6 +178,25 @@ type SemanticSearchResp struct {
 	Degraded bool `json:"degraded,omitempty"`
 	// DegradReason 降级原因（供前端提示与运维排查）。
 	DegradReason string `json:"degradReason,omitempty"`
+	// Hybrid 混合检索（BM25 + 向量 RRF）融合结果（V2.4-10，FR-402）。
+	// 为空表示未启用混合检索（L2 降级或无关键词命中）。
+	Hybrid []HybridResult `json:"hybrid,omitempty"`
+}
+
+// HybridResult 混合检索融合后的单条结果。
+type HybridResult struct {
+	// TargetID 目标标识（模板 hash）
+	TargetID string `json:"targetId"`
+	// RRFScore RRF 融合分数（越大越相关）
+	RRFScore float64 `json:"rrfScore"`
+	// BM25Score BM25 原始分数（未命中为 0）
+	BM25Score float64 `json:"bm25Score"`
+	// VectorScore 向量余弦相似度（未命中为 0）
+	VectorScore float64 `json:"vectorScore"`
+	// FromKeywords 是否由关键词路命中
+	FromKeywords bool `json:"fromKeywords"`
+	// FromVector 是否由向量路命中
+	FromVector bool `json:"fromVector"`
 }
 
 // SemanticResult 单条召回结果。
@@ -341,11 +360,85 @@ func semanticSearch(c *gin.Context) {
 		msg = "语义检索降级：L2 嵌入层未启用，仅返回基础召回"
 	}
 
+	// 混合检索（V2.4-10，FR-402）：L2 可用时，用 BM25 路补充向量路，
+	// 通过 RRF 融合提升 Top10 命中率。向量路结果作为主结果保留，
+	// 混合结果单独返回供前端对比与排序切换。
+	hybrid := buildHybridResults(c, req, results)
+
 	api.Success(c, msg, SemanticSearchResp{
 		Results:      results,
 		Degraded:     degraded,
 		DegradReason: degradReason,
+		Hybrid:       hybrid,
 	})
+}
+
+// buildHybridResults 构造 BM25 + 向量的 RRF 融合结果。
+//
+// 仅在 L2 可用（非降级）且向量检索有结果时执行；
+// BM25 路的数据源为 t_log_template（已有模板库，无需重新向量化）。
+func buildHybridResults(c *gin.Context, req SemanticSearchReq, vectorResults []SemanticResult) []HybridResult {
+	if len(vectorResults) == 0 {
+		return nil
+	}
+
+	// 1. 构造 BM25 索引（模板文本）
+	idx := search.NewBM25Index()
+	patterns, err := models.TopPatterns(0, "7d", 200)
+	if err != nil {
+		return nil
+	}
+	for _, p := range patterns {
+		idx.Add(&search.Document{
+			ID:      p.TemplateHash,
+			Content: p.Sample,
+		})
+	}
+
+	// 2. BM25 路：对模板库做关键词检索
+	bm25Results := idx.Search(req.Query, req.TopK)
+	if len(bm25Results) == 0 {
+		return nil
+	}
+
+	// 3. 向量路：复用已检索到的向量结果（避免重复调用 Embedder）
+	vectorItems := make([]search.SearchResult, 0, len(vectorResults))
+	for _, r := range vectorResults {
+		vectorItems = append(vectorItems, search.SearchResult{
+			ID:         r.TargetID,
+			BM25Score:  float64(r.Score),
+			VectorScore: float64(r.Score),
+		})
+	}
+
+	// 4. RRF 融合两路排名
+	fused := search.RRFusion(bm25Results, vectorItems, req.TopK)
+	if len(fused) == 0 {
+		return nil
+	}
+
+	// 5. 组装结果（保留两路原始分数便于前端展示）
+	bm25Score := make(map[string]float64, len(bm25Results))
+	for _, r := range bm25Results {
+		bm25Score[r.ID] = r.BM25Score
+	}
+	vectorScore := make(map[string]float64, len(vectorItems))
+	for _, r := range vectorItems {
+		vectorScore[r.ID] = r.VectorScore
+	}
+
+	out := make([]HybridResult, 0, len(fused))
+	for _, f := range fused {
+		out = append(out, HybridResult{
+			TargetID:     f.ID,
+			RRFScore:     f.Score,
+			BM25Score:    bm25Score[f.ID],
+			VectorScore:  vectorScore[f.ID],
+			FromKeywords: bm25Score[f.ID] > 0,
+			FromVector:   vectorScore[f.ID] > 0,
+		})
+	}
+	return out
 }
 
 // createEmbedder 根据环境变量/能力配置创建 Embedder 实例。

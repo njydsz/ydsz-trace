@@ -190,6 +190,9 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 	r.POST("/logs/cases/feedback", pkgauth.RequireOperator(), logs.SubmitCaseFeedback)
 	r.GET("/logs/cases", pkgauth.RequireOperator(), logs.ListCasesHandler)
 	r.GET("/logs/cases/search", pkgauth.RequireOperator(), logs.SearchCasesHandler)
+	// V2.4-06 AI 会话审计查询与统计（FR-309）
+	r.GET("/logs/audit/logs", pkgauth.RequireOperator(), logs.AuditLogsHandler)
+	r.GET("/logs/audit/stats", pkgauth.RequireOperator(), logs.AuditStatsHandler)
 	// V2.3-10 变更事件登记与关联
 	r.POST("/logs/changes", pkgauth.RequireOperator(), logs.CreateChangeEventHandler)
 	r.GET("/logs/changes", pkgauth.RequireOperator(), logs.ListChangesHandler)
@@ -249,7 +252,11 @@ func SetupRouter(cfg *config.Config, sessionMgr *session.Manager) *gin.Engine {
 		adm.GET("/stats/patterns", admin.StatsPatterns)
 		adm.GET("/stats/anomalies", admin.StatsAnomalyEvents)
 		adm.GET("/stats/baseline", admin.StatsBaseline)
-adm.GET("/ai/status", admin.AIStatusHandler)
+	adm.GET("/ai/status", admin.AIStatusHandler)
+	// V2.4-04 日志分层生命周期（预览 / 执行 / 统计）
+	adm.GET("/lifecycle/plan", admin.LifecyclePlanHandler)
+	adm.POST("/lifecycle/apply", admin.LifecycleApplyHandler)
+	adm.GET("/lifecycle/stats", admin.LifecycleStatsHandler)
 
 		// 迁移工具：v1 -> v2 元数据迁移（FR-307，仅 admin）
 		// run: 字段补全 + 自动备份 + 迁移确认
@@ -259,6 +266,9 @@ adm.GET("/ai/status", admin.AIStatusHandler)
 		adm.POST("/migration/run", migration.Run)
 		adm.GET("/migration/status", migration.StatusHandler)
 		adm.GET("/migration/backups", migration.ListBackupsHandler)
+		// V2.4-05 v1 元数据导入与预览
+		adm.GET("/migration/inspect-v1", migration.V1InspectHandler)
+		adm.POST("/migration/import-v1", migration.V1ImportHandler)
 		adm.POST("/migration/restore", migration.RestoreHandler)
 		adm.POST("/migration/rollback", migration.RollbackHandler)
 

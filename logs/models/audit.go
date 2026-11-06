@@ -7,6 +7,7 @@ package models
 import (
 	"encoding/json"
 	"log"
+	"time"
 )
 
 // TAuditLog 审计日志实体（表 t_audit_log）。
@@ -47,7 +48,8 @@ func AppendAuditLog(username, action, resource string, detail map[string]interfa
 // QueryAuditLogs 分页查询审计日志列表（按 id 倒序）。
 //
 // username / action 为空字符串表示不过滤该字段。
-func QueryAuditLogs(pageNo, pageSize int, username, action string) ([]TAuditLog, int, error) {
+// from / to 为零值时不限制时间范围。
+func QueryAuditLogs(pageNo, pageSize int, username, action string, from, to time.Time) ([]TAuditLog, int, error) {
 	if pageNo <= 0 {
 		pageNo = 1
 	}
@@ -57,13 +59,21 @@ func QueryAuditLogs(pageNo, pageSize int, username, action string) ([]TAuditLog,
 
 	where := ""
 	args := []interface{}{}
+	if !from.IsZero() && !to.IsZero() {
+		where = " WHERE created_time BETWEEN ? AND ?"
+		args = append(args, from.Format("2006-01-02 15:04:05"), to.Format("2006-01-02 15:04:05"))
+	}
 	if username != "" {
-		where += " WHERE username = ?"
+		if where == "" {
+			where = " WHERE username = ?"
+		} else {
+			where += " AND username = ?"
+		}
 		args = append(args, username)
 	}
 	if action != "" {
 		if where == "" {
-			where += " WHERE action = ?"
+			where = " WHERE action = ?"
 		} else {
 			where += " AND action = ?"
 		}

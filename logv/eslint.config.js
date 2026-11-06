@@ -78,6 +78,13 @@ export default [
   // 测试文件放宽部分规则
   {
     files: ['**/*.spec.js', '**/*.test.js', '**/tests/**'],
+    languageOptions: {
+      globals: {
+        // Vitest 运行在 Node 环境，测试中常需读取源码文件做回归断言
+        process: 'readonly',
+        __dirname: 'readonly',
+      },
+    },
     rules: {
       'no-console': 'off',
       'no-unused-vars': 'off',

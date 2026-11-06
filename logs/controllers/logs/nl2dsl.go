@@ -150,6 +150,9 @@ func nl2dslParse(c *gin.Context) {
 	card := BuildExplanationCard(req.Query, resp, strategy, warnings)
 	resp.Explanation = &card
 
+	// AI 会话审计（V2.4-06，FR-309）
+	AuditAINl2Dsl(c, BuildNl2DslDetail(req.Query, resp.Strategy, resp.Confidence, 0), "success")
+
 	api.Success(c, "NL2DSL 解析成功", resp)
 }
 

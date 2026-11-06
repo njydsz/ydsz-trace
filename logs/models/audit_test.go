@@ -2,6 +2,7 @@
 package models
 
 import (
+	"time"
 	"os"
 	"path/filepath"
 	"testing"
@@ -64,7 +65,7 @@ func TestQueryAuditLogsByUsername(t *testing.T) {
 	}
 
 	// 查询全部
-	logs, total, err := QueryAuditLogs(1, 20, "", "")
+	logs, total, err := QueryAuditLogs(1, 20, "", "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("QueryAuditLogs failed: %v", err)
 	}
@@ -76,7 +77,7 @@ func TestQueryAuditLogsByUsername(t *testing.T) {
 	}
 
 	// 按 username 过滤
-	logs, total, err = QueryAuditLogs(1, 20, "admin", "")
+	logs, total, err = QueryAuditLogs(1, 20, "admin", "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("QueryAuditLogs (filter username) failed: %v", err)
 	}
@@ -90,7 +91,7 @@ func TestQueryAuditLogsByUsername(t *testing.T) {
 	}
 
 	// 按 action 过滤
-	logs, total, err = QueryAuditLogs(1, 20, "", "export")
+	logs, total, err = QueryAuditLogs(1, 20, "", "export", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("QueryAuditLogs (filter action) failed: %v", err)
 	}
@@ -99,7 +100,7 @@ func TestQueryAuditLogsByUsername(t *testing.T) {
 	}
 
 	// 组合过滤
-	logs, total, err = QueryAuditLogs(1, 20, "viewer", "export")
+	logs, total, err = QueryAuditLogs(1, 20, "viewer", "export", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("QueryAuditLogs (combined filter) failed: %v", err)
 	}
@@ -108,7 +109,7 @@ func TestQueryAuditLogsByUsername(t *testing.T) {
 	}
 
 	// 分页
-	logs, total, err = QueryAuditLogs(1, 3, "", "")
+	logs, total, err = QueryAuditLogs(1, 3, "", "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("QueryAuditLogs (paged) failed: %v", err)
 	}
@@ -130,7 +131,7 @@ func TestQueryAuditLogsPaging(t *testing.T) {
 	}
 
 	// 第 2 页（pageSize=2）
-	logs, total, err := QueryAuditLogs(2, 2, "", "")
+	logs, total, err := QueryAuditLogs(2, 2, "", "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("QueryAuditLogs page 2 failed: %v", err)
 	}
@@ -142,7 +143,7 @@ func TestQueryAuditLogsPaging(t *testing.T) {
 	}
 
 	// 第 3 页（仅 1 条）
-	logs, _, err = QueryAuditLogs(3, 2, "", "")
+	logs, _, err = QueryAuditLogs(3, 2, "", "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("QueryAuditLogs page 3 failed: %v", err)
 	}
@@ -151,7 +152,7 @@ func TestQueryAuditLogsPaging(t *testing.T) {
 	}
 
 	// 超出页码
-	logs, _, err = QueryAuditLogs(10, 2, "", "")
+	logs, _, err = QueryAuditLogs(10, 2, "", "", time.Time{}, time.Time{})
 	if err != nil {
 		t.Fatalf("QueryAuditLogs overflow page failed: %v", err)
 	}

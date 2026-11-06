@@ -65,7 +65,10 @@
 
       <!-- 瀑布图 -->
       <div class="waterfall-chart mb-4 overflow-x-auto">
-        <div class="min-w-[800px]">
+        <!-- 小屏适配（V2.4-07）：外层容器负责横向滚动，内层保持瀑布图所需宽度。
+             避免 375px 屏出现页面级横向滚动条（滚动被限制在本组件内）。 -->
+        <div class="w-full overflow-x-auto">
+          <div class="w-[800px] max-w-none">
           <!-- 时间轴标签 -->
           <div class="flex items-center h-6 relative border-b border-gray-200 ml-[140px]">
             <span v-for="tick in timeTicks" :key="tick.label"
@@ -99,6 +102,7 @@
                 </span>
               </div>
             </div>
+          </div>
           </div>
         </div>
       </div>

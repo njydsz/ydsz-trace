@@ -6,6 +6,7 @@
 package audit
 
 import (
+	"time"
 	"strconv"
 
 	"ydsz-trace/logs/models"
@@ -23,7 +24,7 @@ func ListAuditLogs(c *gin.Context) {
 	username := c.Query("username")
 	action := c.Query("action")
 
-	logs, total, err := models.QueryAuditLogs(pageNo, pageSize, username, action)
+	logs, total, err := models.QueryAuditLogs(pageNo, pageSize, username, action, time.Time{}, time.Time{})
 	if err != nil {
 		api.Fail(c, api.CodeServerError, "查询审计日志失败")
 		return

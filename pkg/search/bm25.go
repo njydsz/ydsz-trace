@@ -1,286 +1,217 @@
-// Package search 提供混合检索能力（V2.1 FR-402）。
+// Package search 子文件：BM25 打分（V2.4-10，FR-402）。
 //
-// 核心：BM25 关键词相关性 + 向量语义相似度，通过 RRF（Reciprocal Rank Fusion）
-// 融合两路排序结果，兼顾"精确匹配"与"语义理解"。
+// BM25 是关键词检索的标准排序函数：
 //
-// RRF 公式：score(d) = Σ 1/(k + rank_i(d))，k 默认 60。
+//	score(q,d) = Σ IDF(t) · (tf(t,d) · (k1+1)) / (tf(t,d) + k1 · (1 - b + b · |d|/avgdl))
+//
+// 参数：
+//   - k1 控制词频饱和速度（默认 1.2）
+//   - b  控制文档长度归一化强度（默认 0.75）
+//
+// 实现说明：
+//   - 文档集合由调用方提供（日志行或模板），本包不负责存储
+//   - 分词采用「英文按非字母数字切分 + 中文按单字」的轻量策略，
+//     与排障场景匹配（错误码、类名、异常名为主）
 package search
 
 import (
 	"math"
-	"sort"
 	"strings"
-	"sync"
-	"unicode"
 )
 
+// BM25 默认参数。
 const (
-	// rrfK RRF 平滑常数（原始论文推荐 60）
-	rrfK = 60.0
-	// bm25K1 BM25 词频饱和参数
-	bm25K1 = 1.2
-	// bm25B BM25 文档长度归一化参数
-	bm25B = 0.75
+	// DefaultBM25K1 词频饱和参数
+	DefaultBM25K1 = 1.2
+	// DefaultBM25B 长度归一化参数
+	DefaultBM25B = 0.75
 )
 
-// Document 待检索文档。
-type Document struct {
-	ID      string
-	Content string
-	// Vector 可选：语义向量（为空则不参与向量路）
-	Vector []float32
+// BM25Scorer BM25 打分器。
+type BM25Scorer struct {
+	// K1 词频饱和参数
+	K1 float64
+	// B 长度归一化参数
+	B float64
+
+	// docs 文档词频表：docID -> term -> tf
+	docs map[string]map[string]int
+	// docLengths 文档长度
+	docLengths map[string]int
+	// avgdl 平均文档长度
+	avgdl float64
+	// N 文档总数
+	N int
+	// idf 缓存：term -> IDF
+	idf map[string]float64
 }
 
-// SearchResult 单条检索结果。
-type SearchResult struct {
-	ID         string
-	Score      float64
-	BM25Score  float64
-	RRFScore   float64
-	VectorRank int
-	TextRank   int
-}
-
-// BM25Index BM25 倒排索引。
-type BM25Index struct {
-	sync.RWMutex
-
-	docs      map[string]*Document
-	docCount  int
-	avgDocLen float64
-	// termFreqs 词项 -> 文档 -> 词频
-	termFreqs map[string]map[string]int
-	// docFreqs 词项 -> 文档频率
-	docFreqs map[string]int
-	// docLens 文档 -> 长度（词数）
-	docLens map[string]int
-}
-
-// NewBM25Index 创建空 BM25 索引。
-func NewBM25Index() *BM25Index {
-	return &BM25Index{
-		docs:      make(map[string]*Document),
-		termFreqs: make(map[string]map[string]int),
-		docFreqs:  make(map[string]int),
-		docLens:   make(map[string]int),
+// NewBM25Scorer 创建打分器。
+func NewBM25Scorer() *BM25Scorer {
+	return &BM25Scorer{
+		K1:         DefaultBM25K1,
+		B:          DefaultBM25B,
+		docs:       make(map[string]map[string]int),
+		docLengths: make(map[string]int),
+		idf:         make(map[string]float64),
 	}
 }
 
-// Add 添加文档到索引。
-func (idx *BM25Index) Add(doc *Document) {
-	if doc == nil || doc.ID == "" {
+// AddDocument 添加文档到索引。
+//
+// id 为文档标识；text 为文档内容。
+func (s *BM25Scorer) AddDocument(id, text string) {
+	if id == "" {
 		return
 	}
-
-	idx.Lock()
-	defer idx.Unlock()
-
-	idx.docs[doc.ID] = doc
-
-	tokens := Tokenize(doc.Content)
-	idx.docLens[doc.ID] = len(tokens)
-
-	// 统计词频
-	for _, tok := range tokens {
-		if idx.termFreqs[tok] == nil {
-			idx.termFreqs[tok] = make(map[string]int)
-		}
-		idx.termFreqs[tok][doc.ID]++
+	tf := make(map[string]int)
+	for _, term := range Tokenize(text) {
+		tf[term]++
 	}
-
-	// 更新文档频率
-	seen := make(map[string]bool)
-	for _, tok := range tokens {
-		if !seen[tok] {
-			seen[tok] = true
-			idx.docFreqs[tok]++
-		}
-	}
-
-	idx.docCount++
-	idx.recalcAvgLen()
+	s.docs[id] = tf
+	s.docLengths[id] = len(tf)
+	s.N++
+	s.recalcAvgdl()
+	s.idf = make(map[string]float64) // 清空 IDF 缓存
 }
 
-// recalcAvgLen 重新计算平均文档长度。
-func (idx *BM25Index) recalcAvgLen() {
-	if idx.docCount == 0 {
-		idx.avgDocLen = 0
+// recalcAvgdl 重算平均文档长度。
+func (s *BM25Scorer) recalcAvgdl() {
+	if s.N == 0 {
+		s.avgdl = 0
 		return
 	}
 	total := 0
-	for _, l := range idx.docLens {
+	for _, l := range s.docLengths {
 		total += l
 	}
-	idx.avgDocLen = float64(total) / float64(idx.docCount)
+	s.avgdl = float64(total) / float64(s.N)
 }
 
-// Search 对查询词执行 BM25 检索，返回 topK 结果。
-func (idx *BM25Index) Search(query string, topK int) []SearchResult {
-	idx.RLock()
-	defer idx.RUnlock()
+// idfOf 计算词条 IDF（带缓存）。
+//
+// 使用平滑形式 ln(1 + (N - df + 0.5)/(df + 0.5))，避免负值。
+func (s *BM25Scorer) idfOf(term string) float64 {
+	if v, ok := s.idf[term]; ok {
+		return v
+	}
+	df := 0
+	for _, tf := range s.docs {
+		if _, exists := tf[term]; exists {
+			df++
+		}
+	}
+	v := math.Log(1 + (float64(s.N)-float64(df)+0.5)/(float64(df)+0.5))
+	s.idf[term] = v
+	return v
+}
 
-	queryTokens := Tokenize(query)
-	if len(queryTokens) == 0 || idx.docCount == 0 {
-		return nil
+// Score 计算查询对指定文档的 BM25 分数。
+func (s *BM25Scorer) Score(query, docID string) float64 {
+	tf, ok := s.docs[docID]
+	if !ok || s.avgdl == 0 {
+		return 0
 	}
 
-	scores := make(map[string]float64)
-	for _, tok := range queryTokens {
-		tfMap, ok := idx.termFreqs[tok]
-		if !ok {
+	terms := Tokenize(query)
+	if len(terms) == 0 {
+		return 0
+	}
+
+	dl := float64(s.docLengths[docID])
+	score := 0.0
+	for _, term := range terms {
+		freq, exists := tf[term]
+		if !exists {
 			continue
 		}
-		df := float64(idx.docFreqs[tok])
-		idf := math.Log(1 + (float64(idx.docCount)-df+0.5)/(df+0.5))
+		tfVal := float64(freq)
+		numerator := tfVal * (s.K1 + 1)
+		denominator := tfVal + s.K1*(1-s.B+s.B*dl/s.avgdl)
+		if denominator == 0 {
+			continue
+		}
+		score += s.idfOf(term) * (numerator / denominator)
+	}
+	return score
+}
 
-		for docID, tf := range tfMap {
-			docLen := float64(idx.docLens[docID])
-			tfScore := float64(tf) * (bm25K1 + 1)
-			denom := float64(tf) + bm25K1*(1-bm25B+bm25B*docLen/idx.avgDocLen)
-			if denom == 0 {
-				continue
-			}
-			scores[docID] += idf * tfScore / denom
+// Rank 对全部文档按查询打分，返回降序结果。
+func (s *BM25Scorer) Rank(query string, topN int) []RankedItem {
+	if topN <= 0 {
+		topN = DefaultRRFTopN
+	}
+
+	out := make([]RankedItem, 0, len(s.docs))
+	for id := range s.docs {
+		score := s.Score(query, id)
+		if score > 0 {
+			out = append(out, RankedItem{ID: id, Score: score})
 		}
 	}
 
-	results := make([]SearchResult, 0, len(scores))
-	for id, s := range scores {
-		results = append(results, SearchResult{
-			ID:        id,
-			BM25Score: s,
-		})
-	}
+	// 按分数降序
+	sortRanked(out)
 
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].BM25Score > results[j].BM25Score
-	})
-
-	if topK > 0 && topK < len(results) {
-		results = results[:topK]
+	if len(out) > topN {
+		out = out[:topN]
 	}
-	return results
+	return out
 }
 
-// Tokenize 分词（支持中英文混合）。
+// sortRanked 按分数降序排序。
+func sortRanked(items []RankedItem) {
+	// 简单插入排序（文档量级通常不大，且避免引入 sort 包的额外开销）
+	for i := 1; i < len(items); i++ {
+		cur := items[i]
+		j := i - 1
+		for j >= 0 && items[j].Score < cur.Score {
+			items[j+1] = items[j]
+			j--
+		}
+		items[j+1] = cur
+	}
+}
+
+// Tokenize 分词。
 //
-// 中文按字切分，英文按空格+标点切分。
+// 策略：
+//   - 英文/数字：连续字母数字片段（长度 ≥2）
+//   - 中文：逐字切分
+//   - 统一转小写
+//
+// 该策略适配排障场景：错误码（ERR_001）、类名（NullPointerException）、
+// 英文单词（timeout）均能被正确切分。
 func Tokenize(text string) []string {
 	text = strings.ToLower(text)
-	var tokens []string
+	out := make([]string, 0, 16)
 	var current strings.Builder
 
 	flush := func() {
-		if current.Len() > 0 {
-			tokens = append(tokens, current.String())
-			current.Reset()
+		w := current.String()
+		current.Reset()
+		// 保留单字母单词（a/I）与错误码片段，仅过滤纯单数字
+		if len(w) == 1 && (w[0] < 'a' || w[0] > 'z') {
+			return
 		}
+		if w == "" {
+			return
+		}
+		out = append(out, w)
 	}
 
 	for _, r := range text {
 		switch {
-		case unicode.IsSpace(r) || unicode.IsPunct(r) || unicode.IsSymbol(r):
-			flush()
-		case r >= '\u4e00' && r <= '\u9fff': // CJK 统一表意文字
-			flush()
-			tokens = append(tokens, string(r))
-		default:
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '_':
 			current.WriteRune(r)
+		case r >= 0x4E00 && r <= 0x9FFF:
+			// 中文：先冲刷累积的英文片段，再单独成词
+			flush()
+			out = append(out, string(r))
+		default:
+			flush()
 		}
 	}
 	flush()
-	return tokens
-}
-
-// RRFusion 使用 RRF 融合 BM25 和向量两路排序结果。
-//
-// bm25Results: BM25 检索结果（已排序）
-// vectorResults: 向量检索结果（已排序）
-// topK: 返回条数
-func RRFusion(bm25Results, vectorResults []SearchResult, topK int) []SearchResult {
-	fused := make(map[string]*SearchResult)
-
-	// 合并 BM25 结果
-	for rank, r := range bm25Results {
-		s := fused[r.ID]
-		if s == nil {
-			s = &SearchResult{ID: r.ID, BM25Score: r.BM25Score}
-			fused[r.ID] = s
-		}
-		s.TextRank = rank + 1
-		s.RRFScore += 1.0 / (rrfK + float64(rank+1))
-	}
-
-	// 合并向量结果
-	for rank, r := range vectorResults {
-		s := fused[r.ID]
-		if s == nil {
-			s = &SearchResult{ID: r.ID}
-			fused[r.ID] = s
-		}
-		s.VectorRank = rank + 1
-		s.RRFScore += 1.0 / (rrfK + float64(rank+1))
-	}
-
-	// 转换为切片并排序
-	results := make([]SearchResult, 0, len(fused))
-	for _, s := range fused {
-		s.Score = s.RRFScore
-		results = append(results, *s)
-	}
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Score > results[j].Score
-	})
-
-	if topK > 0 && topK < len(results) {
-		results = results[:topK]
-	}
-	return results
-}
-
-// HybridSearch 执行混合检索（BM25 + 向量 RRF 融合）。
-//
-// 参数：
-//   - index BM25 索引
-//   - query 查询文本
-//   - vector 查询向量（为空则仅 BM25）
-//   - cosineFn 余弦相似度函数（用于向量路排序）
-//   - topK 返回条数
-func HybridSearch(index *BM25Index, query string, vector []float32,
-	cosineFn func(a, b []float32) float32, topK int) []SearchResult {
-
-	// BM25 路
-	bm25Results := index.Search(query, topK*2)
-
-	// 向量路
-	var vectorResults []SearchResult
-	if vector != nil && cosineFn != nil && len(index.docs) > 0 {
-		type vecScore struct {
-			id    string
-			score float64
-		}
-		scores := make([]vecScore, 0, len(index.docs))
-		for id, doc := range index.docs {
-			if len(doc.Vector) == 0 {
-				continue
-			}
-			s := cosineFn(vector, doc.Vector)
-			scores = append(scores, vecScore{id: id, score: float64(s)})
-		}
-		sort.Slice(scores, func(i, j int) bool {
-			return scores[i].score > scores[j].score
-		})
-		if len(scores) > topK*2 {
-			scores = scores[:topK*2]
-		}
-		for _, vs := range scores {
-			vectorResults = append(vectorResults, SearchResult{
-				ID:        vs.id,
-				BM25Score: vs.score,
-			})
-		}
-	}
-
-	// RRF 融合
-	return RRFusion(bm25Results, vectorResults, topK)
+	return out
 }

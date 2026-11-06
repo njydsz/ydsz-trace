@@ -1,7 +1,18 @@
 <template>
   <el-container class="h-screen layout-root">
     <!-- ========== 侧边栏 ========== -->
-    <el-aside :width="`${sidebarWidth}px`" class="aside-custom flex flex-col">
+    <!-- 小屏遮罩（V2.4-07）：点击关闭浮层侧边栏 -->
+    <div
+      v-if="isMobileView && sidebarOpen"
+      class="aside-mask"
+      @click="sidebarOpen = false"
+    />
+    <!-- 小屏适配（V2.4-07）：窄屏时侧边栏改为浮层，避免挤压主内容 -->
+    <el-aside
+      :width="`${sidebarWidth}px`"
+      class="aside-custom flex flex-col"
+      :class="{ 'aside-mobile': isMobileView, 'aside-mobile-open': sidebarOpen }"
+    >
       <!-- Logo 区域 -->
       <div class="aside-logo flex items-center gap-3">
         <div class="logo-icon flex items-center justify-center rounded-xl">
@@ -116,6 +127,16 @@
       <!-- Header -->
       <el-header class="header-custom flex items-center justify-between">
         <div class="header-left flex items-center gap-4">
+          <!-- 小屏菜单开关（V2.4-07）：窄屏下侧边栏为浮层，需要显式入口 -->
+          <el-button
+            v-if="isMobileView"
+            circle
+            text
+            :icon="Menu"
+            class="header-icon-btn"
+            title="菜单"
+            @click="sidebarOpen = !sidebarOpen"
+          />
           <el-breadcrumb separator="/" class="breadcrumb">
             <el-breadcrumb-item :to="breadcrumbHome.to">{{ breadcrumbHome.label }}</el-breadcrumb-item>
             <el-breadcrumb-item v-if="currentTitle !== breadcrumbHome.label">{{ currentTitle }}</el-breadcrumb-item>
@@ -235,12 +256,12 @@
  * 顶部 Header：面包屑导航 + 全局搜索 + 用户头像/退出。
  * 右侧 Main：路由视图 + 过渡动画。
  */
-import { computed, ref } from 'vue'
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Monitor, DataLine, Cpu, Document, Search, SwitchButton,
   VideoCamera, List, Bell, Share, ChatLineRound, ArrowDown, EditPen, MagicStick,
-  InfoFilled, Sunny, Moon,
+  InfoFilled, Sunny, Moon, Menu,
 } from '@element-plus/icons-vue'
 import { ElMessageBox, ElMessage, ElForm, ElFormItem, ElInput } from 'element-plus'
 import { logout, changePassword } from '@/api/auth'
@@ -281,6 +302,24 @@ const passwordRules = {
 }
 
 const sidebarWidth = 220
+
+// 小屏适配（V2.4-07）：窄屏下侧边栏浮层化，避免 375px 屏出现横向滚动
+const isMobileView = ref(false)
+const sidebarOpen = ref(false)
+
+function checkMobile() {
+  isMobileView.value = window.innerWidth < 768
+  if (!isMobileView.value) sidebarOpen.value = false
+}
+
+onMounted(() => {
+  checkMobile()
+  window.addEventListener('resize', checkMobile)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', checkMobile)
+})
 
 const activeMenu = computed(() => route.path)
 const currentTitle = computed(() => route.meta?.title || 'Ydsz Trace')
@@ -540,6 +579,53 @@ async function onLogout() {
   background-color: var(--bg-main);
   padding: 20px 24px !important;
   overflow-y: auto;
+}
+
+/* ===== 小屏适配（V2.4-07） ===== */
+
+/* 浮层遮罩：仅在窄屏且侧边栏展开时渲染 */
+.aside-mask {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .aside-mask {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 1100;
+    background: rgba(0, 0, 0, 0.4);
+  }
+}
+
+/* 窄屏：侧边栏浮层化，避免挤压主内容产生横向滚动 */
+@media (max-width: 767px) {
+  .aside-mobile {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 1200;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    box-shadow: 0 0 24px rgba(0, 0, 0, 0.18);
+  }
+
+  .aside-mobile-open {
+    transform: translateX(0);
+  }
+
+  /* 主内容在小屏去掉多余内边距 */
+  .main-custom {
+    padding: 12px 12px !important;
+  }
+
+  /* 页面级横向溢出兜底：任何子元素都不应把页面撑宽 */
+  .layout-root,
+  .main-custom {
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
 }
 
 /* 页面过渡动画 */

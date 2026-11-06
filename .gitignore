@@ -37,3 +37,4 @@ logs/*.log
 .codebuddy/
 coverage/
 data/
+__pycache__/
